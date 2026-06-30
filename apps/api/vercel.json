@@ -1,15 +1,9 @@
 {
-  "version": 2,
-  "builds": [
+  "buildCommand": "npm run build",
+  "rewrites": [
     {
-      "src": "src/index.ts",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "src/index.ts"
+      "source": "/(.*)",
+      "destination": "/api/index"
     }
   ]
 }
