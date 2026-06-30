@@ -391,7 +391,7 @@ export default function CustomerPortalPage() {
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Issue Category</label>
                 <select
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+                  className="field w-full"
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                 >
@@ -404,7 +404,7 @@ export default function CustomerPortalPage() {
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Urgency</label>
                 <select
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+                  className="field w-full"
                   value={severity}
                   onChange={(e) => setSeverity(e.target.value)}
                 >
@@ -421,7 +421,7 @@ export default function CustomerPortalPage() {
                   required
                   rows={3}
                   placeholder="Provide details about the issue..."
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+                  className="field w-full"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                 />
@@ -456,12 +456,12 @@ export default function CustomerPortalPage() {
                 <div key={c.id} className="rounded-xl border border-gray-100 p-3.5 bg-white space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-xs font-bold text-[var(--theme-primary)]">{c.ticketNumber}</span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      c.status === "open"
-                        ? "bg-red-50 text-red-700 border border-red-100"
-                        : c.status === "resolved"
-                        ? "bg-green-50 text-green-700 border border-green-100"
-                        : "bg-blue-50 text-blue-700 border border-blue-100"
+                    <span className={`status-pill ${
+                      c.status === "open" || c.status === "escalated"
+                        ? "status-pill-error"
+                        : c.status === "resolved" || c.status === "closed"
+                        ? "status-pill-success"
+                        : "status-pill-warning"
                     }`}>
                       {c.status.toUpperCase()}
                     </span>
