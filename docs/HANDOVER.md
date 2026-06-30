@@ -57,7 +57,16 @@ Staff logins: `superadmin@ / owner@ / sales@ / ops@ / erection@ / commissioning@
 - **Structure‑diagram generator** is schema‑only (Phase 2).
 - Minor: `mustChangePassword` isn't server‑enforced on mutating routes (client‑guarded); `owner_admin` is an orphan role; New‑Order modal / photo upload / full exhaust‑mismatch loop are built + typecheck‑clean but not each click‑tested.
 
-## 9. Key files
+## 9. Vercel deployment
+Two separate Vercel projects: **admin-web** (root directory `apps/admin-web`, Next.js) and **api** (root directory `apps/api`, Node). Both need "Include files outside the Root Directory in the Build Step" enabled since this is an npm-workspaces monorepo.
+
+- **admin-web → api connection:** the browser calls `NEXT_PUBLIC_API_URL` (see `apps/admin-web/src/lib/apiClient.ts`), which is baked in at **build time**. Must be set as an env var on the admin-web Vercel project pointing at the deployed api project's URL — changing it requires a redeploy, not just a save.
+- **api build pipeline:** `apps/api/vercel.json` uses `buildCommand: "npm run build"` (runs `prisma generate && tsc`) plus a plain‑JS `apps/api/api/index.js` that `require()`s the precompiled `dist/index.js`. **Do not** reintroduce a legacy `"builds"` array in that vercel.json — it silently makes Vercel ignore the dashboard Build/Install Command entirely, so `prisma generate` never runs, the deployed function has no real Prisma client, and every DB call crashes (`FUNCTION_INVOCATION_FAILED`) while the build log fills with `TS7006`/`TS2694` implicit-`any` errors (Prisma-derived types collapsing without a generated client).
+- **`packages/shared` must compile to CommonJS** (`packages/shared/tsconfig.json` overrides `module`/`moduleResolution`) — it's `require()`'d from `apps/api`'s CommonJS output, and plain Node (unlike bundler-based tooling) can't resolve ESM's extensionless relative imports.
+- **Redeploy ≠ deploy latest.** Clicking "Redeploy" on an old deployment row in the dashboard rebuilds *that deployment's pinned commit*, not the branch's latest. Always check the log header's `Commit:` line, or just push and let Git auto-deploy create a fresh deployment. Whichever deployment should be live needs **Promote to Production** explicitly.
+- Env vars (`DATABASE_URL`, `JWT_SECRET`, etc.) are set separately per Vercel project — api and admin-web don't share them.
+
+## 10. Key files
 - Contracts: `packages/shared/src/{constants,schemas,types}.ts`
 - Schema/seed: `apps/api/prisma/{schema.prisma,seed.ts}`
 - API routes: `apps/api/src/routes/*` (auth, sites, complaints, orders, customers, pendingActions, dashboard, users, settings, lookups); auth in `src/middleware/auth.ts`
