@@ -68,6 +68,8 @@ export const createUserSchema = z.object({
   roleKey: z.string(),
   phone: z.string().optional(),
   title: z.string().optional(),
+  /** Required when adding an erection engineer who belongs to an approved vendor. */
+  vendorId: z.string().optional(),
 });
 
 export const updateUserSchema = z.object({
@@ -89,4 +91,19 @@ export const createCustomerSchema = z.object({
   // Phone is the customer's login credential (Order ID + phone -> OTP), so it is required.
   contactPhone: z.string().min(6),
   contactEmail: z.string().email().optional(),
+});
+
+export const registerVendorSchema = z.object({
+  name: z.string().min(1),
+  contactName: z.string().min(1),
+  // Email is the vendor contact's login once approved, so it must be unique + valid.
+  contactEmail: z.string().email(),
+  contactPhone: z.string().optional(),
+  address: z.string().optional(),
+});
+
+/** Assign (or clear) the external vendor responsible for a site, and optionally its engineer. */
+export const assignSiteVendorSchema = z.object({
+  vendorId: z.string().nullable(),
+  assignedEngineerId: z.string().nullable().optional(),
 });

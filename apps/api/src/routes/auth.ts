@@ -30,6 +30,7 @@ authRouter.get("/me", authenticate, async (req: AuthenticatedRequest, res) => {
     name: user.name,
     email: user.email,
     mustChangePassword: user.mustChangePassword,
+    vendorId: user.vendorId,
     role: {
       key: user.role.key,
       name: user.role.name,

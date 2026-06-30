@@ -3,8 +3,10 @@ import {
   createStageEventSchema,
   confirmExhaustHookupSchema,
   uploadSitePhotoSchema,
+  assignSiteVendorSchema,
   PERMISSION_KEY,
   PENDING_ACTION_CATEGORY,
+  VENDOR_STATUS,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -18,6 +20,7 @@ async function assertSiteVisible(siteId: string, auth: AuthenticatedRequest["aut
   const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: true } });
   if (!site) return null;
   if (auth!.customerId && site.order.customerId !== auth!.customerId) return undefined; // not theirs
+  if (auth!.vendorId && site.vendorId !== auth!.vendorId) return undefined; // not this vendor's site
   return site;
 }
 
@@ -26,10 +29,12 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
   const where: Record<string, unknown> = {};
   if (assignedToMe) where.assignedEngineerId = req.auth!.userId;
   if (req.auth!.customerId) where.order = { customerId: req.auth!.customerId };
+  // Vendor isolation: a vendor's engineers only ever see sites assigned to their own vendor.
+  if (req.auth!.vendorId) where.vendorId = req.auth!.vendorId;
 
   const sites = await prisma.site.findMany({
     where,
-    include: { order: { include: { customer: true } }, currentStage: true, assignedEngineer: true },
+    include: { order: { include: { customer: true } }, currentStage: true, assignedEngineer: true, vendor: true },
     orderBy: { updatedAt: "desc" },
   });
   res.json(sites);
@@ -47,6 +52,7 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
       order: { include: { customer: true, product: true } },
       currentStage: true,
       assignedEngineer: true,
+      vendor: true,
       stageEvents: {
         include: { stageDefinition: true, statusOption: true, createdBy: true },
         orderBy: { createdAt: "asc" },
@@ -67,6 +73,7 @@ sitesRouter.post(
 
     const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, include: { order: true } });
     if (!site) return res.status(404).json({ error: "Site not found" });
+    if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
 
     const [event] = await prisma.$transaction([
       prisma.siteStageEvent.create({
@@ -110,6 +117,7 @@ sitesRouter.post(
 
     const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, include: { order: true } });
     if (!site) return res.status(404).json({ error: "Site not found" });
+    if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
 
     if (parsed.data.matchesPlan) {
       const updated = await prisma.site.update({
@@ -147,9 +155,16 @@ sitesRouter.post("/:id/photos", requirePermission(PERMISSION_KEY.CHANGE_SITE_STA
   const parsed = uploadSitePhotoSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+  const siteId = asString(req.params.id);
+  if (req.auth!.vendorId) {
+    const site = await prisma.site.findUnique({ where: { id: siteId } });
+    if (!site) return res.status(404).json({ error: "Site not found" });
+    if (site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  }
+
   const photo = await prisma.sitePhoto.create({
     data: {
-      siteId: asString(req.params.id),
+      siteId,
       checkpointId: parsed.data.checkpointId,
       photoUrl: parsed.data.photoUrl,
       caption: parsed.data.caption,
@@ -158,4 +173,33 @@ sitesRouter.post("/:id/photos", requirePermission(PERMISSION_KEY.CHANGE_SITE_STA
     include: { checkpoint: true },
   });
   res.status(201).json(photo);
+});
+
+/**
+ * Assign (or clear) the external vendor responsible for a site - a management decision after
+ * approving the vendor. Setting it is what scopes the site into that vendor's isolated view.
+ */
+sitesRouter.post("/:id/assign-vendor", requirePermission(PERMISSION_KEY.MANAGE_VENDORS), async (req: AuthenticatedRequest, res) => {
+  const parsed = assignSiteVendorSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const siteId = asString(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+
+  if (parsed.data.vendorId) {
+    const vendor = await prisma.vendor.findUnique({ where: { id: parsed.data.vendorId } });
+    if (!vendor) return res.status(400).json({ error: "Unknown vendor" });
+    if (vendor.status !== VENDOR_STATUS.APPROVED) return res.status(400).json({ error: "Vendor is not approved" });
+  }
+
+  const data: Record<string, unknown> = { vendorId: parsed.data.vendorId };
+  if (parsed.data.assignedEngineerId !== undefined) data.assignedEngineerId = parsed.data.assignedEngineerId;
+
+  const updated = await prisma.site.update({
+    where: { id: siteId },
+    data,
+    include: { vendor: true, assignedEngineer: true },
+  });
+  res.json(updated);
 });

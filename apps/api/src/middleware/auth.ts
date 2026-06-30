@@ -7,6 +7,7 @@ export interface AuthenticatedRequest extends Request {
     userId: string;
     roleKey: string;
     customerId?: string | null;
+    vendorId?: string | null;
     permissions: Set<string>;
   };
 }
@@ -32,6 +33,7 @@ export async function authenticate(req: AuthenticatedRequest, res: Response, nex
       userId: user.id,
       roleKey: user.role.key,
       customerId: user.customerId,
+      vendorId: user.vendorId,
       permissions: new Set(user.role.permissions.map((rp) => rp.permission.key)),
     };
     next();

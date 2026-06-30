@@ -11,12 +11,13 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/orders": ["manage_orders"],
   "/sites": ["view_site_status"],
   "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
+  "/vendors": ["manage_vendors"],
   "/users": ["manage_users"],
   "/settings": ["manage_settings"],
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
-const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/users", "/settings"];
+const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/vendors", "/users", "/settings"];
 
 function canAccess(permissions: string[], route: string): boolean {
   const required = ROUTE_PERMISSIONS[route];
@@ -66,6 +67,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (loading) return;
+    if (pathname === "/vendor/register") return; // public page - no auth handling
 
     if (!user) {
       if (pathname !== "/login") router.push("/login");
@@ -106,6 +108,11 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         </div>
       </div>
     );
+  }
+
+  // Public, standalone page (no sidebar, no auth) so external vendors can self-register.
+  if (pathname === "/vendor/register") {
+    return <div className="min-h-screen bg-gray-50">{children}</div>;
   }
 
   const isLoginPage = pathname === "/login";

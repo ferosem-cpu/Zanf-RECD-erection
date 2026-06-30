@@ -247,6 +247,12 @@ export default function LoginPage() {
             )}
           </div>
         )}
+
+        <div className="mt-6 border-t border-gray-100 pt-4 text-center">
+          <a href="/vendor/register" className="text-xs font-medium text-gray-500 hover:text-gray-700">
+            Are you an erection vendor? <span className="text-[var(--theme-accent)]">Register here →</span>
+          </a>
+        </div>
       </div>
     </div>
   );

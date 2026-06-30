@@ -20,6 +20,7 @@ interface SiteDetail {
   order: { orderNumber: string; plannedExhaustHookupType: string | null; customer: { name: string } };
   currentStage: { id: string; label: string; phase: string };
   assignedEngineer: { name: string } | null;
+  vendor: { id: string; name: string } | null;
   stageEvents: Array<{
     id: string;
     comment: string;
@@ -50,11 +51,15 @@ export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { hasPermission } = useAuth();
   const canEdit = hasPermission("change_site_status");
+  const canAssignVendor = hasPermission("manage_vendors");
 
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<Lookup[]>([]);
   const [statusOptions, setStatusOptions] = useState<Lookup[]>([]);
   const [checkpoints, setCheckpoints] = useState<Lookup[]>([]);
+  const [vendors, setVendors] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [assignVendorId, setAssignVendorId] = useState("");
+  const [assigningVendor, setAssigningVendor] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
 
@@ -78,6 +83,7 @@ export default function SiteDetailPage() {
       const detail = await api<SiteDetail>(`/sites/${id}`);
       setSite(detail);
       setStageId((prev) => prev || detail.currentStage.id);
+      setAssignVendorId((prev) => prev || detail.vendor?.id || "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load site");
     }
@@ -91,7 +97,8 @@ export default function SiteDetailPage() {
       if (opts.length) setStatusId((prev) => prev || opts[0].id);
     }).catch(() => {});
     api<Lookup[]>("/meta/photo-checkpoints").then(setCheckpoints).catch(() => {});
-  }, [load]);
+    if (canAssignVendor) api<{ id: string; name: string; status: string }[]>("/vendors").then(setVendors).catch(() => {});
+  }, [load, canAssignVendor]);
 
   function flash(message: string) {
     setBanner(message);
@@ -114,6 +121,24 @@ export default function SiteDetailPage() {
       setError(err instanceof Error ? err.message : "Failed to post update");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function submitAssignVendor(e: React.FormEvent) {
+    e.preventDefault();
+    setAssigningVendor(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/assign-vendor`, {
+        method: "POST",
+        body: JSON.stringify({ vendorId: assignVendorId || null }),
+      });
+      flash("Vendor assigned.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to assign vendor");
+    } finally {
+      setAssigningVendor(false);
     }
   }
 
@@ -175,12 +200,39 @@ export default function SiteDetailPage() {
           Exhaust hookup - planned: {site.order.plannedExhaustHookupType ?? "-"}, confirmed:{" "}
           {site.confirmedExhaustHookupType ?? "awaiting confirmation"}
         </p>
+        <p className="text-sm text-gray-500">
+          Vendor: <span className="font-medium">{site.vendor?.name ?? "Unassigned"}</span>
+        </p>
       </div>
 
       {banner && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">{banner}</div>
       )}
       {error && site && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
+
+      {canAssignVendor && (
+        <section className="card p-5 space-y-3">
+          <h2 className="text-sm font-semibold">Vendor assignment</h2>
+          <p className="text-xs text-gray-500">
+            Assign the external vendor responsible for erecting this site. Their engineers then see it; other vendors never will.
+          </p>
+          <form onSubmit={submitAssignVendor} className="flex flex-wrap items-center gap-3">
+            <select
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={assignVendorId}
+              onChange={(e) => setAssignVendorId(e.target.value)}
+            >
+              <option value="">Unassigned</option>
+              {vendors.filter((v) => v.status === "approved").map((v) => (
+                <option key={v.id} value={v.id}>{v.name}</option>
+              ))}
+            </select>
+            <button type="submit" disabled={assigningVendor} className="btn-primary px-4 py-2 text-sm">
+              {assigningVendor ? "Saving…" : "Assign vendor"}
+            </button>
+          </form>
+        </section>
+      )}
 
       {site.pendingActions.filter((p) => p.status === "open").length > 0 && (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-4">

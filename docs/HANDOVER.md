@@ -25,6 +25,7 @@ Same pattern for **notifications** (one `NotificationService.send()` with real I
 - **Super Admin** — the *only* role with `manage_settings`. Owns the white‑label/branding (logo, theme) for when the app is sold to other manufacturers. Full access otherwise.
 - **Management** (Owner/Proprietor/CEO/CTO) — everything **except** Settings.
 - **Sales** — orders. **Operations/PM** — site status + pending actions. **Erection/Commissioning Engineers** — update site status + act on complaints *assigned to them*. **Service Team** — triage/assign/resolve complaints. **Finance** — placeholder (no modules yet). **Customer** — own order/site only, raise complaints, resolve their own approvals.
+- **`manage_vendors`** (Super Admin + Management) gates vendor approval and site→vendor assignment. **Erection engineers now belong to an external vendor** (`User.vendorId`) and see only their own vendor's sites — see §11.
 
 The web UI gates every menu item **and** route by permission; the API enforces it independently.
 
@@ -72,3 +73,24 @@ Two separate Vercel projects: **admin-web** (root directory `apps/admin-web`, Ne
 - API routes: `apps/api/src/routes/*` (auth, sites, complaints, orders, customers, pendingActions, dashboard, users, settings, lookups); auth in `src/middleware/auth.ts`
 - Web: `apps/admin-web/src/components/{AuthContext,AuthGuard,Nav}.tsx`; pages under `src/app/*`
 - Memory (persists across sessions): `…/memory/project_recd_tracker_app.md`
+- Vendor routes: `apps/api/src/routes/vendors.ts`; vendor pages: `apps/admin-web/src/app/vendors/page.tsx`, `apps/admin-web/src/app/vendor/register/page.tsx`
+
+---
+
+## 11. Vendor management (added 2026-06-30, migration `20260630065402_add_vendors`)
+External erection companies ("vendors") are **not** part of Platino — erection is subcontracted.
+
+- **Self-registration** (public, no login): `/vendor/register` → `POST /vendors/register` creates a `pending` vendor. Linked from the login page.
+- **Management review/approval**: `/vendors` page (`manage_vendors`) lists all vendors with status + engineer/site counts. Approving (after due diligence) **auto-provisions the vendor's primary contact as an erection-engineer login** — the temp password is shown once. Reject/Reconsider available.
+- **Adding more vendor engineers**: Users page → add user with role *Erection Engineer* now requires choosing an **approved vendor** (API enforces it; 400 otherwise).
+- **Assigning work**: the site detail "Vendor assignment" control (`manage_vendors`) sets `Site.vendorId` — that's what scopes the site into a vendor's view.
+- **Isolation (multi-tenant)**: a vendor's engineers only see/act on sites with their `vendorId`. Enforced on `GET /sites`, `GET /sites/:id`, and every site mutation (another vendor's site → **403**). Vendors never see other vendors (the `/vendors` list requires `manage_vendors`, which vendor users don't have).
+- **Data model**: `Vendor` (status, contact, approvedBy/At) + `User.vendorId` + `Site.vendorId`. The seed transfers the sample erection engineer (`erection@platino.example`) and sample site under the approved vendor *Coimbatore Erectors LLP*; *Salem Fabrication Works* is seeded `pending` for the demo.
+
+## 12. Operational notes (gotchas hit during the build)
+- **After editing `packages/shared`, rebuild it**: `npm run build --workspace=packages/shared`. Its `main` is `dist/index.js`, so the API/web/seed read the **compiled** output — source edits don't apply until rebuilt (root `postinstall` and `turbo` do this automatically; a direct edit does not). Symptom if you forget: a newly-added constant reads as `undefined` at runtime.
+- **Windows Prisma `EPERM` on generate**: if `prisma generate` can't rename `query_engine-windows.dll.node`, a running node process has the DLL loaded. Stop this project's dev servers first; find the exact holder with `Get-Process node | ? { $_.Modules.FileName -like '*Claude code*query_engine*' }`.
+- Ports: API pinned to **4001** via `apps/api/.env` (`PORT=4001`); web is `next dev -p 6001`.
+
+## 13. Updated verification (2026-06-30)
+Vendor flow verified end-to-end (API + UI): public registration (201) → management approval (creates login + temp password) → vendor isolation (Coimbatore engineer sees only their site; a second vendor sees 0 sites and gets **403** opening the first vendor's site) → erection-engineer-without-vendor rejected (**400**). The `/vendor/register` page renders logged-out; the `/vendors` console renders with status + approve/reject. Both apps `tsc --noEmit` clean.

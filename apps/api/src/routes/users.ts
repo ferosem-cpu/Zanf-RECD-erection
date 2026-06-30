@@ -1,6 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { createUserSchema, updateUserSchema, PERMISSION_KEY } from "@recd/shared";
+import { createUserSchema, updateUserSchema, PERMISSION_KEY, ROLE_KEY, VENDOR_STATUS } from "@recd/shared";
 import { asString } from "../lib/params";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -28,6 +28,16 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
   const role = await prisma.role.findUnique({ where: { key: parsed.data.roleKey } });
   if (!role) return res.status(400).json({ error: `Unknown role key: ${parsed.data.roleKey}` });
 
+  // Erection engineers are subcontracted: they must belong to an approved vendor.
+  if (parsed.data.roleKey === ROLE_KEY.ERECTION_ENGINEER && !parsed.data.vendorId) {
+    return res.status(400).json({ error: "An erection engineer must be assigned to a vendor" });
+  }
+  if (parsed.data.vendorId) {
+    const vendor = await prisma.vendor.findUnique({ where: { id: parsed.data.vendorId } });
+    if (!vendor) return res.status(400).json({ error: "Unknown vendor" });
+    if (vendor.status !== VENDOR_STATUS.APPROVED) return res.status(400).json({ error: "Vendor is not approved yet" });
+  }
+
   const tempPassword = Math.random().toString(36).slice(2, 10);
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
@@ -37,6 +47,7 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
       email: parsed.data.email,
       phone: parsed.data.phone,
       roleId: role.id,
+      vendorId: parsed.data.vendorId,
       passwordHash,
       createdById: req.auth!.userId,
     },

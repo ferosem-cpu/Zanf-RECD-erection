@@ -19,6 +19,12 @@ interface RoleOption {
   name: string;
 }
 
+interface VendorOption {
+  id: string;
+  name: string;
+  status: string;
+}
+
 // ── Icons ──────────────────────────────────────────────────────────────
 
 function PencilIcon() {
@@ -56,7 +62,8 @@ function KeyIcon() {
 export default function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<RoleOption[]>([]);
-  const [form, setForm] = useState({ name: "", email: "", roleKey: "", phone: "", title: "" });
+  const [vendors, setVendors] = useState<VendorOption[]>([]);
+  const [form, setForm] = useState({ name: "", email: "", roleKey: "", phone: "", title: "", vendorId: "" });
   const [tempPassword, setTempPassword] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -79,6 +86,7 @@ export default function UsersPage() {
   function load() {
     api<UserRow[]>("/users").then(setUsers).catch(() => {});
     api<RoleOption[]>("/meta/roles").then(setRoles).catch(() => {});
+    api<VendorOption[]>("/vendors").then(setVendors).catch(() => {});
   }
 
   useEffect(load, []);
@@ -93,10 +101,10 @@ export default function UsersPage() {
     try {
       const result = await api<{ tempPassword: string }>("/users", {
         method: "POST",
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, vendorId: form.vendorId || undefined }),
       });
       setTempPassword(result.tempPassword);
-      setForm({ name: "", email: "", roleKey: "", phone: "", title: "" });
+      setForm({ name: "", email: "", roleKey: "", phone: "", title: "", vendorId: "" });
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add user");
@@ -265,6 +273,22 @@ export default function UsersPage() {
               ))}
             </select>
           </div>
+          {form.roleKey === "erection_engineer" && (
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Vendor</label>
+              <select
+                required
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[var(--theme-accent)]/30 focus:border-[var(--theme-accent)] transition"
+                value={form.vendorId}
+                onChange={(e) => setForm({ ...form, vendorId: e.target.value })}
+              >
+                <option value="">Select a vendor</option>
+                {vendors.filter((v) => v.status === "approved").map((v) => (
+                  <option key={v.id} value={v.id}>{v.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <button
             type="submit"
             className="btn-primary px-4 py-2 text-sm"

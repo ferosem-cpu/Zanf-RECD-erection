@@ -69,6 +69,9 @@ model User {
   role                Role     @relation(fields: [roleId], references: [id])
   customerId          String?
   customer            Customer? @relation("CustomerContacts", fields: [customerId], references: [id])
+  /// Erection engineers belong to an external Vendor company (work is subcontracted). Null = internal staff.
+  vendorId            String?
+  vendor              Vendor?   @relation("VendorMembers", fields: [vendorId], references: [id])
   notificationChannels Json?   // array of NotificationChannel keys the user has opted into
   createdAt           DateTime @default(now())
 
@@ -83,6 +86,7 @@ model User {
   createdById          String?
   createdBy            User?              @relation("CreatedBy", fields: [createdById], references: [id])
   otpCodes             OtpCode[]
+  vendorsApproved      Vendor[]           @relation("VendorApprover")
 }
 
 model OtpCode {
@@ -110,6 +114,26 @@ model Customer {
   contacts  User[]   @relation("CustomerContacts")
   orders    Order[]
   complaints Complaint[]
+}
+
+/// External erection subcontractor. Not part of Platino. Self-registers, is approved by
+/// management after due diligence, then its erection engineers are added as vendor-scoped users.
+model Vendor {
+  id           String    @id @default(cuid())
+  name         String
+  /// "pending" | "approved" | "rejected" - see VENDOR_STATUS in packages/shared.
+  status       String    @default("pending")
+  contactName  String
+  contactEmail String    @unique
+  contactPhone String?
+  address      String?
+  approvedById String?
+  approvedBy   User?     @relation("VendorApprover", fields: [approvedById], references: [id])
+  approvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  members User[] @relation("VendorMembers")
+  sites   Site[] @relation("VendorSites")
 }
 
 model Product {
@@ -160,6 +184,10 @@ model Site {
   gpsLng            Decimal? @db.Decimal(9, 6)
   assignedEngineerId String?
   assignedEngineer   User?   @relation("AssignedEngineer", fields: [assignedEngineerId], references: [id])
+
+  /// The external vendor company responsible for erecting this site (null = handled internally).
+  vendorId String?
+  vendor   Vendor? @relation("VendorSites", fields: [vendorId], references: [id])
 
   currentStageId String
   currentStage   StageDefinition @relation(fields: [currentStageId], references: [id])

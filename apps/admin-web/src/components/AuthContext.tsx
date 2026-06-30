@@ -15,6 +15,7 @@ export interface UserSession {
   };
   permissions: string[];
   customerId?: string | null;
+  vendorId?: string | null;
   orderNumber?: string;
 }
 

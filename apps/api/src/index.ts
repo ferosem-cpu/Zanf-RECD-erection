@@ -11,6 +11,7 @@ import { usersRouter } from "./routes/users";
 import { lookupsRouter } from "./routes/lookups";
 import { settingsRouter } from "./routes/settings";
 import { customersRouter } from "./routes/customers";
+import { vendorsRouter } from "./routes/vendors";
 
 const app = express();
 app.use(cors());
@@ -23,6 +24,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use("/auth", authRouter);
 app.use("/orders", ordersRouter);
 app.use("/customers", customersRouter);
+app.use("/vendors", vendorsRouter);
 app.use("/sites", sitesRouter);
 app.use("/complaints", complaintsRouter);
 app.use("/pending-actions", pendingActionsRouter);

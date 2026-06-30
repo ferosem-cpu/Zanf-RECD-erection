@@ -23,6 +23,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.RESOLVE_PENDING_ACTION, name: "Resolve a pending action" },
     { key: PERMISSION_KEY.MANAGE_SETTINGS, name: "Manage company settings and theming" },
     { key: PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS, name: "Act on complaints assigned to you" },
+    { key: PERMISSION_KEY.MANAGE_VENDORS, name: "Approve and manage external vendors" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -261,6 +262,48 @@ async function seedSampleOrder(customerId: string) {
   return order;
 }
 
+async function seedVendors() {
+  const approver = await prisma.user.findUnique({ where: { email: "superadmin@platino.example" } });
+
+  // One already-approved vendor (so the demo has a working vendor-scoped engineer) ...
+  const approved = await prisma.vendor.upsert({
+    where: { contactEmail: "vendor@coimbatore-erectors.example" },
+    update: { status: "approved", approvedById: approver?.id, approvedAt: new Date() },
+    create: {
+      name: "Coimbatore Erectors LLP",
+      status: "approved",
+      contactName: "Ramesh Kumar",
+      contactEmail: "vendor@coimbatore-erectors.example",
+      contactPhone: "+919812345678",
+      address: "Coimbatore, Tamil Nadu",
+      approvedById: approver?.id,
+      approvedAt: new Date(),
+    },
+  });
+
+  // ... and one still-pending registration, so management has something to review in the demo.
+  await prisma.vendor.upsert({
+    where: { contactEmail: "vendor@salem-fabrication.example" },
+    update: {},
+    create: {
+      name: "Salem Fabrication Works",
+      status: "pending",
+      contactName: "Lakshmi Narayan",
+      contactEmail: "vendor@salem-fabrication.example",
+      contactPhone: "+919898989898",
+      address: "Salem, Tamil Nadu",
+    },
+  });
+
+  // Erection work is subcontracted: move the sample erection engineer under the approved vendor.
+  await prisma.user.update({
+    where: { email: "erection@platino.example" },
+    data: { vendorId: approved.id },
+  });
+
+  return { approved };
+}
+
 async function seedCompanySettings() {
   await prisma.companySettings.upsert({
     where: { id: "singleton" },
@@ -281,7 +324,10 @@ async function main() {
   await seedStatusOptions();
   await seedPhotoCheckpoints();
   const { customer } = await seedSampleUsers();
-  await seedSampleOrder(customer.id);
+  const order = await seedSampleOrder(customer.id);
+  const { approved } = await seedVendors();
+  // Assign the sample site to the approved vendor so its engineer sees it (and other vendors don't).
+  await prisma.site.update({ where: { orderId: order.id }, data: { vendorId: approved.id } });
   await seedCompanySettings();
   console.log("Seed complete.");
 }

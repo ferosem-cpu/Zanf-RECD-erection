@@ -73,6 +73,8 @@ export const PERMISSION_KEY = {
   MANAGE_SETTINGS: "manage_settings",
   /** Act on complaints assigned to you (field engineers resolving their own tickets). */
   ACT_ASSIGNED_COMPLAINTS: "act_assigned_complaints",
+  /** Review, approve/reject vendor registrations and assign vendors to sites. */
+  MANAGE_VENDORS: "manage_vendors",
 } as const;
 export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];
 
@@ -125,3 +127,10 @@ export const COMPLAINT_CATEGORY = {
   NON_PERFORMANCE: "non_performance",
 } as const;
 export type ComplaintCategory = (typeof COMPLAINT_CATEGORY)[keyof typeof COMPLAINT_CATEGORY];
+
+export const VENDOR_STATUS = {
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+} as const;
+export type VendorStatus = (typeof VENDOR_STATUS)[keyof typeof VENDOR_STATUS];
