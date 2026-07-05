@@ -197,8 +197,8 @@ Both apps `tsc --noEmit` clean; `apps/api` `npm run build` and `apps/admin-web` 
 **Deployment topology (confirmed live 2026-07-02)**
 - Two Vercel projects under team `ferose-salahudeen-s-projects`: **platino-recd-api** (`prj_grBAwYFoVIjJAtJg3uo3FqsPALrh`, framework express) and **platino-recd-admin-web** (`prj_Ozx4HCxv3FNyIog1asayGUQ1I7wA`, nextjs). Both are Git-connected: **push to `master` → production**, push to any other branch → preview.
 - Supabase project `vpvrdjqmyymyrkmynfxy` (ap-northeast-1, Tokyo) was the database at time of audit. **Since migrated to `qpysyuysgcsrpvlxdglk` (ap-south-1, Mumbai) — see §18.**
-- Production is healthy: `https://platino-recd-api.vercel.app/health` → `{"ok":true}`, `https://platino-recd-admin-web.vercel.app/login` renders. **Production is still commit `78ec595` (master) — it does NOT yet contain the fixes above.**
-- The fix branch auto-deployed as a **preview** (`dpl_m5xW…`), built READY, and its `/health` returns 200 — which also confirms `JWT_SECRET` is present in the **Preview** env scope.
+- Production is healthy: `https://platino-recd-api.vercel.app/health` → `{"ok":true}`, `https://platino-recd-admin-web.vercel.app/login` renders.
+- Production API is connected to the Mumbai Supabase project — verified 2026-07-05 (login returns HTTP 200).
 
 **Env vars — not wired from this session.** There is no Vercel MCP tool to create/read/update environment variables, and no `VERCEL_TOKEN` was available, so env vars could not be set programmatically here. They are already configured from prior deploys (the preview proves at least `DATABASE_URL` + `JWT_SECRET` exist in Preview). To change them, use the Vercel dashboard (Project → Settings → Environment Variables) or provide a Vercel API token. Required per project: **api** → `DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET`, and `NODE_ENV=production` (so the customer OTP is never echoed in the response); **admin-web** → `NEXT_PUBLIC_API_URL` = `https://platino-recd-api.vercel.app` (baked at build → redeploy after any change).
 
@@ -230,6 +230,13 @@ Both apps `tsc --noEmit` clean; `apps/api` `npm run build` and `apps/admin-web` 
 | NotificationLog | 36 |
 | Customer / Order / Site | 1 each |
 
-**What you need to update in Vercel:** Both the admin-web and api Vercel projects have env vars pointing to the old Tokyo pooler URLs (`DATABASE_URL`, `DIRECT_URL`). These must be updated to the new Mumbai pooler URLs from the Supabase dashboard (`Project Settings → Database → Connection string`). After updating, trigger a fresh Vercel deploy (not Redeploy — see §9) to pick up the new creds.
+**Vercel env vars — DONE (2026-07-05):** `DATABASE_URL` and `DIRECT_URL` on the **platino-recd-api** Vercel project have been updated to point at the Mumbai poolers:
 
-**Local `.env`:** `apps/api/.env` also needs `DATABASE_URL` and `DIRECT_URL` updated to point at the new Mumbai project before local `prisma migrate` or `prisma generate` will work against the right DB.
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | `postgresql://postgres.qpysyuysgcsrpvlxdglk:…@aws-1-ap-south-1.pooler.supabase.com:6543/postgres?pgbouncer=true` |
+| `DIRECT_URL` | `postgresql://postgres.qpysyuysgcsrpvlxdglk:…@aws-1-ap-south-1.pooler.supabase.com:5432/postgres` |
+
+A fresh production deploy was triggered immediately after and is **Ready**. Login at `https://platino-recd-api.vercel.app/auth/login` returns HTTP 200 — DB connection confirmed live against Mumbai. Note: Mumbai uses `aws-1-ap-south-1.pooler.supabase.com` (not `aws-0`) — this is correct for the `ap-south-1` region.
+
+**Local `.env`:** `apps/api/.env` has also been updated to the Mumbai pooler URLs — local `prisma migrate` / `prisma generate` work against the correct DB.
