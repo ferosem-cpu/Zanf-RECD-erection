@@ -117,7 +117,7 @@ purchaseOrdersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHAS
   const po = await prisma.purchaseOrder.findUnique({
     where: { id },
     include: {
-      supplier: { select: { id: true, name: true, gstin: true, state: true, address: true } },
+      supplier: { select: { id: true, name: true, gstin: true, state: true, address: true, contactName: true, contactPhone: true, contactEmail: true } },
       order: { select: { id: true, orderNumber: true } },
       site: { select: { id: true } },
       lineItems: { orderBy: { sortOrder: "asc" } },

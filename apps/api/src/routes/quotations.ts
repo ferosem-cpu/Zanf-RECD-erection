@@ -124,7 +124,12 @@ quotationsRouter.get(
     const quotation = await prisma.quotation.findUnique({
       where: { id },
       include: {
-        customer: { select: { id: true, name: true, gstin: true, state: true, address: true } },
+        customer: {
+          select: {
+            id: true, name: true, gstin: true, state: true, address: true,
+            contacts: { select: { name: true, phone: true, email: true }, take: 1 },
+          },
+        },
         createdBy: { select: { id: true, name: true } },
         lineItems: { orderBy: { sortOrder: "asc" } },
         invoices: { select: { id: true, invoiceNumber: true, docType: true, status: true } },

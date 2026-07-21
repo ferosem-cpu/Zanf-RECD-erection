@@ -24,7 +24,12 @@ async function invoiceSummary(tx: Prisma.TransactionClient, id: string) {
   return tx.invoice.findUniqueOrThrow({
     where: { id },
     include: {
-      customer: { select: { id: true, name: true, gstin: true, state: true, address: true } },
+      customer: {
+        select: {
+          id: true, name: true, gstin: true, state: true, address: true,
+          contacts: { select: { name: true, phone: true, email: true }, take: 1 },
+        },
+      },
       order: { select: { id: true, orderNumber: true } },
       quotation: { select: { id: true, quoteNumber: true } },
       lineItems: { orderBy: { sortOrder: "asc" } },

@@ -10,7 +10,7 @@ interface InvoiceDetail {
   id: string; invoiceNumber: string; docType: string; status: string; issueDate: string; dueDate?: string | null;
   placeOfSupply?: string | null; subtotal: string; discountAmount: string; cgstAmount: string; sgstAmount: string; igstAmount: string; total: string;
   notes?: string | null; terms?: string | null; cancelReason?: string | null;
-  customer: { id: string; name: string; gstin?: string | null; state?: string | null; address?: string | null };
+  customer: { id: string; name: string; gstin?: string | null; state?: string | null; address?: string | null; contacts?: { name: string; phone: string | null; email: string | null }[] };
   lineItems: LineItem[];
 }
 interface Company { legalName?: string | null; address?: string | null; city?: string | null; pinCode?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; email?: string | null; website?: string | null; phone?: string | null; bankName?: string | null; bankAccountNumber?: string | null; bankIfsc?: string | null; bankBranch?: string | null; invoiceTerms?: string | null; logoDataUrl?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
@@ -23,6 +23,24 @@ function cityPinLine(company: Company | undefined): string {
 /** "email · website · phone" contact line — whichever parts are set. */
 function contactLine(company: Company | undefined): string {
   return [company?.email, company?.website, company?.phone].filter(Boolean).join("  ·  ");
+}
+
+function AttnBlock({ contact, validLabel, validValue }: { contact?: { name: string; phone: string | null; email: string | null }; validLabel: string; validValue: string | null }) {
+  return (
+    <div className="print-panel-attn">
+      <div className="print-panel-label">Attn</div>
+      {contact ? (
+        <>
+          <div className="name">{contact.name}</div>
+          {contact.phone && <div className="line">Ph: {contact.phone}</div>}
+          {contact.email && <div className="line">Email: {contact.email}</div>}
+        </>
+      ) : (
+        <div className="line">-</div>
+      )}
+      {validValue && <div className="valid">{validLabel}: {validValue}</div>}
+    </div>
+  );
 }
 
 /**
@@ -43,12 +61,12 @@ function TermsBlock({ terms }: { terms: string }) {
   const bullets = termsToBullets(terms);
   if (bullets.length === 0) return null;
   return (
-    <div className="mb-1">
-      <span className="font-semibold">Terms:</span>
-      <ul className="list-disc pl-5 mt-0.5 space-y-0.5">
+    <>
+      <div className="k">Terms &amp; conditions</div>
+      <ol>
         {bullets.map((line, i) => <li key={i}>{line}</li>)}
-      </ul>
-    </div>
+      </ol>
+    </>
   );
 }
 
@@ -144,101 +162,105 @@ export default function InvoicePrintPage() {
         )}
       </div>
 
-      <div className={isCancelled ? "opacity-50" : ""}>
-        <div className="mb-6">
-          {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-12 object-contain mb-2" /> : null}
-          <h1 className="text-lg font-bold">{company?.legalName ?? "Your Company"}</h1>
-          {company?.address && <p className="text-xs text-gray-600 whitespace-pre-line">{company.address}</p>}
-          {cityPinLine(company) && <p className="text-xs text-gray-600">{cityPinLine(company)}</p>}
-          {contactLine(company) && <p className="text-xs text-gray-600 mt-0.5">{contactLine(company)}</p>}
-          <div className="text-xs text-gray-600 mt-1">
-            {company?.gstin && <p>GSTIN: {company.gstin}</p>}
-            {company?.pan && <p>PAN: {company.pan}</p>}
+      <div className={`print-doc${isCancelled ? " opacity-50" : ""}`}>
+        <div className="print-header">
+          <div className="print-co-block">
+            {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
+            <div className="print-co-name">{company?.legalName ?? "Your Company"}</div>
+            <address>
+              {company?.address}
+              {cityPinLine(company) && <><br />{cityPinLine(company)}</>}
+              {contactLine(company) && <><br />{contactLine(company)}</>}
+            </address>
+          </div>
+          <div className="print-title-block">
+            <div className="print-doc-title">{inv.docType === "tax_invoice" ? "TAX INVOICE" : "PROFORMA INVOICE"}</div>
+            <div className="print-meta">
+              <div>No. <b>{inv.invoiceNumber}</b></div>
+              <div>Date: <b>{formatDate(inv.issueDate)}</b></div>
+              {company?.gstin && <div>GSTIN: <b>{company.gstin}</b></div>}
+              {company?.pan && <div>PAN: <b>{company.pan}</b></div>}
+            </div>
           </div>
         </div>
 
-        <div className="flex justify-between items-start mb-4">
-          <div>
-            <h2 className="text-xl font-bold">{inv.docType === "tax_invoice" ? "TAX INVOICE" : "PROFORMA INVOICE"}</h2>
-            <p className="text-sm">{inv.invoiceNumber}</p>
-            <p className="text-xs text-gray-500">Date: {formatDate(inv.issueDate)}</p>
-            {inv.dueDate && <p className="text-xs text-gray-500">Due: {formatDate(inv.dueDate)}</p>}
+        <div className="print-panels">
+          <div className="print-panel-bill">
+            <div className="print-panel-label">Bill to</div>
+            <div className="name">{inv.customer.name}</div>
+            <div className="addr">
+              {inv.customer.address}
+              {inv.placeOfSupply && <><br />{inv.placeOfSupply}</>}
+            </div>
+            {inv.customer.gstin && <div className="gstin">GSTIN: {inv.customer.gstin}</div>}
           </div>
-          <div className="text-right text-sm">
-            <p className="font-semibold">{inv.customer.name}</p>
-            {inv.customer.address && <p className="text-gray-600 whitespace-pre-line">{inv.customer.address}</p>}
-            {inv.customer.gstin && <p className="text-xs text-gray-500">GSTIN: {inv.customer.gstin}</p>}
-            {inv.placeOfSupply && <p className="text-xs text-gray-500">Place of supply: {inv.placeOfSupply}</p>}
-          </div>
+          <AttnBlock contact={inv.customer.contacts?.[0]} validLabel="Due" validValue={inv.dueDate ? formatDate(inv.dueDate) : null} />
         </div>
 
-        <table className="w-full border-collapse text-sm border border-gray-300">
+        <table className="print-table">
           <thead>
-            <tr className="bg-gray-100 text-left">
-              <th className="border px-2 py-1">#</th>
-              <th className="border px-2 py-1">Description</th>
-              <th className="border px-2 py-1">HSN</th>
-              <th className="border px-2 py-1">Qty</th>
-              <th className="border px-2 py-1">Rate</th>
-              <th className="border px-2 py-1">Tax%</th>
-              <th className="border px-2 py-1 text-right">Amount</th>
+            <tr>
+              <th style={{ width: 28 }}>#</th>
+              <th>Description of material / service</th>
+              <th style={{ width: 74 }}>SAC/HSN</th>
+              <th className="num" style={{ width: 44 }}>Qty</th>
+              <th className="num" style={{ width: 96 }}>Rate</th>
+              <th className="num" style={{ width: 108 }}>Total</th>
             </tr>
           </thead>
           <tbody>
             {inv.lineItems.map((l, i) => (
               <tr key={l.id}>
-                <td className="border px-2 py-1">{i + 1}</td>
-                <td className="border px-2 py-1">{l.description}</td>
-                <td className="border px-2 py-1">{l.hsnCode ?? "-"}</td>
-                <td className="border px-2 py-1">{l.quantity}</td>
-                <td className="border px-2 py-1">{formatINR(l.unitPrice)}</td>
-                <td className="border px-2 py-1">{l.taxRatePct}%</td>
-                <td className="border px-2 py-1 text-right">{formatINR(l.lineTotal)}</td>
+                <td>{i + 1}</td>
+                <td>{l.description}</td>
+                <td>{l.hsnCode ?? "-"}</td>
+                <td className="num">{l.quantity}</td>
+                <td className="num">{formatINR(l.unitPrice)}</td>
+                <td className="num">{formatINR(l.lineTotal)}</td>
               </tr>
             ))}
           </tbody>
         </table>
 
-        <div className="mt-4 ml-auto w-full sm:w-72 text-sm">
-          <div className="flex justify-between py-1"><span>Subtotal</span><span>{formatINR(inv.subtotal)}</span></div>
-          {parseFloat(inv.discountAmount) !== 0 && <div className="flex justify-between py-1"><span>Discount</span><span>-{formatINR(inv.discountAmount)}</span></div>}
-          {parseFloat(inv.cgstAmount) !== 0 && <div className="flex justify-between py-1"><span>CGST</span><span>{formatINR(inv.cgstAmount)}</span></div>}
-          {parseFloat(inv.sgstAmount) !== 0 && <div className="flex justify-between py-1"><span>SGST</span><span>{formatINR(inv.sgstAmount)}</span></div>}
-          {parseFloat(inv.igstAmount) !== 0 && <div className="flex justify-between py-1"><span>IGST</span><span>{formatINR(inv.igstAmount)}</span></div>}
-          <div className="flex justify-between py-1 font-bold border-t border-gray-300 mt-1"><span>Total</span><span>{formatINR(inv.total)}</span></div>
-          <p className="text-xs text-gray-500 mt-1">({numberToIndianWords(parseFloat(inv.total))})</p>
+        <div className="print-lower">
+          <div className="print-words">
+            <div className="k">Amount in words</div>
+            <div className="v">{numberToIndianWords(parseFloat(inv.total))}</div>
+          </div>
+          <div className="print-summary">
+            <div className="row"><span>Subtotal</span><span>{formatINR(inv.subtotal)}</span></div>
+            {parseFloat(inv.discountAmount) !== 0 && <div className="row"><span>Discount</span><span>-{formatINR(inv.discountAmount)}</span></div>}
+            {parseFloat(inv.cgstAmount) !== 0 && <div className="row"><span>CGST</span><span>{formatINR(inv.cgstAmount)}</span></div>}
+            {parseFloat(inv.sgstAmount) !== 0 && <div className="row"><span>SGST</span><span>{formatINR(inv.sgstAmount)}</span></div>}
+            {parseFloat(inv.igstAmount) !== 0 && <div className="row"><span>IGST</span><span>{formatINR(inv.igstAmount)}</span></div>}
+            <div className="row total"><span>Grand total</span><span>{formatINR(inv.total)}</span></div>
+          </div>
         </div>
 
-        {company?.bankName && (
-          <div className="text-xs text-gray-600 mt-6 border-t border-gray-200 pt-3">
-            <p className="font-semibold mb-1">Bank details</p>
-            <p>Bank: {company.bankName}{company.bankBranch ? ` (${company.bankBranch})` : ""}</p>
-            <p>Account: {company.bankAccountNumber}</p>
-            <p>IFSC: {company.bankIfsc}</p>
-          </div>
-        )}
-
-        {(inv.notes || termsText) && (
-          <div className="text-xs text-gray-600 mt-4">
+        <div className={`print-bank-terms${company?.bankName ? "" : " single"}`}>
+          {company?.bankName && (
+            <div className="print-bank">
+              <div className="k">Bank details</div>
+              <div className="row"><b>Bank</b><span>{company.bankName}{company.bankBranch ? ` (${company.bankBranch})` : ""}</span></div>
+              <div className="row"><b>Account</b><span>{company.bankAccountNumber}</span></div>
+              <div className="row"><b>IFSC</b><span>{company.bankIfsc}</span></div>
+            </div>
+          )}
+          <div className="print-terms">
             {inv.notes && <p className="mb-1"><span className="font-semibold">Notes:</span> {inv.notes}</p>}
             <TermsBlock terms={termsText} />
           </div>
-        )}
+        </div>
 
         {isCancelled && (
           <p className="mt-4 text-red-600 font-semibold">CANCELLED{inv.cancelReason ? ` — ${inv.cancelReason}` : ""}</p>
         )}
 
-        <div className="mt-10 flex justify-between items-end text-xs text-gray-500">
-          <div className="whitespace-pre-line">
-            <p className="font-semibold">{company?.legalName}</p>
-            {company?.address && <p>{company.address}</p>}
-            {cityPinLine(company) && <p>{cityPinLine(company)}</p>}
-            {contactLine(company) && <p>{contactLine(company)}</p>}
-          </div>
-          <div className="text-right">
-            {company?.signatoryDataUrl && <img src={company.signatoryDataUrl} alt="Signature" className="h-14 object-contain ml-auto mb-1" />}
-            <p>Authorised signatory{company?.signatoryName ? ` — ${company.signatoryName}` : ""}</p>
+        <div className="print-footer">
+          <div>Thank you for your business.</div>
+          <div className="print-sig">
+            {company?.signatoryDataUrl && <img src={company.signatoryDataUrl} alt="Signature" className="h-12 object-contain ml-auto mb-1" />}
+            <p className="label">Authorised signatory{company?.signatoryName ? ` — ${company.signatoryName}` : ""}</p>
           </div>
         </div>
       </div>

@@ -426,3 +426,186 @@ body {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
+
+/* ── Print documents (invoice / quotation / purchase order) ─────────────
+   Always white paper with dark-navy ink, independent of the app's live
+   theme — a printed business document doesn't follow the on-screen
+   white-label palette. Shared by the three print pages. */
+
+.print-doc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #1c2b3a;
+}
+
+.print-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #c9d0d6;
+}
+
+.print-co-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1f4e79;
+  letter-spacing: 0.01em;
+}
+
+.print-co-block address {
+  font-style: normal;
+  color: #57646f;
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.print-title-block { text-align: right; }
+
+.print-doc-title {
+  font-size: 19px;
+  font-weight: 700;
+  color: #1c2b3a;
+  margin: 0 0 6px;
+  letter-spacing: 0.01em;
+}
+
+.print-meta { font-size: 11.5px; color: #57646f; }
+.print-meta b { color: #1c2b3a; font-weight: 600; }
+.print-meta div { margin-bottom: 2px; }
+
+.print-panels {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.print-panel-bill {
+  background: #eef2f6;
+  border-radius: 4px;
+  padding: 14px 16px;
+}
+
+.print-panel-label {
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: #4a7196;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.print-panel-bill .name { font-size: 13.5px; font-weight: 700; margin-bottom: 3px; }
+.print-panel-bill .addr { color: #57646f; font-size: 11.5px; line-height: 1.55; }
+.print-panel-bill .gstin { margin-top: 6px; font-size: 11px; font-weight: 700; }
+
+.print-panel-attn { padding: 14px 2px; font-size: 11.5px; color: #57646f; text-align: right; }
+.print-panel-attn .name { font-size: 12.5px; font-weight: 700; color: #1c2b3a; margin-bottom: 2px; }
+.print-panel-attn .line { margin-bottom: 1px; }
+.print-panel-attn .valid { margin-top: 8px; color: #8894a0; font-size: 10.5px; letter-spacing: 0.02em; }
+
+.print-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.print-table thead th {
+  background: #1f4e79;
+  color: #fff;
+  text-align: left;
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 8px 10px;
+}
+
+.print-table thead th.num { text-align: right; }
+
+.print-table tbody td {
+  padding: 9px 10px;
+  border-bottom: 1px solid #c9d0d6;
+  vertical-align: top;
+}
+
+.print-table tbody td.num { text-align: right; }
+.print-table tbody tr:last-child td { border-bottom: 1px solid #9aa6b0; }
+
+.print-lower {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 24px;
+  margin-top: 18px;
+}
+
+.print-words { font-size: 11.5px; }
+.print-words .k { text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; color: #8894a0; font-weight: 700; margin-bottom: 3px; }
+.print-words .v { font-style: italic; color: #1c2b3a; }
+
+.print-summary {
+  background: #eef2f6;
+  border-radius: 4px;
+  padding: 12px 16px;
+  font-size: 12px;
+}
+
+.print-summary .row { display: flex; justify-content: space-between; padding: 3px 0; color: #57646f; font-variant-numeric: tabular-nums; }
+.print-summary .row.total {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid #9aa6b0;
+  font-weight: 700;
+  font-size: 14px;
+  color: #1f4e79;
+}
+
+.print-bank-terms {
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid #c9d0d6;
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 24px;
+}
+
+.print-bank-terms.single { grid-template-columns: 1fr; }
+
+.print-bank .k, .print-terms .k {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  color: #8894a0;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.print-bank .row { display: flex; gap: 6px; font-size: 11.5px; padding: 1px 0; color: #57646f; }
+.print-bank .row b { color: #1c2b3a; font-weight: 600; min-width: 78px; }
+.print-terms ol { margin: 0; padding-left: 16px; font-size: 11.5px; color: #57646f; }
+.print-terms li { margin-bottom: 3px; }
+
+.print-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-top: 30px;
+  padding-top: 14px;
+  border-top: 1px solid #c9d0d6;
+  font-size: 10.5px;
+  color: #8894a0;
+}
+
+.print-sig { text-align: right; }
+.print-sig .label { color: #57646f; font-size: 11px; }
+
+@media (max-width: 640px) {
+  .print-panels, .print-lower, .print-bank-terms { grid-template-columns: 1fr; }
+  .print-header { flex-direction: column; }
+  .print-title-block { text-align: left; }
+  .print-panel-attn { text-align: left; }
+}
