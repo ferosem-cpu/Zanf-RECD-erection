@@ -465,9 +465,14 @@ model CompanySettings {
   /// Legal entity details printed on finance documents.
   legalName            String?
   address              String?
+  city                 String?
+  pinCode              String?
   state                String?
   gstin                String?
   pan                  String?
+  email                String?
+  website              String?
+  phone                String?
   bankName             String?
   bankAccountNumber    String?
   bankIfsc             String?

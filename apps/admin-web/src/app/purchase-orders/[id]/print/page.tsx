@@ -13,7 +13,17 @@ interface PoDetail {
   supplier: { id: string; name: string; gstin?: string | null; state?: string | null; address?: string | null };
   lineItems: LineItem[];
 }
-interface Company { legalName?: string | null; address?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; logoDataUrl?: string | null; purchaseOrderTerms?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
+interface Company { legalName?: string | null; address?: string | null; city?: string | null; pinCode?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; email?: string | null; website?: string | null; phone?: string | null; logoDataUrl?: string | null; purchaseOrderTerms?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
+
+/** "City, Pin Code" / "City" / "Pin Code" — whichever parts are set. */
+function cityPinLine(company: Company | undefined): string {
+  return [company?.city, company?.pinCode].filter(Boolean).join(" - ");
+}
+
+/** "email · website · phone" contact line — whichever parts are set. */
+function contactLine(company: Company | undefined): string {
+  return [company?.email, company?.website, company?.phone].filter(Boolean).join("  ·  ");
+}
 
 /** Splits free-text terms into bullet lines: one bullet per non-empty line, leading "-"/"•" markers stripped. */
 function termsToBullets(text: string | null | undefined): string[] {
@@ -125,6 +135,8 @@ export default function PurchaseOrderPrintPage() {
           {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-12 object-contain mb-2" /> : null}
           <h1 className="text-lg font-bold">{company?.legalName ?? "Your Company"}</h1>
           {company?.address && <p className="text-xs text-gray-600 whitespace-pre-line">{company.address}</p>}
+          {cityPinLine(company) && <p className="text-xs text-gray-600">{cityPinLine(company)}</p>}
+          {contactLine(company) && <p className="text-xs text-gray-600 mt-0.5">{contactLine(company)}</p>}
           {company?.gstin && <p className="text-xs text-gray-500">GSTIN: {company.gstin}</p>}
         </div>
 
@@ -185,9 +197,17 @@ export default function PurchaseOrderPrintPage() {
           </div>
         )}
 
-        <div className="mt-10 text-xs text-gray-500 text-right">
-          {company?.signatoryDataUrl && <img src={company.signatoryDataUrl} alt="Signature" className="h-14 object-contain ml-auto mb-1" />}
-          <p>Authorised signatory{company?.signatoryName ? ` — ${company.signatoryName}` : ""}</p>
+        <div className="mt-10 flex justify-between items-end text-xs text-gray-500">
+          <div className="whitespace-pre-line">
+            <p className="font-semibold">{company?.legalName}</p>
+            {company?.address && <p>{company.address}</p>}
+            {cityPinLine(company) && <p>{cityPinLine(company)}</p>}
+            {contactLine(company) && <p>{contactLine(company)}</p>}
+          </div>
+          <div className="text-right">
+            {company?.signatoryDataUrl && <img src={company.signatoryDataUrl} alt="Signature" className="h-14 object-contain ml-auto mb-1" />}
+            <p>Authorised signatory{company?.signatoryName ? ` — ${company.signatoryName}` : ""}</p>
+          </div>
         </div>
       </div>
     </div>

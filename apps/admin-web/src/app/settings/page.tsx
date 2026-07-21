@@ -124,7 +124,8 @@ export default function SettingsPage() {
 
   // ── Company & Tax details (Super Admin / manage_settings) ─────────────
   const [company, setCompany] = useState({
-    legalName: "", address: "", state: "", gstin: "", pan: "",
+    legalName: "", address: "", city: "", pinCode: "", state: "", gstin: "", pan: "",
+    email: "", website: "", phone: "",
     bankName: "", bankAccountNumber: "", bankIfsc: "", bankBranch: "",
     invoiceTerms: "", quotationTerms: "", purchaseOrderTerms: "", defaultTaxRatePct: "",
   });
@@ -140,8 +141,10 @@ export default function SettingsPage() {
   useEffect(() => {
     api("/settings").then((s: any) => {
       setCompany((c) => ({
-        legalName: s.legalName ?? "", address: s.address ?? "", state: s.state ?? "", gstin: s.gstin ?? "",
-        pan: s.pan ?? "", bankName: s.bankName ?? "", bankAccountNumber: s.bankAccountNumber ?? "",
+        legalName: s.legalName ?? "", address: s.address ?? "", city: s.city ?? "", pinCode: s.pinCode ?? "",
+        state: s.state ?? "", gstin: s.gstin ?? "", pan: s.pan ?? "",
+        email: s.email ?? "", website: s.website ?? "", phone: s.phone ?? "",
+        bankName: s.bankName ?? "", bankAccountNumber: s.bankAccountNumber ?? "",
         bankIfsc: s.bankIfsc ?? "", bankBranch: s.bankBranch ?? "", invoiceTerms: s.invoiceTerms ?? "",
         quotationTerms: s.quotationTerms ?? "", purchaseOrderTerms: s.purchaseOrderTerms ?? "",
         defaultTaxRatePct: s.defaultTaxRatePct ?? "",
@@ -380,15 +383,29 @@ export default function SettingsPage() {
       {companyLoaded && (
         <section className="card p-4 sm:p-6">
           <h2 className="text-base sm:text-lg font-semibold mb-1">Company &amp; Tax details</h2>
-          <p className="text-sm text-gray-500 mb-5">Printed on quotations, invoices and purchase orders.</p>
+          <p className="text-sm text-gray-500 mb-5">
+            Universal header &amp; footer details printed on quotations, invoices and purchase orders.
+          </p>
           <form onSubmit={saveCompany} className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Legal name"><input className="field w-full" value={company.legalName} onChange={(e) => setCompany({ ...company, legalName: e.target.value })} /></Field>
-              <Field label="State"><input className="field w-full" value={company.state} onChange={(e) => setCompany({ ...company, state: e.target.value })} /></Field>
               <Field label="GSTIN"><input className="field w-full" value={company.gstin} onChange={(e) => setCompany({ ...company, gstin: e.target.value })} /></Field>
               <Field label="PAN"><input className="field w-full" value={company.pan} onChange={(e) => setCompany({ ...company, pan: e.target.value })} /></Field>
             </div>
             <Field label="Address"><textarea className="field w-full" rows={2} value={company.address} onChange={(e) => setCompany({ ...company, address: e.target.value })} /></Field>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Field label="City"><input className="field w-full" value={company.city} onChange={(e) => setCompany({ ...company, city: e.target.value })} /></Field>
+              <Field label="State"><input className="field w-full" value={company.state} onChange={(e) => setCompany({ ...company, state: e.target.value })} /></Field>
+              <Field label="Pin code"><input className="field w-full" value={company.pinCode} onChange={(e) => setCompany({ ...company, pinCode: e.target.value })} /></Field>
+            </div>
+            <div className="pt-2 border-t border-gray-100">
+              <label className="block text-xs font-medium text-gray-500 mb-2">Contact details (printed in the document header &amp; footer)</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <Field label="Email"><input type="email" className="field w-full" value={company.email} onChange={(e) => setCompany({ ...company, email: e.target.value })} /></Field>
+                <Field label="Website"><input className="field w-full" placeholder="https://www.example.com" value={company.website} onChange={(e) => setCompany({ ...company, website: e.target.value })} /></Field>
+                <Field label="Phone"><input className="field w-full" value={company.phone} onChange={(e) => setCompany({ ...company, phone: e.target.value })} /></Field>
+              </div>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Bank name"><input className="field w-full" value={company.bankName} onChange={(e) => setCompany({ ...company, bankName: e.target.value })} /></Field>
               <Field label="Account number"><input className="field w-full" value={company.bankAccountNumber} onChange={(e) => setCompany({ ...company, bankAccountNumber: e.target.value })} /></Field>
