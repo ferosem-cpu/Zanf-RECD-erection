@@ -15,16 +15,70 @@ interface PoDetail {
 }
 interface Company { legalName?: string | null; address?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; logoDataUrl?: string | null; purchaseOrderTerms?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
 
+/** Splits free-text terms into bullet lines: one bullet per non-empty line, leading "-"/"•" markers stripped. */
+function termsToBullets(text: string | null | undefined): string[] {
+  if (!text) return [];
+  return text
+    .replace(/\r\n/g, "\n")
+    .split(/\n|\s+-\s+/)
+    .map((line) => line.trim().replace(/^[-•]\s*/, ""))
+    .filter((line) => line.length > 0);
+}
+
+function TermsBlock({ terms }: { terms: string }) {
+  const bullets = termsToBullets(terms);
+  if (bullets.length === 0) return null;
+  return (
+    <div className="mb-1">
+      <span className="font-semibold">Terms:</span>
+      <ul className="list-disc pl-5 mt-0.5 space-y-0.5">
+        {bullets.map((line, i) => <li key={i}>{line}</li>)}
+      </ul>
+    </div>
+  );
+}
+
 export default function PurchaseOrderPrintPage() {
   const { id } = useParams<{ id: string }>();
   const [po, setPo] = useState<PoDetail | null>(null);
   const [company, setCompany] = useState<Company | undefined>(undefined);
+  const [termsText, setTermsText] = useState("");
+  const [termsInitialized, setTermsInitialized] = useState(false);
+  const [editingTerms, setEditingTerms] = useState(false);
+  const [savingTerms, setSavingTerms] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
     api<PoDetail>(`/purchase-orders/${id}`).then(setPo).catch(() => {});
     api<Company>("/settings").then(setCompany).catch(() => {});
   }, [id]);
+
+  // Seed the editable terms once both the PO and company settings have loaded:
+  // per-PO terms win if set, otherwise fall back to the company default.
+  useEffect(() => {
+    if (termsInitialized || !po || company === undefined) return;
+    setTermsText(po.terms ?? company?.purchaseOrderTerms ?? "");
+    setTermsInitialized(true);
+  }, [po, company, termsInitialized]);
+
+  async function saveTerms() {
+    if (!po) return;
+    setSavingTerms(true); setSaveMsg(null);
+    try {
+      await api(`/purchase-orders/${po.id}`, { method: "PUT", body: JSON.stringify({ terms: termsText }) });
+      setSaveMsg("Saved to this purchase order.");
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSavingTerms(false);
+    }
+  }
+
+  function resetTerms() {
+    setTermsText(company?.purchaseOrderTerms ?? "");
+    setSaveMsg(null);
+  }
 
   if (!po) return <p className="text-sm text-gray-500 p-4">Loading…</p>;
 
@@ -33,6 +87,38 @@ export default function PurchaseOrderPrintPage() {
       <div className="max-w-3xl mx-auto print:max-w-full">
         <div className="flex justify-end mb-4 print:hidden">
           <button onClick={() => window.print()} className="btn-primary px-4 py-2 text-sm">Download PDF</button>
+        </div>
+
+        <div className="print:hidden mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium text-gray-700">Terms &amp; conditions for this purchase order</p>
+            <button onClick={() => setEditingTerms((v) => !v)} className="text-xs text-blue-600 hover:underline">
+              {editingTerms ? "Done editing" : "Edit before printing"}
+            </button>
+          </div>
+          {editingTerms && (
+            <div className="mt-2 space-y-2">
+              <textarea
+                className="field w-full text-xs"
+                rows={5}
+                value={termsText}
+                onChange={(e) => { setTermsText(e.target.value); setSaveMsg(null); }}
+                placeholder="One line per bullet point…"
+              />
+              <div className="flex items-center gap-3">
+                <button onClick={resetTerms} className="text-xs text-gray-500 hover:underline">Reset to company default</button>
+                {po.status === "draft" && (
+                  <button onClick={saveTerms} disabled={savingTerms} className="btn-primary px-3 py-1 text-xs">
+                    {savingTerms ? "Saving…" : "Save to this purchase order"}
+                  </button>
+                )}
+                {saveMsg && <span className="text-xs text-gray-500">{saveMsg}</span>}
+              </div>
+              {po.status !== "draft" && (
+                <p className="text-xs text-gray-400">This purchase order is no longer a draft — the edit above only changes what prints now, it isn't saved to the record.</p>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="mb-6">
@@ -92,10 +178,10 @@ export default function PurchaseOrderPrintPage() {
           <p className="text-xs text-gray-500 mt-1">({numberToIndianWords(parseFloat(po.total))})</p>
         </div>
 
-        {(po.notes || po.terms || company?.purchaseOrderTerms) && (
+        {(po.notes || termsText) && (
           <div className="text-xs text-gray-600 mt-6">
             {po.notes && <p className="mb-1"><span className="font-semibold">Notes:</span> {po.notes}</p>}
-            {(po.terms || company?.purchaseOrderTerms) && <p className="mb-1"><span className="font-semibold">Terms:</span> {po.terms || company?.purchaseOrderTerms}</p>}
+            <TermsBlock terms={termsText} />
           </div>
         )}
 

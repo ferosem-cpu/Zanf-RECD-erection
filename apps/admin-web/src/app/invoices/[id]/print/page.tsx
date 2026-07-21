@@ -15,6 +15,33 @@ interface InvoiceDetail {
 }
 interface Company { legalName?: string | null; address?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; bankName?: string | null; bankAccountNumber?: string | null; bankIfsc?: string | null; bankBranch?: string | null; invoiceTerms?: string | null; logoDataUrl?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
 
+/**
+ * Splits free-text terms into bullet lines. Handles both real newlines (new terms
+ * typed one-per-line) and legacy single-paragraph text using " - " as an inline
+ * separator (e.g. "- Point one. - Point two.") - both become one <li> each.
+ */
+function termsToBullets(text: string | null | undefined): string[] {
+  if (!text) return [];
+  return text
+    .replace(/\r\n/g, "\n")
+    .split(/\n|\s+-\s+/)
+    .map((line) => line.trim().replace(/^[-•]\s*/, ""))
+    .filter((line) => line.length > 0);
+}
+
+function TermsBlock({ terms }: { terms: string }) {
+  const bullets = termsToBullets(terms);
+  if (bullets.length === 0) return null;
+  return (
+    <div className="mb-1">
+      <span className="font-semibold">Terms:</span>
+      <ul className="list-disc pl-5 mt-0.5 space-y-0.5">
+        {bullets.map((line, i) => <li key={i}>{line}</li>)}
+      </ul>
+    </div>
+  );
+}
+
 function PrintShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-white p-6 sm:p-10 print:p-0">
@@ -32,6 +59,11 @@ export default function InvoicePrintPage() {
   const { id } = useParams<{ id: string }>();
   const [inv, setInv] = useState<InvoiceDetail | null>(null);
   const [company, setCompany] = useState<Company | undefined>(undefined);
+  const [termsText, setTermsText] = useState("");
+  const [termsInitialized, setTermsInitialized] = useState(false);
+  const [editingTerms, setEditingTerms] = useState(false);
+  const [savingTerms, setSavingTerms] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -39,11 +71,69 @@ export default function InvoicePrintPage() {
     api<Company>("/settings").then(setCompany).catch(() => {});
   }, [id]);
 
+  // Seed the editable terms once both the invoice and company settings have loaded:
+  // per-invoice terms win if set, otherwise fall back to the company default.
+  useEffect(() => {
+    if (termsInitialized || !inv || company === undefined) return;
+    setTermsText(inv.terms ?? company?.invoiceTerms ?? "");
+    setTermsInitialized(true);
+  }, [inv, company, termsInitialized]);
+
+  async function saveTerms() {
+    if (!inv) return;
+    setSavingTerms(true); setSaveMsg(null);
+    try {
+      await api(`/invoices/${inv.id}`, { method: "PUT", body: JSON.stringify({ terms: termsText }) });
+      setSaveMsg("Saved to this invoice.");
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSavingTerms(false);
+    }
+  }
+
+  function resetTerms() {
+    setTermsText(company?.invoiceTerms ?? "");
+    setSaveMsg(null);
+  }
+
   if (!inv) return <p className="text-sm text-gray-500 p-4">Loading…</p>;
   const isCancelled = inv.status === "cancelled";
 
   return (
     <PrintShell>
+      <div className="print:hidden mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium text-gray-700">Terms &amp; conditions for this invoice</p>
+          <button onClick={() => setEditingTerms((v) => !v)} className="text-xs text-blue-600 hover:underline">
+            {editingTerms ? "Done editing" : "Edit before printing"}
+          </button>
+        </div>
+        {editingTerms && (
+          <div className="mt-2 space-y-2">
+            <textarea
+              className="field w-full text-xs"
+              rows={5}
+              value={termsText}
+              onChange={(e) => { setTermsText(e.target.value); setSaveMsg(null); }}
+              placeholder="One line per bullet point…"
+            />
+            <div className="flex items-center gap-3">
+              <button onClick={resetTerms} className="text-xs text-gray-500 hover:underline">Reset to company default</button>
+              {inv.status === "draft" && (
+                <button onClick={saveTerms} disabled={savingTerms} className="btn-primary px-3 py-1 text-xs">
+                  {savingTerms ? "Saving…" : "Save to this invoice"}
+                </button>
+              )}
+              {saveMsg && <span className="text-xs text-gray-500">{saveMsg}</span>}
+            </div>
+            {inv.status !== "draft" && (
+              <p className="text-xs text-gray-400">This invoice is no longer a draft — the edit above only changes what prints now, it isn't saved to the record.</p>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className={isCancelled ? "opacity-50" : ""}>
         <div className="mb-6">
           {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-12 object-contain mb-2" /> : null}
@@ -116,10 +206,10 @@ export default function InvoicePrintPage() {
           </div>
         )}
 
-        {(inv.notes || company?.invoiceTerms) && (
+        {(inv.notes || termsText) && (
           <div className="text-xs text-gray-600 mt-4">
             {inv.notes && <p className="mb-1"><span className="font-semibold">Notes:</span> {inv.notes}</p>}
-            {company?.invoiceTerms && <p className="mb-1"><span className="font-semibold">Terms:</span> {company.invoiceTerms}</p>}
+            <TermsBlock terms={termsText} />
           </div>
         )}
 
