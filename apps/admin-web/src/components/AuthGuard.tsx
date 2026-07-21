@@ -169,7 +169,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         {/* Mobile top bar with hamburger (hidden on lg+) */}
         <header
           data-testid="mobile-topbar"
-          className="lg:hidden sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-gray-200 bg-white/95 backdrop-blur-sm px-4 h-14"
+          className="lg:hidden print:hidden sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-gray-200 bg-white/95 backdrop-blur-sm px-4 h-14"
         >
           <button
             data-testid="mobile-menu-button"
@@ -186,7 +186,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
           </div>
           <div className="w-9" aria-hidden />
         </header>
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 overflow-auto">{children}</main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 print:p-0 overflow-auto">{children}</main>
       </div>
       <BottomNav onProfileClick={() => setMobileNavOpen(true)} />
     </div>

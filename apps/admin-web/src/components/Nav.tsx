@@ -218,7 +218,7 @@ export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
 
       <nav
         data-testid="sidebar-nav"
-        className={`sidebar fixed inset-y-0 left-0 z-50 w-60 shrink-0 flex flex-col overflow-y-auto transform transition-transform duration-300 ease-in-out
+        className={`sidebar fixed inset-y-0 left-0 z-50 w-60 shrink-0 flex flex-col overflow-y-auto transform transition-transform duration-300 ease-in-out print:hidden
           ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
           lg:relative lg:translate-x-0`}
       >
