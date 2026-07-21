@@ -60,24 +60,6 @@ export const ROLE_KEY = {
 } as const;
 export type RoleKey = (typeof ROLE_KEY)[keyof typeof ROLE_KEY];
 
-export const PERMISSION_KEY = {
-  VIEW_SITE_STATUS: "view_site_status",
-  CHANGE_SITE_STATUS: "change_site_status",
-  VIEW_DASHBOARD: "view_dashboard",
-  VIEW_COMPLAINTS_OVERVIEW: "view_complaints_overview",
-  MANAGE_COMPLAINTS: "manage_complaints",
-  RAISE_COMPLAINT: "raise_complaint",
-  MANAGE_ORDERS: "manage_orders",
-  MANAGE_USERS: "manage_users",
-  RESOLVE_PENDING_ACTION: "resolve_pending_action",
-  MANAGE_SETTINGS: "manage_settings",
-  /** Act on complaints assigned to you (field engineers resolving their own tickets). */
-  ACT_ASSIGNED_COMPLAINTS: "act_assigned_complaints",
-  /** Review, approve/reject vendor registrations and assign vendors to sites. */
-  MANAGE_VENDORS: "manage_vendors",
-} as const;
-export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];
-
 export const NOTIFICATION_CHANNEL = {
   IN_APP: "in_app",
   EMAIL: "email",
@@ -134,3 +116,130 @@ export const VENDOR_STATUS = {
   REJECTED: "rejected",
 } as const;
 export type VendorStatus = (typeof VENDOR_STATUS)[keyof typeof VENDOR_STATUS];
+
+// ---------------------------------------------------------------------------
+// Finance module (see docs/FINANCE_MODULE_PLAN.md)
+// ---------------------------------------------------------------------------
+
+export const PERMISSION_KEY_FINANCE = {
+  MANAGE_QUOTATIONS: "manage_quotations",
+  MANAGE_INVOICES: "manage_invoices",
+  RECORD_PAYMENTS: "record_payments",
+  MANAGE_PURCHASE_ORDERS: "manage_purchase_orders",
+  MANAGE_EXPENSES: "manage_expenses",
+  VIEW_FINANCE_DASHBOARD: "view_finance_dashboard",
+} as const;
+
+/** Merge finance permission keys into PERMISSION_KEY so they seed + type-check everywhere. */
+export const PERMISSION_KEY = {
+  VIEW_SITE_STATUS: "view_site_status",
+  CHANGE_SITE_STATUS: "change_site_status",
+  VIEW_DASHBOARD: "view_dashboard",
+  VIEW_COMPLAINTS_OVERVIEW: "view_complaints_overview",
+  MANAGE_COMPLAINTS: "manage_complaints",
+  RAISE_COMPLAINT: "raise_complaint",
+  MANAGE_ORDERS: "manage_orders",
+  MANAGE_USERS: "manage_users",
+  RESOLVE_PENDING_ACTION: "resolve_pending_action",
+  MANAGE_SETTINGS: "manage_settings",
+  /** Act on complaints assigned to you (field engineers resolving their own tickets). */
+  ACT_ASSIGNED_COMPLAINTS: "act_assigned_complaints",
+  /** Review, approve/reject vendor registrations and assign vendors to sites. */
+  MANAGE_VENDORS: "manage_vendors",
+  /** Create/assign/edit work orders (dispatch tasks to field crews). */
+  MANAGE_WORK_ORDERS: "manage_work_orders",
+  /** Act on work orders assigned to you (field engineers updating status/completing their own). */
+  ACT_ASSIGNED_WORK_ORDERS: "act_assigned_work_orders",
+  ...PERMISSION_KEY_FINANCE,
+} as const;
+export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];
+
+export const WORK_ORDER_STATUS = {
+  DRAFT: "draft",
+  ASSIGNED: "assigned",
+  IN_PROGRESS: "in_progress",
+  COMPLETED: "completed",
+  CANCELLED: "cancelled",
+} as const;
+export type WorkOrderStatus = (typeof WORK_ORDER_STATUS)[keyof typeof WORK_ORDER_STATUS];
+
+export const WORK_ORDER_TASK_TYPE = {
+  INSTALLATION: "installation",
+  REPAIR: "repair",
+  AMC_SERVICE: "amc_service",
+  INSPECTION: "inspection",
+  OTHER: "other",
+} as const;
+export type WorkOrderTaskType = (typeof WORK_ORDER_TASK_TYPE)[keyof typeof WORK_ORDER_TASK_TYPE];
+
+export const QUOTATION_STATUS = {
+  DRAFT: "draft",
+  SENT: "sent",
+  ACCEPTED: "accepted",
+  REJECTED: "rejected",
+  EXPIRED: "expired",
+  CONVERTED: "converted",
+} as const;
+export type QuotationStatus = (typeof QUOTATION_STATUS)[keyof typeof QUOTATION_STATUS];
+
+export const INVOICE_DOC_TYPE = {
+  PROFORMA: "proforma",
+  TAX_INVOICE: "tax_invoice",
+} as const;
+export type InvoiceDocType = (typeof INVOICE_DOC_TYPE)[keyof typeof INVOICE_DOC_TYPE];
+
+export const INVOICE_STATUS = {
+  DRAFT: "draft",
+  ISSUED: "issued",
+  PARTIALLY_PAID: "partially_paid",
+  PAID: "paid",
+  CANCELLED: "cancelled",
+} as const;
+export type InvoiceStatus = (typeof INVOICE_STATUS)[keyof typeof INVOICE_STATUS];
+
+export const PO_STATUS = {
+  DRAFT: "draft",
+  ISSUED: "issued",
+  PARTIALLY_RECEIVED: "partially_received",
+  RECEIVED: "received",
+  CANCELLED: "cancelled",
+  CLOSED: "closed",
+} as const;
+export type PoStatus = (typeof PO_STATUS)[keyof typeof PO_STATUS];
+
+export const BILL_STATUS = {
+  UNPAID: "unpaid",
+  PARTIALLY_PAID: "partially_paid",
+  PAID: "paid",
+  CANCELLED: "cancelled",
+} as const;
+export type BillStatus = (typeof BILL_STATUS)[keyof typeof BILL_STATUS];
+
+export const PAYMENT_METHOD = {
+  BANK_TRANSFER: "bank_transfer",
+  UPI: "upi",
+  CHEQUE: "cheque",
+  CASH: "cash",
+  OTHER: "other",
+} as const;
+export type PaymentMethod = (typeof PAYMENT_METHOD)[keyof typeof PAYMENT_METHOD];
+
+/** Sequence keys for DocumentSequence rows (one counter per fiscal year). */
+export const FINANCE_DOC_TYPE = {
+  QUOTATION: "quotation",
+  PROFORMA: "proforma",
+  TAX_INVOICE: "tax_invoice",
+  PURCHASE_ORDER: "purchase_order",
+} as const;
+export type FinanceDocType = (typeof FINANCE_DOC_TYPE)[keyof typeof FINANCE_DOC_TYPE];
+
+/** Seeded expense category keys (data-not-code). */
+export const EXPENSE_CATEGORY_KEY = {
+  MATERIAL: "material",
+  TRANSPORT: "transport",
+  SITE_LABOUR: "site_labour",
+  TRAVEL: "travel",
+  OFFICE: "office",
+  MISC: "misc",
+} as const;
+export type ExpenseCategoryKey = (typeof EXPENSE_CATEGORY_KEY)[keyof typeof EXPENSE_CATEGORY_KEY];

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/AuthContext";
 import { api } from "@/lib/apiClient";
+import { formatINR } from "@/lib/finance";
 
 interface StageDefinition {
   id: string;
@@ -71,6 +72,7 @@ export default function CustomerPortalPage() {
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<StageDefinition[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [invoices, setInvoices] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // New Complaint Form
@@ -100,6 +102,14 @@ export default function CustomerPortalPage() {
       // Fetch complaints
       const complaintsData = await api<Complaint[]>("/complaints");
       setComplaints(complaintsData);
+
+      // Fetch customer's own issued invoices
+      try {
+        const invoicesData = await api<any[]>("/portal/invoices");
+        setInvoices(invoicesData);
+      } catch {
+        setInvoices([]);
+      }
     } catch (err) {
       console.error("Failed to load customer portal data", err);
     } finally {
@@ -446,6 +456,41 @@ export default function CustomerPortalPage() {
                 {submittingComplaint ? "Submitting..." : "Submit Ticket"}
               </button>
             </form>
+          </section>
+
+          {/* My Invoices */}
+          <section className="card p-6">
+            <h3 className="text-md font-bold mb-4">My Invoices</h3>
+            <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
+              {invoices.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-6">No invoices issued yet.</p>
+              ) : (
+                invoices.map((inv) => (
+                  <div key={inv.id} className="rounded-xl border border-gray-100 p-3.5 bg-white space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-[var(--theme-primary)]">{inv.invoiceNumber}</span>
+                      <span className={`status-pill ${
+                        inv.status === "paid"
+                          ? "status-pill-success"
+                          : inv.status === "issued"
+                          ? "status-pill-warning"
+                          : "status-pill-error"
+                      }`}>
+                        {inv.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      {inv.docType === "tax_invoice" ? "Tax invoice" : "Proforma"} · {new Date(inv.issueDate).toLocaleDateString()}
+                    </p>
+                    <div className="flex justify-between text-xs pt-1 border-t border-gray-50">
+                      <span className="text-gray-500">Total: <strong className="text-gray-700">{formatINR(inv.total)}</strong></span>
+                      <span className="text-gray-500">Balance: <strong className={parseFloat(inv.balance) > 0 ? "text-red-600" : "text-green-700"}>{formatINR(inv.balance)}</strong></span>
+                    </div>
+                    {inv.overdue && <p className="text-[10px] text-red-600 font-medium">Overdue</p>}
+                  </div>
+                ))
+              )}
+            </div>
           </section>
 
           {/* Active Support Tickets */}

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
+import { PAYMENT_METHOD, EXPENSE_CATEGORY_KEY, WORK_ORDER_TASK_TYPE } from "@recd/shared";
 
 /**
  * Read-only lookups for every data-driven table (stages, status options, photo
@@ -35,4 +36,17 @@ lookupsRouter.get("/roles", async (_req, res) => {
 lookupsRouter.get("/products", async (_req, res) => {
   const products = await prisma.product.findMany({ orderBy: { model: "asc" } });
   res.json(products);
+});
+
+lookupsRouter.get("/expense-categories", async (_req, res) => {
+  const categories = await prisma.expenseCategory.findMany({ orderBy: { sequenceOrder: "asc" } });
+  res.json(categories);
+});
+
+lookupsRouter.get("/payment-methods", async (_req, res) => {
+  res.json(Object.values(PAYMENT_METHOD));
+});
+
+lookupsRouter.get("/work-order-task-types", async (_req, res) => {
+  res.json(Object.values(WORK_ORDER_TASK_TYPE));
 });

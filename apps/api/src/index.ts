@@ -12,6 +12,13 @@ import { lookupsRouter } from "./routes/lookups";
 import { settingsRouter } from "./routes/settings";
 import { customersRouter } from "./routes/customers";
 import { vendorsRouter } from "./routes/vendors";
+import { quotationsRouter } from "./routes/quotations";
+import { invoicesRouter } from "./routes/invoices";
+import { purchaseOrdersRouter } from "./routes/purchase-orders";
+import { expensesRouter } from "./routes/expenses";
+import { financeDashboardRouter } from "./routes/financeDashboard";
+import { portalRouter } from "./routes/portal";
+import { workOrdersRouter } from "./routes/workOrders";
 
 const app = express();
 app.use(cors());
@@ -32,6 +39,13 @@ app.use("/dashboard", dashboardRouter);
 app.use("/users", usersRouter);
 app.use("/settings", settingsRouter);
 app.use("/meta", lookupsRouter);
+app.use("/quotations", quotationsRouter);
+app.use("/invoices", invoicesRouter);
+app.use("/purchase-orders", purchaseOrdersRouter);
+app.use("/expenses", expensesRouter);
+app.use("/finance", financeDashboardRouter);
+app.use("/portal", portalRouter);
+app.use("/work-orders", workOrdersRouter);
 
 // Catches anything a route handler throws or rejects with (Express 5 forwards rejected
 // async handlers here automatically) so a downstream failure - like the database being

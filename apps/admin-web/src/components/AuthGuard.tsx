@@ -15,10 +15,16 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/vendors": ["manage_vendors"],
   "/users": ["manage_users"],
   "/settings": ["manage_settings"],
+  "/finance": ["view_finance_dashboard"],
+  "/quotations": ["manage_quotations"],
+  "/invoices": ["manage_invoices"],
+  "/purchase-orders": ["manage_purchase_orders"],
+  "/expenses": ["manage_expenses"],
+  "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
-const LANDING_PRIORITY = ["/dashboard", "/sites", "/complaints", "/orders", "/vendors", "/users", "/settings"];
+const LANDING_PRIORITY = ["/dashboard", "/sites", "/finance", "/complaints", "/work-orders", "/orders", "/quotations", "/invoices", "/purchase-orders", "/expenses", "/vendors", "/users", "/settings"];
 
 function canAccess(permissions: string[], route: string): boolean {
   const required = ROUTE_PERMISSIONS[route];

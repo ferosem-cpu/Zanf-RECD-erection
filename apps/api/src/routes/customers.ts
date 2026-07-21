@@ -6,13 +6,19 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 export const customersRouter = Router();
 customersRouter.use(authenticate);
 
-customersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (_req, res) => {
-  const customers = await prisma.customer.findMany({
-    include: { contacts: { select: { id: true, name: true, phone: true, email: true } } },
-    orderBy: { name: "asc" },
-  });
-  res.json(customers);
-});
+// Read access: anyone who needs to pick a customer for a document (sales orders, quotations,
+// invoices) - not just order management. Creating/editing customers stays sales-only below.
+customersRouter.get(
+  "/",
+  requirePermission(PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.MANAGE_QUOTATIONS, PERMISSION_KEY.MANAGE_INVOICES),
+  async (_req, res) => {
+    const customers = await prisma.customer.findMany({
+      include: { contacts: { select: { id: true, name: true, phone: true, email: true } } },
+      orderBy: { name: "asc" },
+    });
+    res.json(customers);
+  },
+);
 
 /**
  * Create a customer plus its primary contact. The contact is a CUSTOMER-role user whose

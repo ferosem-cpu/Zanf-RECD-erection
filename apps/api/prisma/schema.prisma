@@ -87,6 +87,15 @@ model User {
   createdBy            User?              @relation("CreatedBy", fields: [createdById], references: [id])
   otpCodes             OtpCode[]
   vendorsApproved      Vendor[]           @relation("VendorApprover")
+  quotationsCreated    Quotation[]        @relation("QuotationCreator")
+  invoicesCreated      Invoice[]          @relation("InvoiceCreator")
+  paymentsReceived     PaymentReceived[]  @relation("PaymentReceivedRecorder")
+  purchaseOrdersCreated PurchaseOrder[]  @relation("PurchaseOrderCreator")
+  billsRecorded        Bill[]             @relation("BillRecorder")
+  paymentsMade         PaymentMade[]      @relation("PaymentMadeRecorder")
+  expensesRecorded     Expense[]          @relation("ExpenseRecorder")
+  workOrdersAssigned   WorkOrder[]        @relation("WorkOrderAssignee")
+  workOrdersCreated    WorkOrder[]        @relation("WorkOrderCreator")
 }
 
 model OtpCode {
@@ -107,6 +116,11 @@ model Customer {
   id            String   @id @default(cuid())
   name          String
   address       String?
+  /// GST identification number (printed on documents; drives IGST vs CGST/SGST).
+  gstin         String?
+  /// Billing state - the customer's state for place-of-supply / interstate checks.
+  state         String?
+  billingAddress String?
   salesOwnerId  String?
   salesOwner    User?    @relation("CustomerSalesOwner", fields: [salesOwnerId], references: [id])
   createdAt     DateTime @default(now())
@@ -114,6 +128,8 @@ model Customer {
   contacts  User[]   @relation("CustomerContacts")
   orders    Order[]
   complaints Complaint[]
+  quotations Quotation[]
+  invoices   Invoice[]
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -134,6 +150,7 @@ model Vendor {
 
   members User[] @relation("VendorMembers")
   sites   Site[] @relation("VendorSites")
+  suppliers Supplier[]
 }
 
 model Product {
@@ -147,6 +164,8 @@ model Product {
   createdAt      DateTime @default(now())
 
   orders Order[]
+  quotationLineItems QuotationLineItem[]
+  invoiceLineItems   InvoiceLineItem[]
 }
 
 // ---------------------------------------------------------------------------
@@ -169,9 +188,15 @@ model Order {
   plannedExhaustHookupType String?
   salesEngineerId          String?
   salesEngineer            User?     @relation("SalesEngineer", fields: [salesEngineerId], references: [id])
+  /// Customer-issued PO to us (they order via their own PO number).
+  customerPoNumber        String?
+  customerPoDate          DateTime?
   createdAt                DateTime  @default(now())
 
   site Site?
+  invoices Invoice[]
+  purchaseOrders PurchaseOrder[]
+  quotations Quotation[]
 }
 
 model Site {
@@ -212,6 +237,9 @@ model Site {
   photos          SitePhoto[]
   pendingActions  PendingAction[]
   complaints      Complaint[]
+  purchaseOrders  PurchaseOrder[]
+  expenses        Expense[]
+  workOrders      WorkOrder[]
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +407,39 @@ model Complaint {
 }
 
 // ---------------------------------------------------------------------------
+// Work orders (internal task dispatch to field crews)
+// ---------------------------------------------------------------------------
+
+/// Internal document that instructs an erection/commissioning/service engineer to do
+/// specific work at a site - distinct from Site.currentStage (the site's overall SITC
+/// progress) and from PurchaseOrder (procurement from external suppliers). Not a money
+/// document; no GST/sequential numbering requirement, so ticketNumber-style random ids
+/// are fine (see Complaint.ticketNumber).
+model WorkOrder {
+  id              String    @id @default(cuid())
+  workOrderNumber String    @unique // WO-2026-00001
+  siteId          String
+  site            Site      @relation(fields: [siteId], references: [id])
+  /// installation | repair | amc_service | inspection | other (WORK_ORDER_TASK_TYPE in shared)
+  taskType        String
+  title           String
+  instructions    String?
+  /// draft | assigned | in_progress | completed | cancelled (WORK_ORDER_STATUS in shared)
+  status          String    @default("draft")
+  assignedToId    String?
+  assignedTo      User?     @relation("WorkOrderAssignee", fields: [assignedToId], references: [id])
+  scheduledDate   DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  completionNotes String?
+  completionPhotoUrl String?
+  createdById     String
+  createdBy       User      @relation("WorkOrderCreator", fields: [createdById], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
 
@@ -399,4 +460,289 @@ model CompanySettings {
   logoDataUrl   String?
   themeKey      String   @default("emerald")
   customColors  Json?
+
+  /// Legal entity details printed on finance documents.
+  legalName            String?
+  address              String?
+  state                String?
+  gstin                String?
+  pan                  String?
+  bankName             String?
+  bankAccountNumber    String?
+  bankIfsc             String?
+  bankBranch           String?
+  invoiceTerms         String?
+  quotationTerms      String?
+  purchaseOrderTerms   String?
+  defaultTaxRatePct    Decimal? @db.Decimal(5, 2)
+
+  /// Authorised signatory printed on quotations, invoices and purchase orders.
+  signatoryName        String?
+  signatoryDataUrl     String?
+}
+
+// ---------------------------------------------------------------------------
+// Finance module (see docs/FINANCE_MODULE_PLAN.md)
+// ---------------------------------------------------------------------------
+
+/// Atomic per-fiscal-year number sequences for finance documents.
+/// docType: "quotation" | "proforma" | "tax_invoice" | "purchase_order"
+/// fiscalYear: "2026-27" (Indian FY, April-March)
+model DocumentSequence {
+  id         String @id @default(cuid())
+  docType    String
+  fiscalYear String
+  lastNumber Int    @default(0)
+
+  @@unique([docType, fiscalYear])
+}
+
+/// Material/service supplier (steel, piping, transport, subcontract labour).
+/// Distinct from Vendor (erection subcontractors with an approval workflow);
+/// vendorId optionally links a supplier record to an approved Vendor so POs
+/// can be raised for subcontracted erection work.
+model Supplier {
+  id           String   @id @default(cuid())
+  name         String
+  gstin        String?
+  state        String?
+  address      String?
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  vendorId     String?  @unique
+  vendor       Vendor?  @relation(fields: [vendorId], references: [id])
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  purchaseOrders PurchaseOrder[]
+  bills          Bill[]
+  paymentsMade   PaymentMade[]
+}
+
+model Quotation {
+  id             String    @id @default(cuid())
+  quoteNumber    String    @unique          // QTN/2026-27/0001
+  customerId     String
+  customer       Customer  @relation(fields: [customerId], references: [id])
+  /// draft | sent | accepted | rejected | expired | converted  (QUOTATION_STATUS in shared)
+  status         String    @default("draft")
+  issueDate      DateTime
+  validUntil     DateTime?
+  placeOfSupply  String?                    // customer state; drives CGST/SGST vs IGST
+  subtotal       Decimal   @db.Decimal(12, 2)
+  discountAmount Decimal   @db.Decimal(12, 2) @default(0)
+  cgstAmount     Decimal   @db.Decimal(12, 2) @default(0)
+  sgstAmount     Decimal   @db.Decimal(12, 2) @default(0)
+  igstAmount     Decimal   @db.Decimal(12, 2) @default(0)
+  total          Decimal   @db.Decimal(12, 2)
+  notes          String?
+  terms          String?
+  createdById    String
+  createdBy      User      @relation("QuotationCreator", fields: [createdById], references: [id])
+  /// Set when "Convert to order" is used; links the resulting Order.
+  convertedOrderId String? @unique
+  convertedOrder   Order?  @relation(fields: [convertedOrderId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  lineItems QuotationLineItem[]
+  invoices  Invoice[]
+}
+
+model QuotationLineItem {
+  id           String    @id @default(cuid())
+  quotationId  String
+  quotation    Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  productId    String?
+  product      Product?  @relation(fields: [productId], references: [id])
+  description  String
+  hsnCode      String?
+  quantity     Decimal   @db.Decimal(10, 2)
+  unitPrice    Decimal   @db.Decimal(12, 2)
+  discountPct  Decimal   @db.Decimal(5, 2)  @default(0)
+  taxRatePct   Decimal   @db.Decimal(5, 2)  @default(18)
+  lineTotal    Decimal   @db.Decimal(12, 2) // qty * unitPrice * (1-disc%) - pre-tax
+  sortOrder    Int       @default(0)
+}
+
+model Invoice {
+  id             String    @id @default(cuid())
+  invoiceNumber  String    @unique          // PI/2026-27/0001 or INV/2026-27/0001
+  /// "proforma" | "tax_invoice"  (INVOICE_DOC_TYPE in shared)
+  docType        String
+  customerId     String
+  customer       Customer  @relation(fields: [customerId], references: [id])
+  orderId        String?
+  order          Order?    @relation(fields: [orderId], references: [id])
+  quotationId    String?
+  quotation      Quotation? @relation(fields: [quotationId], references: [id])
+  /// draft | issued | partially_paid | paid | cancelled  (INVOICE_STATUS in shared;
+  /// "overdue" is computed at read time from dueDate + status, never stored)
+  status         String    @default("draft")
+  issueDate      DateTime
+  dueDate        DateTime?
+  placeOfSupply  String?
+  subtotal       Decimal   @db.Decimal(12, 2)
+  discountAmount Decimal   @db.Decimal(12, 2) @default(0)
+  cgstAmount     Decimal   @db.Decimal(12, 2) @default(0)
+  sgstAmount     Decimal   @db.Decimal(12, 2) @default(0)
+  igstAmount     Decimal   @db.Decimal(12, 2) @default(0)
+  total          Decimal   @db.Decimal(12, 2)
+  notes          String?
+  terms          String?
+  createdById    String
+  createdBy      User      @relation("InvoiceCreator", fields: [createdById], references: [id])
+  cancelledAt    DateTime?
+  cancelReason   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  lineItems InvoiceLineItem[]
+  payments  PaymentReceived[]
+}
+
+model InvoiceLineItem {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id])
+  description String
+  hsnCode     String?
+  quantity    Decimal @db.Decimal(10, 2)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  discountPct Decimal @db.Decimal(5, 2)  @default(0)
+  taxRatePct  Decimal @db.Decimal(5, 2)  @default(18)
+  lineTotal   Decimal @db.Decimal(12, 2)
+  sortOrder   Int     @default(0)
+}
+
+model PaymentReceived {
+  id           String   @id @default(cuid())
+  invoiceId    String
+  invoice      Invoice  @relation(fields: [invoiceId], references: [id])
+  amount       Decimal  @db.Decimal(12, 2)
+  /// bank_transfer | upi | cheque | cash | other  (PAYMENT_METHOD in shared)
+  method       String
+  reference    String?  // UTR / cheque no / UPI ref
+  receivedDate DateTime
+  notes        String?
+  recordedById String
+  recordedBy   User     @relation("PaymentReceivedRecorder", fields: [recordedById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+model PurchaseOrder {
+  id           String   @id @default(cuid())
+  poNumber     String   @unique             // PO/2026-27/0001
+  supplierId   String
+  supplier     Supplier @relation(fields: [supplierId], references: [id])
+  /// draft | issued | partially_received | received | cancelled | closed  (PO_STATUS in shared)
+  status       String   @default("draft")
+  orderDate    DateTime
+  expectedDate DateTime?
+  /// Optional job-costing links: which customer order / site this spend is for.
+  orderId      String?
+  order        Order?   @relation(fields: [orderId], references: [id])
+  siteId       String?
+  site         Site?    @relation(fields: [siteId], references: [id])
+  subtotal     Decimal  @db.Decimal(12, 2)
+  cgstAmount   Decimal  @db.Decimal(12, 2) @default(0)
+  sgstAmount   Decimal  @db.Decimal(12, 2) @default(0)
+  igstAmount   Decimal  @db.Decimal(12, 2) @default(0)
+  total        Decimal  @db.Decimal(12, 2)
+  notes        String?
+  terms        String?
+  createdById  String
+  createdBy    User     @relation("PurchaseOrderCreator", fields: [createdById], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  lineItems PurchaseOrderLineItem[]
+  bills     Bill[]
+}
+
+model PurchaseOrderLineItem {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  description     String
+  hsnCode         String?
+  quantity        Decimal       @db.Decimal(10, 2)
+  unitPrice       Decimal       @db.Decimal(12, 2)
+  taxRatePct      Decimal       @db.Decimal(5, 2)  @default(18)
+  lineTotal       Decimal       @db.Decimal(12, 2)
+  sortOrder       Int           @default(0)
+}
+
+/// A bill received FROM a supplier (their invoice to us). billNumber is the
+/// supplier's own number - unique per supplier, not globally.
+model Bill {
+  id              String         @id @default(cuid())
+  billNumber      String
+  supplierId      String
+  supplier        Supplier       @relation(fields: [supplierId], references: [id])
+  purchaseOrderId String?
+  purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  /// unpaid | partially_paid | paid | cancelled  (BILL_STATUS in shared)
+  status          String         @default("unpaid")
+  billDate        DateTime
+  dueDate         DateTime?
+  subtotal        Decimal        @db.Decimal(12, 2)
+  taxAmount       Decimal        @db.Decimal(12, 2) @default(0)
+  total           Decimal        @db.Decimal(12, 2)
+  notes           String?
+  recordedById    String
+  recordedBy      User           @relation("BillRecorder", fields: [recordedById], references: [id])
+  createdAt       DateTime       @default(now())
+
+  payments PaymentMade[]
+
+  @@unique([supplierId, billNumber])
+}
+
+model PaymentMade {
+  id           String    @id @default(cuid())
+  billId       String?
+  bill         Bill?     @relation(fields: [billId], references: [id])
+  supplierId   String
+  supplier     Supplier  @relation(fields: [supplierId], references: [id])
+  amount       Decimal   @db.Decimal(12, 2)
+  method       String
+  reference    String?
+  paidDate     DateTime
+  notes        String?
+  recordedById String
+  recordedBy   User      @relation("PaymentMadeRecorder", fields: [recordedById], references: [id])
+  createdAt    DateTime  @default(now())
+}
+
+/// Lookup table (data-not-code): expense categories are seeded rows so new
+/// categories are a DB insert, not a code change.
+model ExpenseCategory {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  label         String
+  sequenceOrder Int
+  createdAt     DateTime @default(now())
+
+  expenses Expense[]
+}
+
+/// Simple expense book for non-PO spend (fuel, travel, site consumables, misc).
+model Expense {
+  id           String          @id @default(cuid())
+  categoryId   String
+  category     ExpenseCategory @relation(fields: [categoryId], references: [id])
+  description  String
+  amount       Decimal         @db.Decimal(12, 2)
+  expenseDate  DateTime
+  method       String          // PAYMENT_METHOD keys
+  siteId       String?
+  site         Site?           @relation(fields: [siteId], references: [id])
+  receiptUrl   String?         // base64 data-URL, same convention as SitePhoto
+  recordedById String
+  recordedBy   User            @relation("ExpenseRecorder", fields: [recordedById], references: [id])
+  createdAt    DateTime        @default(now())
 }

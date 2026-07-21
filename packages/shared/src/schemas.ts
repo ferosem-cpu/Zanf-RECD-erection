@@ -57,6 +57,27 @@ export const updateComplaintStatusSchema = z.object({
   assignedToId: z.string().nullable().optional(),
 });
 
+export const createWorkOrderSchema = z.object({
+  siteId: z.string(),
+  taskType: z.string(),
+  title: z.string().min(1),
+  instructions: z.string().optional(),
+  scheduledDate: z.string().datetime().optional(),
+  assignedToId: z.string().optional(),
+});
+
+export const updateWorkOrderSchema = z.object({
+  status: z.string().optional(),
+  title: z.string().min(1).optional(),
+  instructions: z.string().optional(),
+  taskType: z.string().optional(),
+  scheduledDate: z.string().datetime().nullable().optional(),
+  /** Only work-order managers may (re)assign; field engineers cannot. */
+  assignedToId: z.string().nullable().optional(),
+  completionNotes: z.string().optional(),
+  completionPhotoUrl: z.string().url().optional(),
+});
+
 export const resolvePendingActionSchema = z.object({
   resolution: z.string(),
   notes: z.string().optional(),
@@ -106,4 +127,147 @@ export const registerVendorSchema = z.object({
 export const assignSiteVendorSchema = z.object({
   vendorId: z.string().nullable(),
   assignedEngineerId: z.string().nullable().optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Finance module schemas (see docs/FINANCE_MODULE_PLAN.md)
+// Totals are always derived server-side; clients send line items only.
+// ---------------------------------------------------------------------------
+
+export const lineItemSchema = z.object({
+  productId: z.string().optional(),
+  description: z.string().min(1).max(500),
+  hsnCode: z.string().max(20).optional(),
+  quantity: z.number().positive("Quantity must be > 0"),
+  unitPrice: z.number().nonnegative("Unit price cannot be negative"),
+  discountPct: z.number().min(0).max(100).default(0),
+  taxRatePct: z.number().min(0).max(28).default(18),
+});
+
+export const quotationCreateSchema = z.object({
+  customerId: z.string().min(1),
+  issueDate: z.string().datetime().optional(),
+  validUntil: z.string().datetime().optional(),
+  placeOfSupply: z.string().max(100).optional(),
+  notes: z.string().max(2000).optional(),
+  terms: z.string().max(2000).optional(),
+  lineItems: z.array(lineItemSchema).min(1, "At least one line item is required"),
+});
+
+export const quotationUpdateSchema = quotationCreateSchema.partial().extend({
+  lineItems: z.array(lineItemSchema).min(1).optional(),
+});
+
+export const quotationStatusSchema = z.object({
+  status: z.enum(["sent", "accepted", "rejected", "expired"]),
+});
+
+export const createInvoiceFromQuotationSchema = z.object({
+  docType: z.enum(["proforma", "tax_invoice"]),
+});
+
+export const invoiceCreateSchema = z.object({
+  docType: z.enum(["proforma", "tax_invoice"]),
+  customerId: z.string().min(1),
+  orderId: z.string().optional(),
+  quotationId: z.string().optional(),
+  issueDate: z.string().datetime().optional(),
+  dueDate: z.string().datetime().optional(),
+  placeOfSupply: z.string().max(100).optional(),
+  notes: z.string().max(2000).optional(),
+  terms: z.string().max(2000).optional(),
+  lineItems: z.array(lineItemSchema).min(1, "At least one line item is required"),
+});
+
+export const invoiceUpdateSchema = invoiceCreateSchema.partial().extend({
+  lineItems: z.array(lineItemSchema).min(1).optional(),
+});
+
+export const invoiceCancelSchema = z.object({
+  reason: z.string().min(1).max(500),
+});
+
+export const paymentCreateSchema = z.object({
+  amount: z.number().positive("Amount must be > 0"),
+  method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]),
+  reference: z.string().max(200).optional(),
+  receivedDate: z.string().datetime().optional(),
+  notes: z.string().max(1000).optional(),
+});
+
+export const supplierCreateSchema = z.object({
+  name: z.string().min(1),
+  gstin: z.string().max(20).optional(),
+  state: z.string().max(100).optional(),
+  address: z.string().max(1000).optional(),
+  contactName: z.string().max(200).optional(),
+  contactEmail: z.string().email().optional(),
+  contactPhone: z.string().max(20).optional(),
+});
+
+export const purchaseOrderCreateSchema = z.object({
+  supplierId: z.string().min(1),
+  orderId: z.string().optional(),
+  siteId: z.string().optional(),
+  orderDate: z.string().datetime().optional(),
+  expectedDate: z.string().datetime().optional(),
+  notes: z.string().max(2000).optional(),
+  terms: z.string().max(2000).optional(),
+  lineItems: z.array(lineItemSchema).min(1, "At least one line item is required"),
+});
+
+export const purchaseOrderUpdateSchema = purchaseOrderCreateSchema.partial().extend({
+  lineItems: z.array(lineItemSchema).min(1).optional(),
+});
+
+export const purchaseOrderStatusSchema = z.object({
+  status: z.enum(["issued", "partially_received", "received", "cancelled", "closed"]),
+});
+
+export const billCreateSchema = z.object({
+  billNumber: z.string().min(1).max(100),
+  supplierId: z.string().min(1),
+  purchaseOrderId: z.string().optional(),
+  billDate: z.string().datetime(),
+  dueDate: z.string().datetime().optional(),
+  subtotal: z.number().nonnegative(),
+  taxAmount: z.number().nonnegative().default(0),
+  total: z.number().nonnegative(),
+  notes: z.string().max(2000).optional(),
+});
+
+export const paymentMadeCreateSchema = z.object({
+  billId: z.string().optional(),
+  amount: z.number().positive("Amount must be > 0"),
+  method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]),
+  reference: z.string().max(200).optional(),
+  paidDate: z.string().datetime().optional(),
+  notes: z.string().max(1000).optional(),
+});
+
+export const expenseCreateSchema = z.object({
+  categoryId: z.string().min(1),
+  description: z.string().min(1).max(500),
+  amount: z.number().positive("Amount must be > 0"),
+  expenseDate: z.string().datetime(),
+  method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]),
+  siteId: z.string().optional(),
+  receiptUrl: z.string().max(5000).optional(),
+});
+
+export const expenseUpdateSchema = expenseCreateSchema.partial();
+
+export const settingsCompanyUpdateSchema = z.object({
+  legalName: z.string().max(200).optional(),
+  address: z.string().max(1000).optional(),
+  state: z.string().max(100).optional(),
+  gstin: z.string().max(20).optional(),
+  pan: z.string().max(20).optional(),
+  bankName: z.string().max(200).optional(),
+  bankAccountNumber: z.string().max(50).optional(),
+  bankIfsc: z.string().max(20).optional(),
+  bankBranch: z.string().max(200).optional(),
+  invoiceTerms: z.string().max(2000).optional(),
+  quotationTerms: z.string().max(2000).optional(),
+  defaultTaxRatePct: z.number().min(0).max(28).optional(),
 });

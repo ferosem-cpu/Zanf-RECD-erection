@@ -64,6 +64,66 @@ const liveLinks = [
   },
 ];
 
+const operationsLinks = [
+  {
+    href: "/work-orders",
+    label: "Work Orders",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.164-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L1.5 3l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
+      </svg>
+    ),
+  },
+];
+
+const financeLinks = [
+  {
+    href: "/finance",
+    label: "Finance Dashboard",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+      </svg>
+    ),
+  },
+  {
+    href: "/quotations",
+    label: "Quotations",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+      </svg>
+    ),
+  },
+  {
+    href: "/invoices",
+    label: "Invoices",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z" />
+      </svg>
+    ),
+  },
+  {
+    href: "/purchase-orders",
+    label: "Purchase Orders",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 00-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 00-16.536-1.84M7.5 14.25L5.106 5.272M6 20.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm12.75 0a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
+      </svg>
+    ),
+  },
+  {
+    href: "/expenses",
+    label: "Expenses",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-3.75 3h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5z" />
+      </svg>
+    ),
+  },
+];
+
 const phase2Links = [
   {
     label: "Revenue",
@@ -110,6 +170,12 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
   "/vendors": ["manage_vendors"],
   "/users": ["manage_users"],
+  "/finance": ["view_finance_dashboard"],
+  "/quotations": ["manage_quotations"],
+  "/invoices": ["manage_invoices"],
+  "/purchase-orders": ["manage_purchase_orders"],
+  "/expenses": ["manage_expenses"],
+  "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
 };
 
 interface NavProps {
@@ -207,6 +273,50 @@ export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
                 {link.label}
               </Link>
             ))}
+
+          {/* ── Operations ──────────────────────────────────────────────── */}
+          {operationsLinks.some((l) => (LINK_PERMISSIONS[l.href] ?? []).some((p) => hasPermission(p))) && (
+            <>
+              <p className="px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
+                Operations
+              </p>
+              {operationsLinks
+                .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
+                .map((link) => (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    data-testid={`nav-link-${link.label.toLowerCase().replace(/[^a-z]/g, "-")}`}
+                    className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
+                  >
+                    {link.icon}
+                    {link.label}
+                  </Link>
+                ))}
+            </>
+          )}
+
+          {/* ── Finance ─────────────────────────────────────────────────── */}
+          {financeLinks.some((l) => (LINK_PERMISSIONS[l.href] ?? []).some((p) => hasPermission(p))) && (
+            <>
+              <p className="px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
+                Finance
+              </p>
+              {financeLinks
+                .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
+                .map((link) => (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    data-testid={`nav-link-${link.label.toLowerCase().replace(/[^a-z]/g, "-")}`}
+                    className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
+                  >
+                    {link.icon}
+                    {link.label}
+                  </Link>
+                ))}
+            </>
+          )}
 
           {/* ── Phase 2 ─────────────────────────────────────────────────── */}
           <p className="px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>

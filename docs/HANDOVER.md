@@ -1,5 +1,13 @@
 # Platino RECD Tracker — Handover
 
+> **⚠️ Fork notice (2026-07-19):** this file's history below (§1–§19) documents
+> the **original Platino RECD tracker project**, inherited as-is from the
+> codebase this app was cloned from. Everything in this repo from §20 onward
+> is about **Zan-APP, a separate project for a different company** — not
+> Platino. Do not treat §1–§19 as this project's own roadmap or current state;
+> it is background on the code this app started from. See §20 for where the
+> two projects diverge.
+
 ## 1. What it is
 A role‑based **Project & Service Tracker** for Platino, an RECD (Retrofit Emission Control Device) manufacturing + installation business. It tracks an order from sale through on‑site installation and commissioning (the **SITC** process: Supply → Installation → Testing → Commissioning), handles customer complaints, and gives each role a tailored view. Built to ship **Phase 1** now while keeping the full long‑term vision **future‑ready**.
 
@@ -255,3 +263,159 @@ A fresh production deploy was triggered immediately after and is **Ready**. Logi
 - Pushed to `master` (commit `5b5f254`) → Vercel auto-deployed `dpl_7Yfdxx1og8LUVFwSvBfJiCeHSNYm`, confirmed **READY** with `"regions": ["bom1"]`. Production `/health` and `/auth/login` both return 200 on the new deployment.
 
 **Not done:** `apps/admin-web` was left on its default Vercel region — it's client-rendered (the browser calls `NEXT_PUBLIC_API_URL` directly per §9), so admin-web's own region doesn't sit on the DB latency path and wasn't part of this fix.
+
+---
+
+# Zan-APP — this project's own handover
+
+Everything below is about **Zan-APP**, a separate product for a different
+company. It is unrelated to Platino RECD's ongoing work (§1–§19 above) beyond
+sharing this starting codebase — separate requirements, separate data,
+separate deployments going forward.
+
+## 20. Project cloned locally; confirmed no accounting module exists (2026-07-19)
+
+**Source:** `git clone https://github.com/ferosem-cpu/Zanf-RECD-erection.git D:\Projects\Zan-APP`. That GitHub repo (public, default branch `master`) is a one-time snapshot pushed 2026-07-11 — a duplicate of the Platino RECD codebase at that point in time, not kept in sync with Platino's repo since. Plain clone, no changes made: `master` checked out, working tree clean, HEAD at `4dfc088` ("docs(handover): add section 19 — fix for post-Mumbai slowness" — the last Platino-history commit, §19 above).
+
+**Accounting/finance module: does not exist in this codebase.** Checked the full route list (`apps/api/src/routes/`: `auth`, `complaints`, `customers`, `dashboard`, `lookups`, `orders`, `pendingActions`, `settings`, `sites`, `users`, `vendors`) and every Prisma model (`Role`, `Permission`, `RolePermission`, `User`, `OtpCode`, `Customer`, `Vendor`, `Product`, `Order`, `Site`, `StageDefinition`, `StatusOption`, `SiteStageEvent`, `PhotoCheckpoint`, `SitePhoto`, `StructureType`, `StructureTemplateExample`, `PendingAction`, `Complaint`, `NotificationLog`, `CompanySettings`) — nothing accounting/ledger/invoice/payment/expense-related. If the new company needs accounting (invoicing, payments, ledgers, expenses), it will need to be designed and built from scratch, specifically for Zan-APP.
+
+**Inherited as of the clone (2026-07-11 snapshot):** order/site/complaint tracking, role-based permissions (9 seeded roles), customer portal, vendor management, OTP-based customer auth, JWT staff auth, in-app/email notifications (WhatsApp/Telegram stubbed). **Not inherited** — added to Platino RECD *after* this snapshot, so absent here: RECD serial number rename, Company Details, complaint ticket overhaul, AMC Order module, AMC expiry reminders.
+
+**Not yet done for Zan-APP:**
+- No new-company branding, name, or identity applied anywhere yet — README, `package.json` names, and env var examples still say "Platino."
+- No separate database, Vercel project, or any deployment target exists for this app yet — it currently has no live environment of its own and must not be pointed at Platino's Supabase/Vercel projects.
+- No requirements gathered yet for what should differ from the inherited feature set for the new company (accounting module or otherwise).
+
+## 21. Finance module built (2026-07-19)
+
+The full commercial-document + light-accounting module from `docs/FINANCE_MODULE_PLAN.md` is now implemented end-to-end. This replaces the "no accounting module exists" finding in §20.
+
+**What was built**
+- **Schema (`apps/api/prisma/schema.prisma`):** new models `DocumentSequence`, `Supplier`, `Quotation`/`QuotationLineItem`, `Invoice`/`InvoiceLineItem`, `PaymentReceived`, `PurchaseOrder`/`PurchaseOrderLineItem`, `Bill`, `PaymentMade`, `ExpenseCategory`, `Expense`. Modified `Customer` (gstin/state/billingAddress), `Order` (customerPoNumber/Date + finance back-relations), `CompanySettings` (legalName/address/state/gstin/pan/bank*/terms/defaultTaxRatePct), `Product`/`Site`/`Vendor`/`User` (back-relations). One migration: `add_finance_module`.
+- **Shared (`packages/shared`):** finance permission keys merged into `PERMISSION_KEY` (`manage_quotations`, `manage_invoices`, `record_payments`, `manage_purchase_orders`, `manage_expenses`, `view_finance_dashboard`); status/type consts (`QUOTATION_STATUS`, `INVOICE_DOC_TYPE`, `INVOICE_STATUS`, `PO_STATUS`, `BILL_STATUS`, `PAYMENT_METHOD`, `FINANCE_DOC_TYPE`, `EXPENSE_CATEGORY_KEY`); Zod schemas + DTO types.
+- **Services:** `documentNumber.ts` (atomic per-fiscal-year sequential numbers, Indian FY Apr–Mar, no gaps from deleted drafts — `QTN/2026-27/0001` etc.), `taxCalc.ts` (server-recomputed totals; intra-state CGST+SGST halves / inter-state IGST).
+- **API routes:** `quotations`, `invoices`, `purchase-orders`, `expenses`, `financeDashboard`, `portal` (customer invoices), plus `/meta` expense-categories + payment-methods and `PUT /settings` company fields. Every route guarded by `authenticate` + `requirePermission`; finance status derives from payments (paid/partially_paid, 400 on overpay); "overdue" computed at read time.
+- **Seed:** finance permissions + grant to Finance/Management/Owner/Super-Admin/Sales; 6 expense categories; demo supplier + one issued tax invoice.
+- **Admin-web:** Nav "Finance" group; pages `/finance` (KPI tiles + revenue/expense bar chart + receivables aging), `/quotations` (+`/[id]` + `/[id]/print`), `/invoices` (+`/[id]` + `/[id]/print`), `/purchase-orders` (+`/[id]` + `/[id]/print`), `/expenses`; Settings "Company & Tax details" section; customer portal "My Invoices" card. Print views use `@media print` + `window.print()`.
+- **`lib/finance.ts`:** status-label/pill maps, `formatINR`, `formatDate`, and `numberToIndianWords` (lakh/crore grouping) for the "total in words" line.
+
+**Verified locally (API smoke test + `tsc`/Next build):**
+- Full flow: create supplier → quotation (draft→sent→accepted) → convert to order → create proforma/tax invoice → issue → part-payment (partially_paid) → rest (paid) → overpay rejected (400) → PO → bill → payment made → expense → all three reports sane.
+- Tax split correct: intra-state customer → CGST/SGST; inter-state → IGST.
+- Permission matrix: Sales reaches `/quotations` but 403s on `/invoices`; erection 403s on all finance; customer only sees own issued invoices via `/portal/invoices`.
+- Both `apps/api` and `apps/admin-web` build clean; every new route 403s without its permission.
+
+**Local database (dev only):** implemented against a **local PostgreSQL 16** instance (`recd_tracker` DB, `postgres`/`postgres` on `:5432`) — created because no Zan-APP Supabase/Vercel project exists yet (see §20). `apps/api/.env` points at it. Before any deploy, repoint `DATABASE_URL`/`DIRECT_URL` at a Zan-APP-owned Postgres and `prisma migrate deploy` + seed. The seeded Finance role now lands on the Finance Dashboard instead of "No modules enabled yet".
+
+**Deferred (Phase 2, not built):** double-entry ledger, credit notes/debit notes, e-invoicing (IRN/e-way), payment allocation across invoices, bank reconciliation, per-site job costing.
+
+---
+
+## 22. Finance module — live UI verification + one real bug found and fixed (2026-07-19)
+
+Picked back up from §21. On re-checking, **all of `FINANCE_MODULE_PLAN.md` §10 steps 1–9 were actually already code-complete** (schema, services, routes, shared package, all 5 new admin-web sections including `/[id]/print` views, and the customer-portal "My Invoices" card) — this session's job was to *verify it lived up to the plan's Definition of Done through the real UI*, not to keep building.
+
+**Bug found:** logging in as the seeded Finance user (`finance@platino.example`) hit exactly the failure mode the plan's Definition of Done calls out — **"No modules enabled yet"** instead of the Finance Dashboard. Root-caused with a debug pass (DB permission grants → JWT payload → live `/auth/me` response → `AuthGuard`'s `firstLanding` logic): the database, seed, permissions, and `AuthGuard.tsx`/`Nav.tsx` route-gating were all correct. The actual break was that `apps/admin-web` had **no `.env.local`**, so `NEXT_PUBLIC_API_URL` fell back to its hardcoded default (`http://localhost:4000`, a different project's port) instead of the API's real port `4001`. Every `/auth/me`/data call silently failed client-side ("Failed to fetch"), which the UI has no way to distinguish from "this role really has zero permissions."
+
+**Fix:** added `apps/admin-web/.env.local` with `NEXT_PUBLIC_API_URL=http://localhost:4001` (gitignored, dev-only — matches the documented port convention in §1 of the plan). This was previously working by accident because whatever process had originally started the dev server carried that variable in its shell environment; a fresh server start (which is what any new dev/session does) lost it.
+
+**Verified after the fix, all via live browser + direct API calls (not just build/tsc):**
+- Finance login → real Finance Dashboard (KPI tiles, revenue/expense chart, receivables aging table with live numbers) instead of the no-access screen.
+- `/quotations`, `/invoices`, `/purchase-orders`, `/expenses` all render seeded/smoke-test data correctly.
+- An issued tax invoice's `/print` view renders correctly: sequential number, CGST/SGST split, HSN codes, and `numberToIndianWords` total line.
+- Permission matrix via direct API calls with role tokens: Sales → `/quotations` 200, `/invoices` 403; Erection → `/quotations` 403, `/finance/summary` 403 — matches plan exactly.
+- Mobile check (375px, the plan's step-9 requirement): `/finance`, `/quotations`, `/invoices`, `/purchase-orders`, `/expenses` all have zero horizontal overflow.
+- **Not re-verified live this session:** the customer-portal "My Invoices" card. The seeded demo customer (`customer@sundaram.example`) doesn't have a usable password in this environment (customer auth here is a separate, pre-existing order-number/OTP-style flow, not email+password) — couldn't get a customer session in the browser to click through. The code (`apps/api/src/routes/portal.ts`, `customer/portal/page.tsx`) reads correctly and the `/portal/invoices` route logic is scoped by `customerId` exactly like the existing complaints portal fix, but this is a code-review confirmation, not a click-through one.
+
+**Also cleaned up:** stray `.smoke_token.txt` (leftover JWT from the earlier API smoke test) and ad-hoc debug scripts (`apps/api/check-finance-perms.js`, `check-user.js`, `get-token.js`) used only to diagnose this bug — none of these were meant to be committed.
+
+**Net result:** the module now genuinely meets `FINANCE_MODULE_PLAN.md`'s Definition of Done (§10) end-to-end through the UI, not just through builds/smoke tests. The one real gap was an environment-config file, not missing feature work.
+
+---
+
+## 23. Work Orders module added (2026-07-19)
+
+New feature, separate from finance: **internal task dispatch to field crews**, distinct from `Site.currentStage` (overall SITC progress tracking) and from `PurchaseOrder` (procurement from external suppliers). A work order authorizes/instructs an erection, commissioning, or service engineer to do a specific job at a site (install, repair, AMC service visit, inspection) and tracks it from assignment through completion sign-off. Not a money document, no GST/sequential-numbering requirement.
+
+**Schema:** new `WorkOrder` model (`apps/api/prisma/schema.prisma`) — `workOrderNumber` (random `WO-YYYY-NNNNN`, same convention as `Complaint.ticketNumber`), `siteId`, `taskType`, `title`, `instructions`, `status` (`draft`/`assigned`/`in_progress`/`completed`/`cancelled`), `assignedToId`, `scheduledDate`/`startedAt`/`completedAt`, `completionNotes`/`completionPhotoUrl` (base64 data-URL, same convention as `SitePhoto`), `createdById`. Back-relations added to `Site` and `User`. Migration `20260719172908_add_work_orders`.
+
+**Permissions:** two new keys, following the complaints "manage vs act-on-your-own" split exactly —
+- `manage_work_orders`: create, assign, edit, cancel. Granted to Operations/PM, Management, Owner/Admin, Super Admin.
+- `act_assigned_work_orders`: update status + record completion on work orders assigned to you, nothing else. Granted to Erection Engineer, Commissioning Engineer, Service Team.
+
+**Shared (`packages/shared`):** `WORK_ORDER_STATUS`, `WORK_ORDER_TASK_TYPE` (`installation`/`repair`/`amc_service`/`inspection`/`other` — a plain constant, not a DB lookup, matching `PAYMENT_METHOD`'s pattern since it's a small fixed set); `createWorkOrderSchema`, `updateWorkOrderSchema` Zod schemas.
+
+**API (`apps/api/src/routes/workOrders.ts`, mounted at `/work-orders`):** `GET /` (managers see all, field engineers see only their own — same scoping pattern as `complaints.ts`), `GET /assignees`, `POST /`, `GET /:id`, `PATCH /:id`. The PATCH handler enforces field-level authorization server-side: a non-manager can only change `status`/`completionNotes`/`completionPhotoUrl` on a work order assigned to them — attempting to reassign, retitle, or reschedule returns 403 even if they own the work order. Verified directly: `curl` as the erection engineer trying to null out `assignedToId` on their own WO → `403 "You can only update status and completion details"`. Also added `GET /meta/work-order-task-types` lookup.
+
+**Admin-web:** new "Operations" nav group (between Main and Finance) with a single "Work Orders" link, gated by either permission. `/work-orders` page follows the `complaints/page.tsx` template exactly — desktop table + mobile card stack, a manager-only "New work order" create modal (site picker sourced from `GET /sites`, task-type/assignee dropdowns from the new lookups), and a shared "Manage"/"Update" modal whose fields adapt to the caller's permission (assignee dropdown only shown to managers; completion-notes + photo-upload fields only appear once status is set to `completed`).
+
+**Seed:** both permission rows, role grants above, and one demo work order (`WO-2026-00001`, assigned to the erection engineer, status `assigned`) on the existing demo site.
+
+**Verified live, not just build-clean:**
+- Ops PM creates a work order via the UI (site picker → AMC task type → assignee) → appears immediately in the list with the right status pill.
+- Erection engineer sees only their own assigned WO (nav copy adapts to "Tasks assigned to you"), moves it to `completed` with notes — status updates correctly, no assignee dropdown shown to them.
+- `curl` permission matrix: Sales 403s on `GET /work-orders`; erection engineer 403s attempting to reassign their own WO.
+- 375px mobile check on `/work-orders`: zero horizontal overflow.
+- `next build` includes `/work-orders` in the clean production build; both `apps/api` and `apps/admin-web` `tsc --noEmit` clean.
+
+**Deferred / not built:** no site-detail integration yet (work orders aren't shown inline on the `/sites/[id]` page — they're only visible from the dedicated `/work-orders` list, filtered by site if you know which one). No dashboard tile/count. No notification-template wiring beyond the generic `send()` calls (`work_order_assigned`, `work_order_completed` — these log via the existing in-app/email stub providers same as every other notification, no new provider work needed). The user flagged that the work-order **workflow itself may still change** based on how they actually want to use it day-to-day — this is a first pass, not a finished spec.
+
+---
+
+## 24. Invoices was missing its "New invoice" button + a pre-existing customer-picker bug (2026-07-19)
+
+User reported "the page is not loading" for `/work-orders` right after §23 — root cause was mine: I'd run `npm run build` (production) in `apps/admin-web` for a final verification pass and then `rm -rf .next`, which deleted the build cache out from under the *live* `next dev` process, corrupting its route table (every route 404'd, not just work-orders). Killed the stale dev process and restarted clean; confirmed all routes 200 again. **Lesson for future sessions in this repo: never run `npm run build` (or delete `.next`) in the same app directory as a running `next dev` — always stop the dev server first, or use a separate checkout/port.**
+
+Second, separate report: no "New invoice" creation button on `/invoices`. True gap — `invoices/page.tsx` only ever had a read-only list; `quotations/page.tsx` and `purchase-orders/page.tsx` both have inline create modals but invoices never got one, despite the API (`POST /invoices`) fully supporting standalone creation (docType, customer, line items - it was only ever reachable via "Create invoice" from an existing quotation). Added a "+ New invoice" button and modal to `invoices/page.tsx`, following the exact `quotations/page.tsx` pattern: doc-type picker (proforma/tax invoice), customer + place-of-supply, issue/due dates, a line-item editor, submitting to `POST /invoices`.
+
+While wiring the customer dropdown, hit a **second, pre-existing bug**: `GET /customers` was gated on `manage_orders` only, which the Finance role doesn't have — so the customer picker would have rendered empty for any Finance user. This was already silently broken on the Quotations page too; there's even a code comment there ("Customers require manage_orders; finance may not have it, so fall back to a customer list endpoint if available") flagging it as a known gap that was never actually fixed, just caught by a `.catch(() => {})`. Fixed at the source: `apps/api/src/routes/customers.ts` `GET /` now accepts `manage_orders` OR `manage_quotations` OR `manage_invoices` (read-only; `POST /` to create a customer stays `manage_orders`-only, that's still a sales action). This fixes the customer picker on **both** Invoices and Quotations for Finance users.
+
+**Verified live as the Finance user:** clicked "+ New invoice", customer dropdown populated (previously empty), created a proforma invoice (₹25,000 + 18% GST = ₹29,500) — appeared correctly in the list as a new draft with the right balance. Re-checked Quotations' customer dropdown too, same fix applies there. `tsc --noEmit` clean on both apps, `next build` clean including the now-larger `/invoices` bundle (5.02 kB vs the previous 3.65 kB).
+
+---
+
+## 25. Root cause of the recurring "internal server error" / "page not loading" flakiness — port collision with the Platino repo (2026-07-20)
+
+**This is the real explanation for several bugs "fixed" in §22 and §24 that kept coming back.** All of this session's local dev work has been happening inside a Claude Code session whose primary working directory is `D:\Projects\Claude code` — which is not neutral scratch space, it **is the original Platino RECD tracker repo** (see the fork notice at the top of this file). That repo has its own `apps/api` (port 4001, pointed at a real Supabase Postgres) and `apps/admin-web` (port 6001) - **the exact same port numbers** this project's `.claude/launch.json` used for Zan-APP, because Zan-APP was forked from Platino and inherited its `launch.json` port choices verbatim.
+
+`.claude/launch.json`'s `"api"` / `"admin-web"` entries have no explicit working directory (no `--prefix`), so they run relative to whatever directory the harness treats as default - which is `D:\Projects\Claude code`, i.e. **Platino's** own `apps/api`/`apps/admin-web`, not Zan-APP's. Every time a previous manually-started Zan-APP dev server was still alive, `preview_start` would "reuse" that port and everything looked fine. But whenever nothing was listening on 4001/6001 and `preview_start` had to launch fresh, it silently started **Platino's** servers instead:
+- Platino's `admin-web` has none of Zan-APP's finance/work-order pages → every one of those routes genuinely 404s. This was misdiagnosed in §22/§23 as a harness route-scanning quirk; it was never that - it was hitting the wrong app entirely.
+- Platino's `api` points at a remote Supabase project whose password has since been rotated/is invalid (see Platino's own §21 handover history for that incident) → every login there fails with `PrismaClientInitializationError: Authentication failed against database server`, surfaced to the browser as a generic "Internal server error".
+
+**Permanent fix:** gave Zan-APP its own ports so this collision is structurally impossible going forward, instead of relying on remembering to `cd` into the right directory:
+- `apps/api/.env`: `PORT` changed `4001` → **`4011`**, `ADMIN_WEB_URL` → `http://localhost:6011`.
+- `apps/admin-web/.env.local`: `NEXT_PUBLIC_API_URL` → `http://localhost:4011`.
+- `apps/admin-web/package.json`: `dev` script → `next dev -p 6011`.
+- `D:\Projects\Claude code\.claude\launch.json` (shared launch config file, not Zan-APP's own): added two new **explicitly-pathed** entries, `zan-api` (`--prefix D:\Projects\Zan-APP\apps\api`, port 4011) and `zan-admin-web` (`--prefix D:\Projects\Zan-APP\apps\admin-web`, port 6011). The old `"api"`/`"admin-web"` entries were left untouched - those are legitimately Platino's own launch configs for when someone is working in that repo.
+
+**Going forward, always use `preview_start(name: "zan-api")` / `preview_start(name: "zan-admin-web")` for this project - never the bare `"api"`/`"admin-web"` names, those belong to Platino.** Local dev URLs are now **http://localhost:4011** (API) and **http://localhost:6011** (web) - every other reference to `:4001`/`:6001` in this handover file (§1 house rules, §20-24) predates this fix and is now stale for local dev; the port numbers there describe history, not current reality.
+
+**Verified:** killed the stray Platino processes that had been accidentally answering on 4001/6001, started `zan-api`/`zan-admin-web` fresh via `preview_start`, confirmed `GET /health` and a real login both succeed on :4011, and did a full click-through login as the Finance user on :6011 landing on the real Finance Dashboard with live data - through the actual harness preview flow this time, not a manually-launched workaround process.
+
+---
+
+## 26. "Document not found" reopening a freshly-created quotation/invoice/PO (2026-07-20)
+
+**Symptom:** create a quotation/invoice/PO, click it in the list right after → "Quotation/Invoice/PO not found", even though the record exists and a hard page reload of the same URL works fine.
+
+**Root cause:** `quotations/[id]/page.tsx`, `invoices/[id]/page.tsx`, and `purchase-orders/[id]/page.tsx` (plus their `/print` siblings) all read the id by hand-parsing `window.location.pathname.split("/").pop()` instead of using Next's `useParams()` hook - a pattern that `sites/[id]/page.tsx` already gets right elsewhere in this codebase. During a **client-side** `<Link>` navigation (as opposed to a hard reload), this component briefly renders while `window.location.pathname` still reflects the *previous* route. Confirmed via network trace: clicking into a quotation fired `GET /quotations/quotations` (404 "Quotation not found" - "quotations" being the last path segment of the *list* page's own URL) immediately followed by the correct `GET /quotations/<real-id>` (200). The stale request's `.catch()` set `error` state; the correct request's `.then()` set the data state right after - but the render logic was `if (error) return <p>{error}</p>;` checked *before* the data check, so the leftover error from the bogus request won permanently, masking the fact that the real data had actually loaded fine.
+
+**Fix:** swapped `window.location.pathname` parsing for `useParams<{ id: string }>()` in all six files (3 detail pages + 3 print pages, across quotations/invoices/purchase-orders) - this reads the route param directly from Next's router state, which is never stale mid-transition. Also added `setError(null)` at the top of each detail page's `load()` so a leftover error from a previous failed load can't outlive a subsequent successful one even in edge cases `useParams` doesn't cover.
+
+**Verified live:** created a fresh quotation via the API, clicked into it from the list via a real `<Link>` click (not a reload) - opens correctly first try. Same for an existing invoice and PO. Checked the network trace after the fix: only the correct id is ever requested, no more phantom `/quotations/quotations`-style calls. Print views (reached via `router.push`, same underlying bug) also confirmed working. `next build` clean, all routes present.
+
+## 27. Company-wide PO terms + authorised signatory (name + picture) on all three print documents (2026-07-20)
+
+**Ask:** give Super Admin a way to set Terms & Conditions and an authorised-signatory picture once in Settings, and have every document print preview (Quotation, Invoice, Purchase Order) pick it up automatically.
+
+**Gap found:** `CompanySettings` already had `invoiceTerms`/`quotationTerms` (rendered on those two print pages) but no company-wide PO terms field - the PO print page only ever showed the per-document `PurchaseOrder.terms`, with no fallback. There was also no signatory field anywhere; all three print pages hardcoded the static text "Authorised signatory" with an empty line above it for a physical wet signature.
+
+**Schema (migration `20260720155617_add_signatory_and_po_terms`):** added to `CompanySettings` - `purchaseOrderTerms String?`, `signatoryName String?`, `signatoryDataUrl String?` (base64 data URL, same storage pattern as the existing company `logoDataUrl`, no S3/file storage involved).
+
+**Settings page (`apps/admin-web/src/app/settings/page.tsx`):** added a "Purchase order terms" textarea next to the existing Invoice/Quotation terms fields, plus a new "Authorised signatory" block (drag-and-drop or click-to-upload picture, same upload-zone component/pattern as the company logo uploader, JPG/PNG up to 2MB) and a signatory name text input. Both save through the existing `PUT /settings` (manage_settings-gated) call alongside the rest of company/tax details.
+
+**Print pages** (`invoices/[id]/print`, `quotations/[id]/print`, `purchase-orders/[id]/print`): replaced the static "Authorised signatory" line with the uploaded signature image (when set) rendered above the text, and appended the signatory name (`Authorised signatory — {name}`) when set. PO print page also now falls back to `company.purchaseOrderTerms` when the per-document `po.terms` is empty, bringing it in line with how Invoice/Quotation terms already work.
+
+**Verified live:** logged in as Super Admin (`superadmin@platino.example`), filled in Purchase order terms + signatory name via Settings, confirmed both persisted in `CompanySettings` via a direct DB read. Set a test signature image directly in the DB (file-upload can't be scripted through the automation harness) and confirmed the PO print page (`PO/2026-27/0001`) rendered the signature image, "Authorised signatory — R. Kumar, Director", and the company-wide PO terms text correctly. `tsc --noEmit` clean on both `apps/api` and `apps/admin-web`.
+
+**Note:** the test signatory name/terms/image entered during verification were left in the local dev DB (`CompanySettings` singleton) as a working example - replace with the real signatory before this goes near production.

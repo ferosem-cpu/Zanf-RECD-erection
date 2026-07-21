@@ -26,7 +26,26 @@ settingsRouter.get("/", authenticate, async (req, res) => {
 
 // PUT /settings - Gated with MANAGE_SETTINGS
 settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SETTINGS), async (req: AuthenticatedRequest, res) => {
-  const { logoDataUrl, themeKey, customColors } = req.body;
+  const {
+    logoDataUrl,
+    themeKey,
+    customColors,
+    legalName,
+    address,
+    state,
+    gstin,
+    pan,
+    bankName,
+    bankAccountNumber,
+    bankIfsc,
+    bankBranch,
+    invoiceTerms,
+    quotationTerms,
+    purchaseOrderTerms,
+    defaultTaxRatePct,
+    signatoryName,
+    signatoryDataUrl,
+  } = req.body;
 
   try {
     const settings = await prisma.companySettings.upsert({
@@ -35,12 +54,42 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
         logoDataUrl,
         themeKey,
         customColors,
+        legalName,
+        address,
+        state,
+        gstin,
+        pan,
+        bankName,
+        bankAccountNumber,
+        bankIfsc,
+        bankBranch,
+        invoiceTerms,
+        quotationTerms,
+        purchaseOrderTerms,
+        defaultTaxRatePct: defaultTaxRatePct !== undefined ? Number(defaultTaxRatePct) : undefined,
+        signatoryName,
+        signatoryDataUrl,
       },
       create: {
         id: "singleton",
         logoDataUrl,
         themeKey,
         customColors,
+        legalName,
+        address,
+        state,
+        gstin,
+        pan,
+        bankName,
+        bankAccountNumber,
+        bankIfsc,
+        bankBranch,
+        invoiceTerms,
+        quotationTerms,
+        purchaseOrderTerms,
+        defaultTaxRatePct: defaultTaxRatePct !== undefined ? Number(defaultTaxRatePct) : undefined,
+        signatoryName,
+        signatoryDataUrl,
       },
     });
     res.json(settings);

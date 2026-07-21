@@ -122,6 +122,62 @@ export default function SettingsPage() {
     if (file) handler(file);
   }
 
+  // ── Company & Tax details (Super Admin / manage_settings) ─────────────
+  const [company, setCompany] = useState({
+    legalName: "", address: "", state: "", gstin: "", pan: "",
+    bankName: "", bankAccountNumber: "", bankIfsc: "", bankBranch: "",
+    invoiceTerms: "", quotationTerms: "", purchaseOrderTerms: "", defaultTaxRatePct: "",
+  });
+  const [companyLoaded, setCompanyLoaded] = useState(false);
+  const [companySaving, setCompanySaving] = useState(false);
+
+  // ── Authorised signatory (name + picture) ──────────────────────────────
+  const [signatoryName, setSignatoryName] = useState("");
+  const [signatoryDataUrl, setSignatoryDataUrl] = useState<string | null>(null);
+  const [dragOverSignatory, setDragOverSignatory] = useState(false);
+  const signatoryInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    api("/settings").then((s: any) => {
+      setCompany((c) => ({
+        legalName: s.legalName ?? "", address: s.address ?? "", state: s.state ?? "", gstin: s.gstin ?? "",
+        pan: s.pan ?? "", bankName: s.bankName ?? "", bankAccountNumber: s.bankAccountNumber ?? "",
+        bankIfsc: s.bankIfsc ?? "", bankBranch: s.bankBranch ?? "", invoiceTerms: s.invoiceTerms ?? "",
+        quotationTerms: s.quotationTerms ?? "", purchaseOrderTerms: s.purchaseOrderTerms ?? "",
+        defaultTaxRatePct: s.defaultTaxRatePct ?? "",
+      }));
+      setSignatoryName(s.signatoryName ?? "");
+      setSignatoryDataUrl(s.signatoryDataUrl ?? null);
+      setCompanyLoaded(true);
+    }).catch(() => setCompanyLoaded(true));
+  }, []);
+
+  async function saveCompany(e: React.FormEvent) {
+    e.preventDefault();
+    setCompanySaving(true);
+    try {
+      const payload: Record<string, unknown> = { ...company, signatoryName, signatoryDataUrl };
+      if (payload.defaultTaxRatePct === "" || payload.defaultTaxRatePct === null) delete payload.defaultTaxRatePct;
+      else payload.defaultTaxRatePct = parseFloat(String(payload.defaultTaxRatePct));
+      await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
+      alert("Company & tax details saved.");
+    } catch (err) {
+      alert("Failed to save company details: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setCompanySaving(false);
+    }
+  }
+
+  const handleSignatoryFile = useCallback(async (file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    const dataUrl = await fileToDataUrl(file);
+    setSignatoryDataUrl(dataUrl);
+  }, []);
+
+  function removeSignatoryImage() {
+    setSignatoryDataUrl(null);
+  }
+
   // ── Render ───────────────────────────────────────────────────────────
 
   const isCustom = activeTheme === "custom" && customColors;
@@ -320,6 +376,82 @@ export default function SettingsPage() {
         )}
       </section>
 
+      {/* ── Company & Tax details ─────────────────────────────────────── */}
+      {companyLoaded && (
+        <section className="card p-4 sm:p-6">
+          <h2 className="text-base sm:text-lg font-semibold mb-1">Company &amp; Tax details</h2>
+          <p className="text-sm text-gray-500 mb-5">Printed on quotations, invoices and purchase orders.</p>
+          <form onSubmit={saveCompany} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Legal name"><input className="field w-full" value={company.legalName} onChange={(e) => setCompany({ ...company, legalName: e.target.value })} /></Field>
+              <Field label="State"><input className="field w-full" value={company.state} onChange={(e) => setCompany({ ...company, state: e.target.value })} /></Field>
+              <Field label="GSTIN"><input className="field w-full" value={company.gstin} onChange={(e) => setCompany({ ...company, gstin: e.target.value })} /></Field>
+              <Field label="PAN"><input className="field w-full" value={company.pan} onChange={(e) => setCompany({ ...company, pan: e.target.value })} /></Field>
+            </div>
+            <Field label="Address"><textarea className="field w-full" rows={2} value={company.address} onChange={(e) => setCompany({ ...company, address: e.target.value })} /></Field>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Bank name"><input className="field w-full" value={company.bankName} onChange={(e) => setCompany({ ...company, bankName: e.target.value })} /></Field>
+              <Field label="Account number"><input className="field w-full" value={company.bankAccountNumber} onChange={(e) => setCompany({ ...company, bankAccountNumber: e.target.value })} /></Field>
+              <Field label="IFSC"><input className="field w-full" value={company.bankIfsc} onChange={(e) => setCompany({ ...company, bankIfsc: e.target.value })} /></Field>
+              <Field label="Bank branch"><input className="field w-full" value={company.bankBranch} onChange={(e) => setCompany({ ...company, bankBranch: e.target.value })} /></Field>
+              <Field label="Default tax rate %"><input type="number" step="0.01" className="field w-full" value={company.defaultTaxRatePct} onChange={(e) => setCompany({ ...company, defaultTaxRatePct: e.target.value })} /></Field>
+            </div>
+            <Field label="Invoice terms"><textarea className="field w-full" rows={2} value={company.invoiceTerms} onChange={(e) => setCompany({ ...company, invoiceTerms: e.target.value })} /></Field>
+            <Field label="Quotation terms"><textarea className="field w-full" rows={2} value={company.quotationTerms} onChange={(e) => setCompany({ ...company, quotationTerms: e.target.value })} /></Field>
+            <Field label="Purchase order terms"><textarea className="field w-full" rows={2} value={company.purchaseOrderTerms} onChange={(e) => setCompany({ ...company, purchaseOrderTerms: e.target.value })} /></Field>
+
+            <div className="pt-2 border-t border-gray-100">
+              <label className="block text-xs font-medium text-gray-500 mb-2">Authorised signatory</label>
+              <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+                {signatoryDataUrl ? (
+                  <div className="relative group">
+                    <div className="w-24 h-24 rounded-xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center p-2">
+                      <img src={signatoryDataUrl} alt="Authorised signatory" className="max-w-full max-h-full object-contain" />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={removeSignatoryImage}
+                      className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity shadow-md flex items-center justify-center"
+                      title="Remove signatory picture"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ) : null}
+                <div
+                  className={`upload-zone flex-1 ${dragOverSignatory ? "drag-over" : ""}`}
+                  onClick={() => signatoryInputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); setDragOverSignatory(true); }}
+                  onDragLeave={() => setDragOverSignatory(false)}
+                  onDrop={(e) => handleDrop(e, handleSignatoryFile, setDragOverSignatory)}
+                >
+                  <input
+                    ref={signatoryInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleSignatoryFile(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  <p className="text-sm font-medium text-gray-600">Click or drag &amp; drop to upload signature</p>
+                  <p className="text-xs text-gray-400 mt-1">JPG, PNG up to 2 MB — printed on quotations, invoices and purchase orders</p>
+                </div>
+              </div>
+              <Field label="Signatory name">
+                <input className="field w-full mt-2" value={signatoryName} onChange={(e) => setSignatoryName(e.target.value)} placeholder="e.g. R. Kumar, Director" />
+              </Field>
+            </div>
+
+            <div className="flex justify-end">
+              <button type="submit" disabled={companySaving} className="btn-primary px-4 py-2 text-sm">{companySaving ? "Saving…" : "Save company details"}</button>
+            </div>
+          </form>
+        </section>
+      )}
+
       {/* ── Live Preview ────────────────────────────────────────────────── */}
       <section className="card p-4 sm:p-6">
         <h2 className="text-base sm:text-lg font-semibold mb-4">Live Preview</h2>
@@ -375,6 +507,15 @@ export default function SettingsPage() {
           </div>
         </div>
       </section>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+      {children}
     </div>
   );
 }

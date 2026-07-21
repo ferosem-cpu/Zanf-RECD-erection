@@ -6,6 +6,7 @@ import {
   STAGE_KEY,
   STATUS_OPTION_KEY,
   PHOTO_CHECKPOINT_KEY,
+  EXPENSE_CATEGORY_KEY,
 } from "@recd/shared";
 
 const prisma = new PrismaClient();
@@ -24,6 +25,14 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.MANAGE_SETTINGS, name: "Manage company settings and theming" },
     { key: PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS, name: "Act on complaints assigned to you" },
     { key: PERMISSION_KEY.MANAGE_VENDORS, name: "Approve and manage external vendors" },
+    { key: PERMISSION_KEY.MANAGE_WORK_ORDERS, name: "Create and assign work orders to field crews" },
+    { key: PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS, name: "Act on work orders assigned to you" },
+    { key: PERMISSION_KEY.MANAGE_QUOTATIONS, name: "Create and manage quotations" },
+    { key: PERMISSION_KEY.MANAGE_INVOICES, name: "Create and issue invoices (proforma + tax)" },
+    { key: PERMISSION_KEY.RECORD_PAYMENTS, name: "Record payments received and made" },
+    { key: PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, name: "Manage suppliers, purchase orders, and bills" },
+    { key: PERMISSION_KEY.MANAGE_EXPENSES, name: "Manage the expense book" },
+    { key: PERMISSION_KEY.VIEW_FINANCE_DASHBOARD, name: "View finance dashboard and reports" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -51,33 +60,55 @@ async function seedRoles() {
     },
     [ROLE_KEY.SALES]: {
       name: "Sales",
-      description: "Creates orders, views customer project progress.",
-      permissions: [PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.VIEW_SITE_STATUS],
+      description: "Creates orders, views customer project progress. Manages quotations and converts them to orders.",
+      permissions: [PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.MANAGE_QUOTATIONS],
     },
     [ROLE_KEY.OPERATIONS_PM]: {
       name: "Operations / Project Manager",
-      description: "Assigns engineers, updates plans, tracks pending items.",
-      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.RESOLVE_PENDING_ACTION],
+      description: "Assigns engineers, updates plans, tracks pending items, dispatches work orders.",
+      permissions: [
+        PERMISSION_KEY.VIEW_SITE_STATUS,
+        PERMISSION_KEY.CHANGE_SITE_STATUS,
+        PERMISSION_KEY.RESOLVE_PENDING_ACTION,
+        PERMISSION_KEY.MANAGE_WORK_ORDERS,
+      ],
     },
     [ROLE_KEY.ERECTION_ENGINEER]: {
       name: "Erection Engineer",
-      description: "Updates site progress on the ground. Oversees all erection-stage field work (fitters/welders are informal titles under this role, not separate roles). Resolves complaints assigned to them.",
-      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS],
+      description: "Updates site progress on the ground. Oversees all erection-stage field work (fitters/welders are informal titles under this role, not separate roles). Resolves complaints and work orders assigned to them.",
+      permissions: [
+        PERMISSION_KEY.VIEW_SITE_STATUS,
+        PERMISSION_KEY.CHANGE_SITE_STATUS,
+        PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS,
+        PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS,
+      ],
     },
     [ROLE_KEY.COMMISSIONING_ENGINEER]: {
       name: "Commissioning Engineer",
-      description: "Updates commissioning stages, uploads test reports. Resolves complaints assigned to them.",
-      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS],
+      description: "Updates commissioning stages, uploads test reports. Resolves complaints and work orders assigned to them.",
+      permissions: [
+        PERMISSION_KEY.VIEW_SITE_STATUS,
+        PERMISSION_KEY.CHANGE_SITE_STATUS,
+        PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS,
+        PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS,
+      ],
     },
     [ROLE_KEY.SERVICE_TEAM]: {
       name: "Service Team",
-      description: "Handles and resolves customer complaints day to day.",
-      permissions: [PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.VIEW_SITE_STATUS],
+      description: "Handles and resolves customer complaints and AMC/service work orders day to day.",
+      permissions: [PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS],
     },
     [ROLE_KEY.FINANCE]: {
       name: "Finance",
-      description: "Order value, invoicing, payment status - module deferred to Phase 2.",
-      permissions: [],
+      description: "Quotations, invoicing, payments, purchase orders, expenses, and finance reports.",
+      permissions: [
+        PERMISSION_KEY.MANAGE_QUOTATIONS,
+        PERMISSION_KEY.MANAGE_INVOICES,
+        PERMISSION_KEY.RECORD_PAYMENTS,
+        PERMISSION_KEY.MANAGE_PURCHASE_ORDERS,
+        PERMISSION_KEY.MANAGE_EXPENSES,
+        PERMISSION_KEY.VIEW_FINANCE_DASHBOARD,
+      ],
     },
     [ROLE_KEY.CUSTOMER]: {
       name: "Customer",
@@ -317,18 +348,125 @@ async function seedCompanySettings() {
   });
 }
 
+/**
+ * Seeded expense categories (data-not-code). Adding a new category is a DB insert,
+ * not a code change. Keys match EXPENSE_CATEGORY_KEY in packages/shared.
+ */
+async function seedExpenseCategories() {
+  const categories: Array<{ key: string; label: string; sequenceOrder: number }> = [
+    { key: EXPENSE_CATEGORY_KEY.MATERIAL, label: "Material", sequenceOrder: 1 },
+    { key: EXPENSE_CATEGORY_KEY.TRANSPORT, label: "Transport", sequenceOrder: 2 },
+    { key: EXPENSE_CATEGORY_KEY.SITE_LABOUR, label: "Site labour", sequenceOrder: 3 },
+    { key: EXPENSE_CATEGORY_KEY.TRAVEL, label: "Travel", sequenceOrder: 4 },
+    { key: EXPENSE_CATEGORY_KEY.OFFICE, label: "Office", sequenceOrder: 5 },
+    { key: EXPENSE_CATEGORY_KEY.MISC, label: "Miscellaneous", sequenceOrder: 6 },
+  ];
+  for (const c of categories) {
+    await prisma.expenseCategory.upsert({ where: { key: c.key }, update: { label: c.label, sequenceOrder: c.sequenceOrder }, create: c });
+  }
+}
+
+/**
+ * Light demo finance data so the module isn't empty on first run: one supplier and
+ * one issued tax invoice against the seeded customer (Sundaram Textiles).
+ */
+async function seedFinanceDemo(customerId: string) {
+  const supplier = await prisma.supplier.upsert({
+    where: { id: "seed-supplier-1" },
+    update: {},
+    create: {
+      id: "seed-supplier-1",
+      name: "Steelwell Pipes Pvt Ltd",
+      gstin: "33AABCS1234Z1Z2",
+      state: "Tamil Nadu",
+      address: "Chennai, Tamil Nadu",
+      contactName: "Murugan",
+      contactPhone: "+919812300119",
+    },
+  });
+
+  // Avoid duplicating a demo invoice on re-seed: idempotent on the unique invoice number.
+  const existing = await prisma.invoice.findUnique({ where: { invoiceNumber: "INV/2026-27/0001" } });
+  if (!existing) {
+    const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+    const placeOfSupply = "Tamil Nadu";
+    const sameState = company?.state === placeOfSupply || !company?.state;
+    const unitPrice = 850000;
+    const taxRate = 18;
+    const tax = sameState ? unitPrice * (taxRate / 100) : 0;
+    const igst = sameState ? 0 : unitPrice * (taxRate / 100);
+    await prisma.invoice.create({
+      data: {
+        invoiceNumber: "INV/2026-27/0001",
+        docType: "tax_invoice",
+        customerId,
+        status: "issued",
+        issueDate: new Date(),
+        dueDate: new Date(Date.now() + 30 * 86_400_000),
+        placeOfSupply,
+        subtotal: unitPrice,
+        cgstAmount: sameState ? tax / 2 : 0,
+        sgstAmount: sameState ? tax / 2 : 0,
+        igstAmount: igst,
+        total: unitPrice + tax + igst,
+        createdById: (await prisma.user.findFirstOrThrow({ where: { role: { key: ROLE_KEY.FINANCE } } })).id,
+        lineItems: {
+          create: [
+            {
+              description: "RECD Unit - 250 kVA",
+              hsnCode: "8421",
+              quantity: 1,
+              unitPrice,
+              discountPct: 0,
+              taxRatePct: taxRate,
+              lineTotal: unitPrice,
+              sortOrder: 0,
+            },
+          ],
+        },
+      },
+    });
+  }
+  return { supplier };
+}
+
+async function seedWorkOrderDemo(orderId: string) {
+  const site = await prisma.site.findUniqueOrThrow({ where: { orderId } });
+  const erectionUser = await prisma.user.findUniqueOrThrow({ where: { email: "erection@platino.example" } });
+  const opsUser = await prisma.user.findUniqueOrThrow({ where: { email: "ops@platino.example" } });
+
+  await prisma.workOrder.upsert({
+    where: { workOrderNumber: "WO-2026-00001" },
+    update: {},
+    create: {
+      workOrderNumber: "WO-2026-00001",
+      siteId: site.id,
+      taskType: "installation",
+      title: "Install RECD unit and hand off for testing",
+      instructions: "Follow the planned exhaust hookup on the order. Confirm on-site before starting work.",
+      status: "assigned",
+      assignedToId: erectionUser.id,
+      scheduledDate: new Date(Date.now() + 2 * 86_400_000),
+      createdById: opsUser.id,
+    },
+  });
+}
+
 async function main() {
   await seedPermissions();
   await seedRoles();
   await seedStages();
   await seedStatusOptions();
   await seedPhotoCheckpoints();
+  await seedExpenseCategories();
   const { customer } = await seedSampleUsers();
   const order = await seedSampleOrder(customer.id);
   const { approved } = await seedVendors();
   // Assign the sample site to the approved vendor so its engineer sees it (and other vendors don't).
   await prisma.site.update({ where: { orderId: order.id }, data: { vendorId: approved.id } });
   await seedCompanySettings();
+  await seedFinanceDemo(customer.id);
+  await seedWorkOrderDemo(order.id);
   console.log("Seed complete.");
 }
 
