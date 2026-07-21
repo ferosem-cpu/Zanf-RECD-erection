@@ -609,3 +609,46 @@ body {
   .print-title-block { text-align: left; }
   .print-panel-attn { text-align: left; }
 }
+
+/* Repeating per-page header/footer band, print only. Chrome renders a
+   `position: fixed` element once per printed page, which is the only
+   reliable way to repeat content across pages - Chrome does not support
+   CSS Paged Media `@page` margin boxes, so this can't show "Page X of Y". */
+.print-running-header,
+.print-running-footer {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 22mm 14mm 18mm;
+  }
+
+  .print-running-header {
+    display: flex;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 9.5px;
+    color: #8894a0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #d7dde2;
+  }
+
+  .print-running-footer {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 9.5px;
+    color: #8894a0;
+    padding-top: 6px;
+    border-top: 1px solid #d7dde2;
+  }
+}

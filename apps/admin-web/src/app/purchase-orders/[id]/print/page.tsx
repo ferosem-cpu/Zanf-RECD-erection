@@ -149,6 +149,15 @@ export default function PurchaseOrderPrintPage() {
           )}
         </div>
 
+        <div className="print-running-header">
+          <span>{company?.legalName ?? "Your Company"}</span>
+          <span>{po.poNumber}</span>
+        </div>
+        <div className="print-running-footer">
+          <span>{company?.website ?? company?.legalName}</span>
+          <span>{po.poNumber}</span>
+        </div>
+
         <div className="print-doc">
           <div className="print-header">
             <div className="print-co-block">
