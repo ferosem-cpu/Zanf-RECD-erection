@@ -171,15 +171,6 @@ export default function QuotationPrintPage() {
         )}
       </div>
 
-      <div className="print-running-header">
-        <span>{company?.legalName ?? "Your Company"}</span>
-        <span>{q.quoteNumber}</span>
-      </div>
-      <div className="print-running-footer">
-        <span>{company?.legalName ?? "Your Company"}</span>
-        <span>{q.quoteNumber}</span>
-      </div>
-
       <div className="print-doc">
         <div className="print-header">
           <div className="print-co-block">

@@ -171,15 +171,6 @@ export default function InvoicePrintPage() {
         )}
       </div>
 
-      <div className="print-running-header">
-        <span>{company?.legalName ?? "Your Company"}</span>
-        <span>{inv.invoiceNumber}</span>
-      </div>
-      <div className="print-running-footer">
-        <span>{company?.legalName ?? "Your Company"}</span>
-        <span>{inv.invoiceNumber}</span>
-      </div>
-
       <div className={`print-doc${isCancelled ? " opacity-50" : ""}`}>
         <div className="print-header">
           <div className="print-co-block">
