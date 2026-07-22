@@ -482,6 +482,9 @@ model CompanySettings {
   purchaseOrderTerms   String?
   defaultTaxRatePct    Decimal? @db.Decimal(5, 2)
 
+  /// Free-text note printed in the footer of every finance document (editable in Settings).
+  documentFooterNote   String?
+
   /// Authorised signatory printed on quotations, invoices and purchase orders.
   signatoryName        String?
   signatoryDataUrl     String?

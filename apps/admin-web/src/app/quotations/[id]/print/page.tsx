@@ -15,7 +15,7 @@ interface QuotationDetail {
   lineItems: LineItem[];
 }
 
-interface Company { legalName?: string | null; address?: string | null; city?: string | null; pinCode?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; email?: string | null; website?: string | null; phone?: string | null; bankName?: string | null; bankAccountNumber?: string | null; bankIfsc?: string | null; bankBranch?: string | null; quotationTerms?: string | null; invoiceTerms?: string | null; logoDataUrl?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
+interface Company { legalName?: string | null; address?: string | null; city?: string | null; pinCode?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; email?: string | null; website?: string | null; phone?: string | null; bankName?: string | null; bankAccountNumber?: string | null; bankIfsc?: string | null; bankBranch?: string | null; quotationTerms?: string | null; invoiceTerms?: string | null; documentFooterNote?: string | null; logoDataUrl?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
 
 /** "City, Pin Code" / "City" / "Pin Code" — whichever parts are set. */
 function cityPinLine(company: Company | undefined): string {
@@ -100,6 +100,15 @@ export default function QuotationPrintPage() {
     api<Company>("/settings").then(setCompany).catch(() => {});
   }, [id]);
 
+  // The browser's print header prints document.title (top-centre). Set it to the
+  // quotation number so the printed page never shows the app name; restore on exit.
+  useEffect(() => {
+    if (!q) return;
+    const prev = document.title;
+    document.title = q.quoteNumber;
+    return () => { document.title = prev; };
+  }, [q]);
+
   // Seed the editable terms once both the quotation and company settings have loaded:
   // per-quotation terms win if set, otherwise fall back to the company default.
   useEffect(() => {
@@ -167,7 +176,7 @@ export default function QuotationPrintPage() {
         <span>{q.quoteNumber}</span>
       </div>
       <div className="print-running-footer">
-        <span>{company?.website ?? company?.legalName}</span>
+        <span>{company?.legalName ?? "Your Company"}</span>
         <span>{q.quoteNumber}</span>
       </div>
 
@@ -254,7 +263,11 @@ export default function QuotationPrintPage() {
         </div>
 
         <div className="print-footer">
-          <div>Thank you for considering us.</div>
+          <div className="print-footer-info">
+            {company?.documentFooterNote && <div className="note">{company.documentFooterNote}</div>}
+            {contactLine(company) && <div className="contact">{contactLine(company)}</div>}
+            <div>Thank you for considering us.</div>
+          </div>
           <div className="print-sig">
             {company?.signatoryDataUrl && <img src={company.signatoryDataUrl} alt="Signature" className="h-12 object-contain ml-auto mb-1" />}
             <p className="label">Authorised signatory{company?.signatoryName ? ` — ${company.signatoryName}` : ""}</p>

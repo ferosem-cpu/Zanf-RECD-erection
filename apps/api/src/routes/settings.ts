@@ -48,6 +48,7 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
     quotationTerms,
     purchaseOrderTerms,
     defaultTaxRatePct,
+    documentFooterNote,
     signatoryName,
     signatoryDataUrl,
   } = req.body;
@@ -77,6 +78,7 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
         quotationTerms,
         purchaseOrderTerms,
         defaultTaxRatePct: defaultTaxRatePct !== undefined ? Number(defaultTaxRatePct) : undefined,
+        documentFooterNote,
         signatoryName,
         signatoryDataUrl,
       },
@@ -103,6 +105,7 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
         quotationTerms,
         purchaseOrderTerms,
         defaultTaxRatePct: defaultTaxRatePct !== undefined ? Number(defaultTaxRatePct) : undefined,
+        documentFooterNote,
         signatoryName,
         signatoryDataUrl,
       },

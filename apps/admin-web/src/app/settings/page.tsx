@@ -128,6 +128,7 @@ export default function SettingsPage() {
     email: "", website: "", phone: "",
     bankName: "", bankAccountNumber: "", bankIfsc: "", bankBranch: "",
     invoiceTerms: "", quotationTerms: "", purchaseOrderTerms: "", defaultTaxRatePct: "",
+    documentFooterNote: "",
   });
   const [companyLoaded, setCompanyLoaded] = useState(false);
   const [companySaving, setCompanySaving] = useState(false);
@@ -148,6 +149,7 @@ export default function SettingsPage() {
         bankIfsc: s.bankIfsc ?? "", bankBranch: s.bankBranch ?? "", invoiceTerms: s.invoiceTerms ?? "",
         quotationTerms: s.quotationTerms ?? "", purchaseOrderTerms: s.purchaseOrderTerms ?? "",
         defaultTaxRatePct: s.defaultTaxRatePct ?? "",
+        documentFooterNote: s.documentFooterNote ?? "",
       }));
       setSignatoryName(s.signatoryName ?? "");
       setSignatoryDataUrl(s.signatoryDataUrl ?? null);
@@ -404,6 +406,11 @@ export default function SettingsPage() {
                 <Field label="Email"><input type="email" className="field w-full" value={company.email} onChange={(e) => setCompany({ ...company, email: e.target.value })} /></Field>
                 <Field label="Website"><input className="field w-full" placeholder="https://www.example.com" value={company.website} onChange={(e) => setCompany({ ...company, website: e.target.value })} /></Field>
                 <Field label="Phone"><input className="field w-full" value={company.phone} onChange={(e) => setCompany({ ...company, phone: e.target.value })} /></Field>
+              </div>
+              <div className="mt-3">
+                <Field label="Footer note (extra details printed at the bottom of every document)">
+                  <textarea className="field w-full" rows={2} placeholder="e.g. All amounts in INR. Goods once sold will not be taken back." value={company.documentFooterNote} onChange={(e) => setCompany({ ...company, documentFooterNote: e.target.value })} />
+                </Field>
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
