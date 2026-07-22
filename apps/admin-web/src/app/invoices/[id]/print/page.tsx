@@ -268,8 +268,6 @@ export default function InvoicePrintPage() {
         <div className="print-footer">
           <div className="print-footer-info">
             {company?.documentFooterNote && <div className="note">{company.documentFooterNote}</div>}
-            {contactLine(company) && <div className="contact">{contactLine(company)}</div>}
-            <div>Thank you for your business.</div>
           </div>
           <div className="print-sig">
             {company?.signatoryDataUrl && <img src={company.signatoryDataUrl} alt="Signature" className="h-12 object-contain ml-auto mb-1" />}
