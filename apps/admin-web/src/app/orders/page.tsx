@@ -45,13 +45,18 @@ export default function OrdersPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [newCustomer, setNewCustomer] = useState(false);
+  const [newProduct, setNewProduct] = useState(false);
   const [form, setForm] = useState({
     customerId: "",
     customerName: "",
+    customerAddress: "",
     contactName: "",
     contactPhone: "",
     contactEmail: "",
     productId: "",
+    productName: "",
+    productModel: "",
+    productRatingSpec: "",
     quantity: "1",
     value: "",
     orderDate: today(),
@@ -79,6 +84,7 @@ export default function OrdersPage() {
           method: "POST",
           body: JSON.stringify({
             name: form.customerName,
+            address: form.customerAddress || undefined,
             contactName: form.contactName,
             contactPhone: form.contactPhone,
             contactEmail: form.contactEmail || undefined,
@@ -87,13 +93,26 @@ export default function OrdersPage() {
         customerId = created.id;
       }
       if (!customerId) throw new Error("Please choose or create a customer");
-      if (!form.productId) throw new Error("Please choose a product");
+
+      let productId = form.productId;
+      if (newProduct) {
+        const created = await api<{ id: string }>("/products", {
+          method: "POST",
+          body: JSON.stringify({
+            name: form.productName,
+            model: form.productModel,
+            ratingSpec: form.productRatingSpec || undefined,
+          }),
+        });
+        productId = created.id;
+      }
+      if (!productId) throw new Error("Please choose or create a product");
 
       await api("/orders", {
         method: "POST",
         body: JSON.stringify({
           customerId,
-          productId: form.productId,
+          productId,
           quantity: parseInt(form.quantity, 10) || 1,
           value: parseFloat(form.value) || 0,
           orderDate: new Date(form.orderDate).toISOString(),
@@ -102,7 +121,20 @@ export default function OrdersPage() {
       });
       setOpen(false);
       setNewCustomer(false);
-      setForm((f) => ({ ...f, customerName: "", contactName: "", contactPhone: "", contactEmail: "", value: "", quantity: "1" }));
+      setNewProduct(false);
+      setForm((f) => ({
+        ...f,
+        customerName: "",
+        customerAddress: "",
+        contactName: "",
+        contactPhone: "",
+        contactEmail: "",
+        productName: "",
+        productModel: "",
+        productRatingSpec: "",
+        value: "",
+        quantity: "1",
+      }));
       load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create order");
@@ -208,6 +240,7 @@ export default function OrdersPage() {
                       <input required placeholder="Contact phone (login)" className="field" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
                     </div>
                     <input type="email" placeholder="Contact email (optional)" className="field w-full" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} />
+                    <textarea placeholder="Address (optional)" rows={2} className="field w-full" value={form.customerAddress} onChange={(e) => setForm({ ...form, customerAddress: e.target.value })} />
                     <p className="text-[11px] text-gray-400">The phone number is what the customer uses to log in with their Order ID.</p>
                   </div>
                 ) : (
@@ -221,13 +254,26 @@ export default function OrdersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Product</label>
-                <select required className="field w-full" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
-                  <option value="">Select a product</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
-                  ))}
-                </select>
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="block text-xs font-medium text-gray-500">Product</label>
+                  <button type="button" onClick={() => setNewProduct((v) => !v)} className="text-xs font-medium text-[var(--theme-accent)]">
+                    {newProduct ? "Choose existing" : "+ New product"}
+                  </button>
+                </div>
+                {newProduct ? (
+                  <div className="space-y-2 rounded-lg border border-gray-200 p-3">
+                    <input required placeholder="Product name" className="field w-full" value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} />
+                    <input required placeholder="Model (unique)" className="field w-full" value={form.productModel} onChange={(e) => setForm({ ...form, productModel: e.target.value })} />
+                    <input placeholder="Rating spec (optional)" className="field w-full" value={form.productRatingSpec} onChange={(e) => setForm({ ...form, productRatingSpec: e.target.value })} />
+                  </div>
+                ) : (
+                  <select required className="field w-full" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
+                    <option value="">Select a product</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

@@ -114,6 +114,14 @@ export const createCustomerSchema = z.object({
   contactEmail: z.string().email().optional(),
 });
 
+export const createProductSchema = z.object({
+  name: z.string().min(1),
+  model: z.string().min(1),
+  ratingSpec: z.string().optional(),
+  capacityKva: z.number().optional(),
+  warrantyMonths: z.number().int().optional(),
+});
+
 export const registerVendorSchema = z.object({
   name: z.string().min(1),
   contactName: z.string().min(1),
