@@ -16,6 +16,8 @@ interface Lookup {
 interface SiteDetail {
   id: string;
   address: string | null;
+  gpsLat: string | null;
+  gpsLng: string | null;
   confirmedExhaustHookupType: string | null;
   order: { orderNumber: string; plannedExhaustHookupType: string | null; customer: { name: string } };
   currentStage: { id: string; label: string; phase: string };
@@ -37,6 +39,12 @@ const EXHAUST_OPTIONS = [
   { value: "replace_existing_silencer", label: "Replace existing silencer with RECD" },
   { value: "add_after_existing_exhaust", label: "Add RECD after existing exhaust" },
 ];
+
+function mapsUrl(address: string | null, lat: string | null, lng: string | null): string | null {
+  if (lat && lng) return `https://www.google.com/maps?q=${lat},${lng}`;
+  if (address) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  return null;
+}
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -74,6 +82,12 @@ export default function SiteDetailPage() {
   const [matchesPlan, setMatchesPlan] = useState(true);
   const [submittingExhaust, setSubmittingExhaust] = useState(false);
 
+  // Location
+  const [locAddress, setLocAddress] = useState("");
+  const [locLat, setLocLat] = useState("");
+  const [locLng, setLocLng] = useState("");
+  const [savingLocation, setSavingLocation] = useState(false);
+
   // Photos
   const [uploadingCheckpoint, setUploadingCheckpoint] = useState<string | null>(null);
   const photoInputRef = useRef<Record<string, HTMLInputElement | null>>({});
@@ -84,6 +98,9 @@ export default function SiteDetailPage() {
       setSite(detail);
       setStageId((prev) => prev || detail.currentStage.id);
       setAssignVendorId((prev) => prev || detail.vendor?.id || "");
+      setLocAddress((prev) => prev || detail.address || "");
+      setLocLat((prev) => prev || detail.gpsLat || "");
+      setLocLng((prev) => prev || detail.gpsLng || "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load site");
     }
@@ -121,6 +138,28 @@ export default function SiteDetailPage() {
       setError(err instanceof Error ? err.message : "Failed to post update");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function submitLocation(e: React.FormEvent) {
+    e.preventDefault();
+    setSavingLocation(true);
+    setError(null);
+    try {
+      await api(`/sites/${id}/location`, {
+        method: "POST",
+        body: JSON.stringify({
+          address: locAddress || undefined,
+          gpsLat: locLat.trim() === "" ? null : parseFloat(locLat),
+          gpsLng: locLng.trim() === "" ? null : parseFloat(locLng),
+        }),
+      });
+      flash("Location updated.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update location");
+    } finally {
+      setSavingLocation(false);
     }
   }
 
@@ -209,6 +248,57 @@ export default function SiteDetailPage() {
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">{banner}</div>
       )}
       {error && site && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
+
+      <section className="card p-5 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Location</h2>
+          {(() => {
+            const url = mapsUrl(site.address, site.gpsLat, site.gpsLng);
+            return url ? (
+              <a href={url} target="_blank" rel="noreferrer" className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                📍 View on Google Maps
+              </a>
+            ) : (
+              <span className="text-xs text-gray-400">No location set yet</span>
+            );
+          })()}
+        </div>
+        {canEdit ? (
+          <form onSubmit={submitLocation} className="space-y-2">
+            <textarea
+              placeholder="Site address"
+              rows={2}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              value={locAddress}
+              onChange={(e) => setLocAddress(e.target.value)}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="number"
+                step="any"
+                placeholder="Latitude"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={locLat}
+                onChange={(e) => setLocLat(e.target.value)}
+              />
+              <input
+                type="number"
+                step="any"
+                placeholder="Longitude"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={locLng}
+                onChange={(e) => setLocLng(e.target.value)}
+              />
+            </div>
+            <p className="text-[11px] text-gray-400">Coordinates give the most accurate map pin - paste them from a phone&apos;s GPS if available. Address alone still works for the map link.</p>
+            <button type="submit" disabled={savingLocation} className="btn-primary px-4 py-2 text-sm">
+              {savingLocation ? "Saving…" : "Save location"}
+            </button>
+          </form>
+        ) : (
+          <p className="text-sm text-gray-500 whitespace-pre-line">{site.address ?? "No address on file"}</p>
+        )}
+      </section>
 
       {canAssignVendor && (
         <section className="card p-5 space-y-3">

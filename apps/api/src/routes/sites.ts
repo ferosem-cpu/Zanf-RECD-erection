@@ -4,6 +4,7 @@ import {
   confirmExhaustHookupSchema,
   uploadSitePhotoSchema,
   assignSiteVendorSchema,
+  updateSiteLocationSchema,
   PERMISSION_KEY,
   PENDING_ACTION_CATEGORY,
   VENDOR_STATUS,
@@ -169,6 +170,31 @@ sitesRouter.post("/:id/photos", requirePermission(PERMISSION_KEY.CHANGE_SITE_STA
     include: { checkpoint: true },
   });
   res.status(201).json(photo);
+});
+
+/**
+ * Set/update where the site actually is - address and/or GPS coordinates. Captured by
+ * whoever can already change site status (typically the field engineer on-site), so the
+ * office and the customer portal can show it on a map instead of just an address string.
+ */
+sitesRouter.post("/:id/location", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  const parsed = updateSiteLocationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const siteId = asString(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+
+  const updated = await prisma.site.update({
+    where: { id: siteId },
+    data: {
+      address: parsed.data.address,
+      gpsLat: parsed.data.gpsLat,
+      gpsLng: parsed.data.gpsLng,
+    },
+  });
+  res.json(updated);
 });
 
 /**

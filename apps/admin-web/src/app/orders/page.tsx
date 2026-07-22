@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 
@@ -179,7 +180,11 @@ export default function OrdersPage() {
             <tbody className="divide-y divide-gray-100">
               {orders.map((o) => (
                 <tr key={o.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold">{o.orderNumber}</td>
+                  <td className="px-4 py-3 font-mono text-xs font-semibold">
+                    <Link href={`/orders/${o.id}`} className="hover:underline" style={{ color: "var(--theme-primary)" }}>
+                      {o.orderNumber}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3">{o.customer.name}</td>
                   <td className="px-4 py-3">{o.product.name} ({o.product.model})</td>
                   <td className="px-4 py-3 whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</td>
@@ -200,7 +205,7 @@ export default function OrdersPage() {
           <div className="card p-6 text-center text-sm text-gray-400">No orders yet.</div>
         ) : (
           orders.map((o) => (
-            <div key={o.id} className="data-card" data-testid={`order-card-${o.orderNumber}`}>
+            <Link key={o.id} href={`/orders/${o.id}`} className="data-card block" data-testid={`order-card-${o.orderNumber}`}>
               <div className="flex items-start justify-between gap-3 mb-2">
                 <span className="font-mono text-xs font-semibold text-gray-900">{o.orderNumber}</span>
                 <span className="badge badge-accent">{o.site?.currentStage.label ?? "—"}</span>
@@ -211,7 +216,7 @@ export default function OrdersPage() {
                 <span className="label">Value</span>
                 <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>
               </div>
-            </div>
+            </Link>
           ))
         )}
       </div>

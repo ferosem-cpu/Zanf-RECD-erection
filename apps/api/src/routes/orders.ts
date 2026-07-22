@@ -2,6 +2,7 @@ import { Router } from "express";
 import { createOrderSchema, PERMISSION_KEY, STAGE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
+import { asString } from "../lib/params";
 
 export const ordersRouter = Router();
 ordersRouter.use(authenticate);
@@ -14,6 +15,33 @@ ordersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (re
     orderBy: { createdAt: "desc" },
   });
   res.json(orders);
+});
+
+ordersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const orderId = asString(req.params.id);
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      customer: { include: { contacts: { select: { id: true, name: true, phone: true, email: true } } } },
+      product: true,
+      salesEngineer: { select: { id: true, name: true } },
+      site: { include: { currentStage: true, assignedEngineer: true, vendor: true } },
+    },
+  });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  if (req.auth!.customerId && order.customerId !== req.auth!.customerId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  // A customer can have multiple orders, each with its own site - surface the sibling
+  // sites here so an order's page shows the customer's full site footprint, not just this one.
+  const otherSites = await prisma.site.findMany({
+    where: { order: { customerId: order.customerId }, NOT: { id: order.site?.id } },
+    include: { currentStage: true, order: { select: { orderNumber: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+
+  res.json({ ...order, otherCustomerSites: otherSites });
 });
 
 ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {

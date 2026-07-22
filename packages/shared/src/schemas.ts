@@ -42,6 +42,12 @@ export const uploadSitePhotoSchema = z.object({
   caption: z.string().optional(),
 });
 
+export const updateSiteLocationSchema = z.object({
+  address: z.string().optional(),
+  gpsLat: z.number().min(-90).max(90).nullable().optional(),
+  gpsLng: z.number().min(-180).max(180).nullable().optional(),
+});
+
 export const createComplaintSchema = z.object({
   siteId: z.string(),
   category: z.string(),
