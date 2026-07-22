@@ -433,10 +433,11 @@ body {
    white-label palette. Shared by the three print pages. */
 
 .print-doc {
-  /* Segoe UI's lowercase "l" has a small foot/tail so it reads clearly, unlike
-     Inter's bare vertical bar which looked prominent/ambiguous in print. */
-  font-family: "Segoe UI", Roboto, Arial, Helvetica, sans-serif;
-  font-size: 12.5px;
+  /* Bundled Tinos (Times New Roman-compatible serif) - the serif feet stop the
+     lowercase "l"/"i" from standing out as bare vertical bars, and self-hosting
+     via next/font makes it render identically on every device and in the PDF. */
+  font-family: var(--font-tinos), "Times New Roman", Times, serif;
+  font-size: 13px;
   line-height: 1.5;
   color: #1c2b3a;
 }
