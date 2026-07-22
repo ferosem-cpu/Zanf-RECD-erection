@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { useAuth } from "@/components/AuthContext";
 
 interface OtherSite {
   id: string;
@@ -26,6 +27,7 @@ interface OrderDetail {
   customerPoNumber: string | null;
   customerPoDate: string | null;
   customer: {
+    id: string;
     name: string;
     address: string | null;
     gstin: string | null;
@@ -53,6 +55,8 @@ function mapsUrl(address: string | null, lat: string | null, lng: string | null)
 
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission("manage_orders");
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -164,12 +168,29 @@ export default function OrderDetailPage() {
         </section>
       </div>
 
-      {order.otherCustomerSites.length > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-medium text-gray-600">
-            Other sites for {order.customer.name} ({order.otherCustomerSites.length})
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-sm font-medium text-gray-600">
+            {order.otherCustomerSites.length > 0
+              ? `Other sites for ${order.customer.name} (${order.otherCustomerSites.length})`
+              : `Sites for ${order.customer.name}`}
           </h2>
-          <p className="mb-3 text-xs text-gray-400">This customer has multiple installation sites - each order gets its own site and location.</p>
+          {canManage && (
+            <Link
+              href={`/orders?customer=${order.customer.id}`}
+              className="text-xs font-medium text-[var(--theme-accent)] whitespace-nowrap"
+            >
+              + Add site
+            </Link>
+          )}
+        </div>
+        <p className="mb-3 text-xs text-gray-400">
+          A customer can have multiple installation sites - each one gets its own address/location and progress tracking.
+        </p>
+        {order.otherCustomerSites.length === 0 && (
+          <p className="text-sm text-gray-400">No other sites for this customer yet.</p>
+        )}
+        {order.otherCustomerSites.length > 0 && (
           <div className="cards-mobile sm:grid sm:grid-cols-2 sm:gap-3 sm:space-y-0">
             {order.otherCustomerSites.map((s) => {
               const otherMap = mapsUrl(s.address, s.gpsLat, s.gpsLng);
@@ -191,8 +212,8 @@ export default function OrderDetailPage() {
               );
             })}
           </div>
-        </section>
-      )}
+        )}
+      </section>
     </div>
   );
 }

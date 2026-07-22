@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 
@@ -34,8 +35,18 @@ const EXHAUST_OPTIONS = [
 const today = () => new Date().toISOString().slice(0, 10);
 
 export default function OrdersPage() {
+  return (
+    <Suspense fallback={null}>
+      <OrdersPageInner />
+    </Suspense>
+  );
+}
+
+function OrdersPageInner() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_orders");
+  const searchParams = useSearchParams();
+  const addSiteForCustomerId = searchParams.get("customer");
 
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -73,6 +84,17 @@ export default function OrdersPage() {
   }
 
   useEffect(load, [canManage]);
+
+  // Arriving from an order/customer's "Add site" link - prefill and open the modal
+  // instead of making the user re-pick the customer from the dropdown.
+  useEffect(() => {
+    if (addSiteForCustomerId && customers.some((c) => c.id === addSiteForCustomerId)) {
+      setForm((f) => ({ ...f, customerId: addSiteForCustomerId }));
+      setOpen(true);
+    }
+  }, [addSiteForCustomerId, customers]);
+
+  const addSiteForCustomer = addSiteForCustomerId ? customers.find((c) => c.id === addSiteForCustomerId) : undefined;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -225,11 +247,17 @@ export default function OrdersPage() {
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">New order</h3>
+              <h3 className="text-lg font-semibold">{addSiteForCustomer ? `New site for ${addSiteForCustomer.name}` : "New order"}</h3>
               <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
             <form onSubmit={submit} className="space-y-4">
               {/* Customer */}
+              {addSiteForCustomer ? (
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+                  <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">{addSiteForCustomer.name}</p>
+                </div>
+              ) : (
               <div>
                 <div className="mb-1 flex items-center justify-between">
                   <label className="block text-xs font-medium text-gray-500">Customer</label>
@@ -257,6 +285,7 @@ export default function OrdersPage() {
                   </select>
                 )}
               </div>
+              )}
 
               <div>
                 <div className="mb-1 flex items-center justify-between">
