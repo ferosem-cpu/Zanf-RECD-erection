@@ -1,8 +1,9 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
-import { loginSchema, requestOtpSchema, verifyOtpSchema } from "@recd/shared";
+import { loginSchema, requestOtpSchema, verifyOtpSchema, googleLoginSchema } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { signToken } from "../lib/jwt";
+import { verifyGoogleIdToken } from "../lib/googleAuth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { authenticate, AuthenticatedRequest } from "../middleware/auth";
 import { rateLimit } from "../middleware/rateLimit";
@@ -60,6 +61,34 @@ authRouter.post("/login", authLimiter, async (req, res) => {
   if (!user.isActive) {
     return res.status(401).json({ error: "Account is inactive" });
   }
+
+  const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
+  res.json({ token, user: { id: user.id, name: user.name, role: user.role.key } });
+});
+
+/**
+ * "Sign in with Google" for internal roles - an additional login method alongside email/password,
+ * not a replacement. Only Google accounts whose email already matches an existing, active staff
+ * user can sign in this way; there is no separate allowlist to maintain - the User.email column
+ * IS the allowlist, same as it already gates password login.
+ */
+authRouter.post("/google", authLimiter, async (req, res) => {
+  const parsed = googleLoginSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  let googleEmail: string;
+  try {
+    const verified = await verifyGoogleIdToken(parsed.data.credential);
+    if (!verified.emailVerified) return res.status(401).json({ error: "Google account email is not verified" });
+    googleEmail = verified.email;
+  } catch (err) {
+    console.error("Google ID token verification failed", err);
+    return res.status(401).json({ error: "Google sign-in failed" });
+  }
+
+  const user = await prisma.user.findUnique({ where: { email: googleEmail }, include: { role: true } });
+  if (!user) return res.status(401).json({ error: "No staff account is linked to this Google account" });
+  if (!user.isActive) return res.status(401).json({ error: "Account is inactive" });
 
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({ token, user: { id: user.id, name: user.name, role: user.role.key } });

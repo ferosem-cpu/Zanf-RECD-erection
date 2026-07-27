@@ -9,6 +9,11 @@ export const requestOtpSchema = z.object({
   phone: z.string().min(8),
 });
 
+export const googleLoginSchema = z.object({
+  /** The ID token returned by Google Identity Services' credential callback (a signed JWT). */
+  credential: z.string().min(1),
+});
+
 export const verifyOtpSchema = z.object({
   phone: z.string().min(8),
   code: z.string().length(6),

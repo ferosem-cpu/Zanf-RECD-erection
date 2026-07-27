@@ -188,7 +188,7 @@ async function seedSampleUsers() {
   const roleIdByKey = new Map(roleEntries.map((r) => [r.key, r.id]));
 
   const internalUsers = [
-    { name: "Super Admin", email: "superadmin@platino.example", roleKey: ROLE_KEY.SUPER_ADMIN, title: "Super Admin" },
+    { name: "Super Admin", email: "ferosem@gmail.com", roleKey: ROLE_KEY.SUPER_ADMIN, title: "Super Admin" },
     { name: "Priya Sharma", email: "owner@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Proprietor" },
     { name: "Anil Mehta", email: "management@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Operations Head" },
     { name: "Rahul Verma", email: "sales@platino.example", roleKey: ROLE_KEY.SALES, title: "Sales Engineer" },
@@ -294,7 +294,7 @@ async function seedSampleOrder(customerId: string) {
 }
 
 async function seedVendors() {
-  const approver = await prisma.user.findUnique({ where: { email: "superadmin@platino.example" } });
+  const approver = await prisma.user.findUnique({ where: { email: "ferosem@gmail.com" } });
 
   // One already-approved vendor (so the demo has a working vendor-scoped engineer) ...
   const approved = await prisma.vendor.upsert({
