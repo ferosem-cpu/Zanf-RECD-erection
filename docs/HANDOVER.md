@@ -451,7 +451,7 @@ While wiring the customer dropdown, hit a **second, pre-existing bug**: `GET /cu
 
 **Bullet rendering, all three print pages** (`invoices/[id]/print`, `quotations/[id]/print`, `purchase-orders/[id]/print`): added a `termsToBullets()` helper and a `<TermsBlock>` component that renders a proper `<ul><li>` list. Had to handle two input shapes, since the *existing* company terms data (entered in section 27) turned out to be one continuous string using `" - "` as an inline separator, not real newlines: `text.replace(/\r\n/g, "\n").split(/\n|\s+-\s+/)` splits on *either* a real newline *or* an inline " - ", so old data buckets correctly without needing to be re-typed, and newly-typed one-line-per-bullet text works too.
 
-**Hit and fixed a self-inflicted bug while building this:** an early edit attempt embedded a literal NUL byte (` ` written as an actual control character rather than the two-character escape) into the invoice print file as a bullet-join separator - `grep` started reporting the file as "binary", and the Edit tool's string-matching silently failed against it (looked identical to a plain space in Read's output). Rewrote the file clean via `Write` and switched to a placeholder-free regex `split()` (above) instead of any join-token approach, then fixed the other two print pages the same way. Worth remembering: if `grep -n <pattern> <file>` on this codebase ever prints "Binary file ... matches", suspect a stray control character from a previous edit, not real binary content.
+**Hit and fixed a self-inflicted bug while building this:** an early edit attempt embedded a literal NUL byte (written as an actual control character rather than the two-character escape) into the invoice print file as a bullet-join separator - `grep` started reporting the file as "binary", and the Edit tool's string-matching silently failed against it (looked identical to a plain space in Read's output). Rewrote the file clean via `Write` and switched to a placeholder-free regex `split()` (above) instead of any join-token approach, then fixed the other two print pages the same way. Worth remembering: if `grep -n <pattern> <file>` on this codebase ever prints "Binary file ... matches", suspect a stray control character from a previous edit, not real binary content.
 
 **Per-document terms editing:** each print page now has a print-hidden "Edit before printing" panel - a textarea seeded from `doc.terms ?? company.<x>Terms` (per-document override wins, per-document data was already in the schema from before, just never surfaced in any UI until now) that live-updates the printed bullets on every keystroke, a "Reset to company default" button, and - only while the document is still `draft` - a "Save to this document" button that persists via the existing `PUT /invoices|quotations|purchase-orders/:id` (already supported a `terms`-only partial payload, no backend changes needed). Non-draft documents show an explanatory note instead of the save button: the edit still changes what prints, it just isn't written back to the (already-issued) record.
 
@@ -654,3 +654,37 @@ Two more rounds off annotated prints of the live invoice:
 **Shipped:** committed `aa18ad5` on `master`, pushed - `admin-web` auto-deployed (confirmed live). `zan-app-api` redeployed via the full manual §28 dance (new `google-auth-library` dependency, new route, seed change) - confirmed the dependency actually bundled into both function directories' `node_modules` before deploying, not just the `@recd/shared` patch.
 
 **Not done / still open:** the Google Cloud OAuth consent screen is in **Testing** status, which caps sign-in to the listed test users (currently just `ferosem@gmail.com`) - fine for "just Super Admin, for now" per the ask, but if more staff need Google sign-in later, either add them as test users (up to 100, no review needed) or publish the app (triggers Google's verification process for sensitive scopes - not needed here since this only requests `email`/`profile`/`openid`). No UI exists yet to link additional staff accounts to their own Google emails - today it's still one-to-one via whatever email happens to match an existing `User` row.
+
+## 40. Vendor/customer access to finance confirmed + customer "My Invoices" removed (2026-07-29)
+
+**Ask:** confirm vendors and customers have no access to finance/sales modules (invoices, quotations, etc.) before onboarding external vendor and customer logins.
+
+**Findings:**
+- **Vendors (Erection Engineers):** already fully blocked. Seeded role permissions
+  (`apps/api/prisma/seed.ts`) grant only `VIEW_SITE_STATUS`, `CHANGE_SITE_STATUS`,
+  `ACT_ASSIGNED_COMPLAINTS`, `ACT_ASSIGNED_WORK_ORDERS` — no finance permissions.
+  Every finance route is guarded by `requirePermission`, verified live in §22
+  (`Erection → /quotations 403, /finance/summary 403`). Vendor-to-vendor site
+  isolation via `Site.vendorId` (§11) is unaffected. **No change needed.**
+- **Customers:** RBAC permissions were already finance-free (`VIEW_SITE_STATUS`,
+  `RAISE_COMPLAINT`, `RESOLVE_PENDING_ACTION` only). However, a separate hardcoded
+  route, `GET /portal/invoices` (`apps/api/src/routes/portal.ts`), bypassed the
+  permission system entirely and let a logged-in customer see their **own** issued
+  invoices (status/paid/balance) via a "My Invoices" card on
+  `apps/admin-web/src/app/customer/portal/page.tsx`. This was built deliberately
+  per `FINANCE_MODULE_PLAN.md` in §21.
+
+**Decision (confirmed with the user):** remove customer invoice visibility
+entirely — finance stays management-only, no exceptions for customers or vendors.
+
+**Change:**
+- Deleted `apps/api/src/routes/portal.ts`.
+- `apps/api/src/index.ts`: removed the `portalRouter` import and its
+  `app.use("/portal", portalRouter)` registration.
+- `apps/admin-web/src/app/customer/portal/page.tsx`: removed the `invoices`
+  state, the `/portal/invoices` fetch, the now-unused `formatINR` import, and the
+  "My Invoices" `<section>` card.
+
+**Net result:** finance/sales modules (quotations, invoices, purchase orders,
+bills, expenses, finance dashboard) are reachable only by Super Admin, Owner/Admin,
+Management, Sales (quotations only), and Finance — never by vendors or customers.

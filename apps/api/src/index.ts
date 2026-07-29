@@ -18,7 +18,6 @@ import { invoicesRouter } from "./routes/invoices";
 import { purchaseOrdersRouter } from "./routes/purchase-orders";
 import { expensesRouter } from "./routes/expenses";
 import { financeDashboardRouter } from "./routes/financeDashboard";
-import { portalRouter } from "./routes/portal";
 import { workOrdersRouter } from "./routes/workOrders";
 
 const app = express();
@@ -46,7 +45,6 @@ app.use("/invoices", invoicesRouter);
 app.use("/purchase-orders", purchaseOrdersRouter);
 app.use("/expenses", expensesRouter);
 app.use("/finance", financeDashboardRouter);
-app.use("/portal", portalRouter);
 app.use("/work-orders", workOrdersRouter);
 
 // Catches anything a route handler throws or rejects with (Express 5 forwards rejected
