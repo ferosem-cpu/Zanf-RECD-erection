@@ -189,14 +189,14 @@ async function seedSampleUsers() {
 
   const internalUsers = [
     { name: "Super Admin", email: "ferosem@gmail.com", roleKey: ROLE_KEY.SUPER_ADMIN, title: "Super Admin" },
-    { name: "Priya Sharma", email: "owner@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Proprietor" },
-    { name: "Anil Mehta", email: "management@platino.example", roleKey: ROLE_KEY.MANAGEMENT, title: "Operations Head" },
-    { name: "Rahul Verma", email: "sales@platino.example", roleKey: ROLE_KEY.SALES, title: "Sales Engineer" },
-    { name: "Sunil Rao", email: "ops@platino.example", roleKey: ROLE_KEY.OPERATIONS_PM, title: "Project Manager" },
-    { name: "Vikram Singh", email: "erection@platino.example", roleKey: ROLE_KEY.ERECTION_ENGINEER, title: "Erection Engineer" },
-    { name: "Deepak Kumar", email: "commissioning@platino.example", roleKey: ROLE_KEY.COMMISSIONING_ENGINEER, title: "Commissioning Engineer" },
-    { name: "Meena Iyer", email: "service@platino.example", roleKey: ROLE_KEY.SERVICE_TEAM, title: "Service Team" },
-    { name: "Kavita Nair", email: "finance@platino.example", roleKey: ROLE_KEY.FINANCE, title: "Finance" },
+    { name: "Priya Sharma", email: "owner@example.com", roleKey: ROLE_KEY.MANAGEMENT, title: "Proprietor" },
+    { name: "Anil Mehta", email: "management@example.com", roleKey: ROLE_KEY.MANAGEMENT, title: "Operations Head" },
+    { name: "Rahul Verma", email: "sales@example.com", roleKey: ROLE_KEY.SALES, title: "Sales Engineer" },
+    { name: "Sunil Rao", email: "ops@example.com", roleKey: ROLE_KEY.OPERATIONS_PM, title: "Project Manager" },
+    { name: "Vikram Singh", email: "erection@example.com", roleKey: ROLE_KEY.ERECTION_ENGINEER, title: "Erection Engineer" },
+    { name: "Deepak Kumar", email: "commissioning@example.com", roleKey: ROLE_KEY.COMMISSIONING_ENGINEER, title: "Commissioning Engineer" },
+    { name: "Meena Iyer", email: "service@example.com", roleKey: ROLE_KEY.SERVICE_TEAM, title: "Service Team" },
+    { name: "Kavita Nair", email: "finance@example.com", roleKey: ROLE_KEY.FINANCE, title: "Finance" },
   ];
 
   for (const u of internalUsers) {
@@ -263,8 +263,8 @@ async function seedSampleOrder(customerId: string) {
     },
   });
 
-  const salesUser = await prisma.user.findUniqueOrThrow({ where: { email: "sales@platino.example" } });
-  const erectionUser = await prisma.user.findUniqueOrThrow({ where: { email: "erection@platino.example" } });
+  const salesUser = await prisma.user.findUniqueOrThrow({ where: { email: "sales@example.com" } });
+  const erectionUser = await prisma.user.findUniqueOrThrow({ where: { email: "erection@example.com" } });
   const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
 
   const order = await prisma.order.upsert({
@@ -328,7 +328,7 @@ async function seedVendors() {
 
   // Erection work is subcontracted: move the sample erection engineer under the approved vendor.
   await prisma.user.update({
-    where: { email: "erection@platino.example" },
+    where: { email: "erection@example.com" },
     data: { vendorId: approved.id },
   });
 
@@ -432,8 +432,8 @@ async function seedFinanceDemo(customerId: string) {
 
 async function seedWorkOrderDemo(orderId: string) {
   const site = await prisma.site.findUniqueOrThrow({ where: { orderId } });
-  const erectionUser = await prisma.user.findUniqueOrThrow({ where: { email: "erection@platino.example" } });
-  const opsUser = await prisma.user.findUniqueOrThrow({ where: { email: "ops@platino.example" } });
+  const erectionUser = await prisma.user.findUniqueOrThrow({ where: { email: "erection@example.com" } });
+  const opsUser = await prisma.user.findUniqueOrThrow({ where: { email: "ops@example.com" } });
 
   await prisma.workOrder.upsert({
     where: { workOrderNumber: "WO-2026-00001" },

@@ -43,7 +43,7 @@ export default function VendorRegisterPage() {
         <div className="text-center mb-6">
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">Vendor Registration</h1>
           <p className="mt-2 text-sm text-gray-500">
-            Register your erection company to be considered as a Platino installation partner.
+            Register your erection company to be considered as a Zan-F installation partner.
           </p>
         </div>
 
@@ -55,7 +55,7 @@ export default function VendorRegisterPage() {
               </svg>
             </div>
             <p className="text-sm text-gray-700">
-              Thanks — your registration has been submitted. Platino management will review it (due diligence)
+              Thanks — your registration has been submitted. Zan-F management will review it (due diligence)
               and, once approved, send login details to <strong>{form.contactEmail}</strong>.
             </p>
             <Link href="/login" className="inline-block text-sm font-medium text-[var(--theme-accent)]">Back to sign in</Link>

@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 
 export default function LoginScreen({ navigation }: { navigation: any }) {
   const { loginWithPassword } = useAuth();
-  const [email, setEmail] = useState("erection@platino.example");
+  const [email, setEmail] = useState("erection@example.com");
   const [password, setPassword] = useState("changeme123");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);

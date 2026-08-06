@@ -22,7 +22,7 @@ export interface ThemePreset {
 export const THEMES: ThemePreset[] = [
   {
     key: "slate",
-    name: "Platino Industrial",
+    name: "Zan-F Industrial",
     industry: "Default",
     colors: {
       primary: "#F58220",

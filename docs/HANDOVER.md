@@ -688,3 +688,75 @@ entirely — finance stays management-only, no exceptions for customers or vendo
 **Net result:** finance/sales modules (quotations, invoices, purchase orders,
 bills, expenses, finance dashboard) are reachable only by Super Admin, Owner/Admin,
 Management, Sales (quotations only), and Finance — never by vendors or customers.
+
+
+## 41. Email + OTP sign-in for customers and vendors (2026-07-29)
+
+**Ask:** when a customer or vendor registers, send an OTP to their email, and let
+them log in using email + OTP.
+
+**Decisions confirmed with the user before building:**
+- Customers: email+OTP is an **additional** login method, alongside the existing
+  Order Number + phone flow (not a replacement).
+- Vendors: email+OTP only works for **approved** vendors - same gate the existing
+  password login already uses. An unapproved/pending vendor gets the same generic
+  "invalid or expired code" response as a wrong email, so registration status
+  can't be probed from the login form.
+
+**Backend (`apps/api/src/routes/auth.ts`):** two new routes, `POST /auth/email-otp/request`
+and `POST /auth/email-otp/verify`, shared by both customer and vendor flows via a single
+`findEmailOtpEligibleUser(email)` helper:
+- A `User` row with `customerId` set is always eligible (matches an existing customer
+  contact - this is purely an additional identifier, not a new access grant).
+- A `User` row with `vendorId` set is eligible only if `vendor.status === "approved"`.
+- Internal staff (no `customerId`/`vendorId`) are not eligible - they still use
+  `/auth/login` (password) or `/auth/google`.
+- Both routes return the same generic response regardless of whether the email matched
+  an eligible account (`request`: "If that email is registered, an OTP has been sent to
+  it."; `verify`: "Invalid or expired OTP code") so the login form can't be used to probe
+  which emails exist or which vendors are approved - same pattern as every other OTP
+  route in this file.
+- OTP generation/storage/expiry (6-digit code, 10-minute `OtpCode` row, email delivery via
+  the existing `notificationService`) is identical to the existing phone-based OTP routes,
+  just keyed by email instead of phone.
+
+**Shared (`packages/shared/src/schemas.ts`):** `requestEmailOtpSchema` (`{ email }`),
+`verifyEmailOtpSchema` (`{ email, code }`).
+
+**Admin-web (`apps/admin-web/src/app/login/page.tsx`):**
+- **Track Order tab:** a small toggle (`Order ID + Phone` / `Email + OTP`) above the
+  existing form switches between the original flow and a new email+OTP flow. Both use
+  the same request/verify/dev-code-echo UI pattern as the existing customer OTP form.
+- **Vendor tab:** a `Register` / `Sign in` toggle. `Register` is the existing registration
+  form (copy updated to point at the new "Sign in" tab instead of "Staff Login tab with
+  your email", since vendors no longer need to know their login is password-based).
+  `Sign in` is the same email+OTP request/verify UI, reused via shared state and handlers
+  (`emailOtpAddress`, `handleEmailOtpRequest`, `handleEmailOtpVerify`, etc.) so the
+  identical component logic backs both the Track Order tab's email mode and the Vendor
+  tab's Sign in mode - no separate copy of the OTP UI was written per tab.
+- Vendor's existing password login (`/auth/login` under Staff Login) is untouched and
+  still works - email+OTP is additive for vendors, exactly as for customers.
+
+**Gotcha hit again, same root cause as §36:** after editing `packages/shared/src/schemas.ts`
+and rebuilding it (`npm run build --workspace=packages/shared`), `apps/api`'s `tsc --noEmit`
+still couldn't see the new exports (`requestEmailOtpSchema`/`verifyEmailOtpSchema` "not
+exported"). Cause was the same stale, gitignored real copy of `@recd/shared` sitting in
+`apps/api/node_modules/@recd/shared` (leftover from an earlier manual Vercel-deploy dance,
+§28/§32/§33/§36), shadowing the npm-workspaces symlink to the freshly-rebuilt
+`packages/shared`. Deleted it (`Remove-Item -Recurse -Force
+apps\api\node_modules\@recd\shared`) and `tsc` immediately saw the new exports. **Reconfirmed
+per §36: if a fresh `packages/shared` export "doesn't exist" from `apps/api`'s perspective
+right after editing it, delete `apps/api/node_modules/@recd/shared` before suspecting
+anything else - it's regenerated correctly by the next manual API deploy's `vercel pull`/
+patch step, so deleting it locally is always safe.**
+
+**Verified:** `packages/shared`, `apps/api`, and `apps/admin-web` all `tsc`/build clean
+after the fix. Not yet click-tested through a live browser this session - the user should
+smoke-test both new flows (customer email+OTP, vendor email+OTP once approved) before
+relying on them, same as any other unreviewed change in this log.
+
+**Not done / still open:** WhatsApp and Telegram OTP delivery remain stubbed (§8/§20) -
+this section only wires up the **email** channel for the new identifier, matching every
+other OTP flow in the app. The user separately asked about configuring WhatsApp OTP via
+Meta's Cloud API (in-chat, not yet implemented in code) - that's unrelated infrastructure
+setup, not a code change to this repo.

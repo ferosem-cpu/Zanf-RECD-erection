@@ -233,7 +233,7 @@ export default function CustomerPortalPage() {
                 </div>
                 <div>
                   <p className="text-[10px] uppercase font-bold tracking-wider text-gray-400">Support Owner</p>
-                  <p className="text-sm font-semibold mt-1">Platino Ops Team</p>
+                  <p className="text-sm font-semibold mt-1">Zan-F Ops Team</p>
                 </div>
               </div>
             </div>

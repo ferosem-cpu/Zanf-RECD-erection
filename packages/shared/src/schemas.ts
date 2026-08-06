@@ -9,6 +9,20 @@ export const requestOtpSchema = z.object({
   phone: z.string().min(8),
 });
 
+/**
+ * Email+OTP login for customers/vendors, as an alternative identifier to phone
+ * (customer) or password (vendor). Same OTP mechanics as requestOtpSchema/verifyOtpSchema,
+ * just keyed by email instead of phone - see auth.ts's /auth/email-otp/* routes.
+ */
+export const requestEmailOtpSchema = z.object({
+  email: z.string().email(),
+});
+
+export const verifyEmailOtpSchema = z.object({
+  email: z.string().email(),
+  code: z.string().length(6),
+});
+
 export const googleLoginSchema = z.object({
   /** The ID token returned by Google Identity Services' credential callback (a signed JWT). */
   credential: z.string().min(1),

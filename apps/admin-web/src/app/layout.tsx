@@ -18,7 +18,7 @@ const tinos = Tinos({
 
 export const metadata: Metadata = {
   title: "RECD Project & Service Tracker",
-  description: "Platino internal operations console",
+  description: "Zan-F internal operations console",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
