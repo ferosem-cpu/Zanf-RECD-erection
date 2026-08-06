@@ -774,3 +774,79 @@ three need the real copy present at deploy time; deleting the local one afterwar
 `zan-app-api.vercel.app` successfully via `npx vercel` run directly in this session
 (no auto-mode classifier block this time, consistent with �33's note that the CLI itself
 is runnable here - only `git push` needs the user's own hand).
+
+
+## 42. Real invoices entered, sample invoice removed (2026-07-29)
+
+**Ask:** replace the seed/sample finance data with 4 real invoices (supplied as PDFs) and
+delete the sample invoice.
+
+**What was done, directly against production (`zan-app`, `idqzupopsuusoihpmoqc`), no admin-web UI involved:**
+- Deleted the seed sample invoice `INV/2026-27/0001` (Sundaram Textiles, ₹10,03,000).
+- Created 3 new customers with GSTIN/address/state taken from the PDFs: Platino Automotive
+  Pvt Ltd (Chennai, TN), Energyca Solutions (Navi Mumbai, Maharashtra), Ojas Iconic
+  Technological Private Limited (Trichy, TN).
+- Created 4 invoices, renumbered via the app's own `DocumentSequence` (user's choice - not
+  the original external `ZANF/INV/2026/00X` numbers) as `INV/2026-27/0003` through `/0006`,
+  continuing from the sequence's existing `lastNumber=2` rather than resetting to 0 - matches
+  the documented no-gaps-on-delete design in §21, so this looks exactly like what the app
+  would produce if these had been entered through the UI at this point in time.
+- Tax type (CGST+SGST vs IGST) derived correctly per invoice from customer state vs company
+  state (Tamil Nadu): Platino (TN) and Ojas (TN) → CGST+SGST; Energyca (Maharashtra, both
+  invoices) → IGST. All match the source PDFs' printed totals exactly.
+- All 4 marked `status = "paid"` with a matching `PaymentReceived` row for the full amount
+  (user's choice). **Payment method (`bank_transfer`), reference (none), and paid date
+  (defaulted to the invoice's issue date) are placeholders** - the source PDFs had no
+  payment info. Correct these in the Invoices UI if the real details are known.
+
+| New number | Was (external) | Customer | Total |
+|---|---|---|---|
+| INV/2026-27/0003 | ZANF/INV/2026/001 | Platino Automotive Pvt Ltd | Rs 8,49,600 |
+| INV/2026-27/0004 | ZANF/INV/2026/002 | Energyca Solutions | Rs 11,21,000 |
+| INV/2026-27/0005 | ZANF/INV/2026/003 | Ojas Iconic Technological Pvt Ltd | Rs 5,78,200 |
+| INV/2026-27/0006 | ZANF/INV/2026/004 | Energyca Solutions | Rs 11,91,800 |
+
+**Verified:** re-queried all 4 invoices with a join back to their customer - status, tax
+split, and totals all match. No app code changes this session; no deploy needed.
+
+**Not done / open:** the user indicated some of these invoices' dates will need correcting
+later (to be provided separately) - not yet actioned as of this entry. Payment
+method/reference placeholders (above) should also be corrected once known.
+
+
+**Addendum (same session):** renumbered the 4 invoices again per the user's explicit
+follow-up - FY audit continuity requires 0001-0004 with no gap, overriding the earlier
+"no-gaps-on-delete" reasoning that produced 0003-0006. Since these are the fiscal year's
+first real invoices, closing the pre-existing gap (from unrelated deleted test/seed data)
+was the right call here. Final: INV/2026-27/0001 (Platino Automotive), /0002 (Energyca,
+first), /0003 (Ojas Iconic), /0004 (Energyca, second). `DocumentSequence.lastNumber` reset
+to 4, so the next invoice created through the app is 0005 with no gap. Verified via query.
+
+
+## 43. Invoices table: separate Amount/GST/Total columns + finance dashboard root-cause check (2026-07-29)
+
+**Ask 1 - Invoices list needs separate "Invoice amount" (pre-tax), "GST", and "Total" columns.**
+The API (`GET /invoices`) already returned `subtotal`/`cgstAmount`/`sgstAmount`/`igstAmount`
+per invoice (no backend change needed) - the table (`apps/admin-web/src/app/invoices/page.tsx`)
+just never rendered them, only `Total` and `Balance`. Added "Invoice amount" (= `subtotal`)
+and "GST" (= `cgstAmount + sgstAmount + igstAmount`, summed client-side since a given invoice
+is either CGST+SGST or IGST, never both) as new columns between Issue date and Total, on both
+the desktop table and the mobile card view. `tsc --noEmit` clean.
+
+**Ask 2 - "finance dashboard is not reflecting correct values."** Investigated
+`apps/api/src/routes/financeDashboard.ts` and the `/finance` page in full - **the dashboard
+code is correct, not a bug.** Root cause: `receivedThisMonth` sums `PaymentReceived` rows
+whose `receivedDate` falls in the *current calendar month*. The 4 real invoices entered in
+§42 have their payments dated to each invoice's original issue date (June/July 2026,
+placeholders - see §42's note that payment date/method weren't in the source PDFs), not the
+current month (August) - so "Received this month" correctly shows Rs 0 even though ~Rs 32.4L
+was actually received, because none of it was received *this month* by that data. Confirmed
+the money **does** show up correctly in the "Revenue vs expenses (last 12 months)" chart,
+bucketed under June/July - so the aggregation logic itself is sound. Outstanding
+receivables/overdue also correctly show Rs 0 since all 4 are `status = "paid"`.
+**No code change made for this one** - flagged back to the user: if the real payment dates
+are known, update the `PaymentReceived.receivedDate` rows and the KPI will reflect it
+correctly; otherwise this is expected behavior, not a defect.
+
+**Shipped:** `apps/admin-web` only, no API/schema changes, no `zan-app-api` redeploy needed -
+just push and `admin-web` auto-deploys.

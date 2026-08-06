@@ -13,6 +13,10 @@ interface InvoiceRow {
   status: string;
   issueDate: string;
   dueDate?: string | null;
+  subtotal: string;
+  cgstAmount: string;
+  sgstAmount: string;
+  igstAmount: string;
   total: string;
   amountPaid: string;
   balance: string;
@@ -160,6 +164,8 @@ export default function InvoicesPage() {
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Customer</th>
                 <th className="px-4 py-3">Issue date</th>
+                <th className="px-4 py-3">Invoice amount</th>
+                <th className="px-4 py-3">GST</th>
                 <th className="px-4 py-3">Total</th>
                 <th className="px-4 py-3">Balance</th>
                 <th className="px-4 py-3">Status</th>
@@ -172,7 +178,9 @@ export default function InvoicesPage() {
                   <td className="px-4 py-3 text-gray-500">{r.docType === "tax_invoice" ? "Tax" : "Proforma"}</td>
                   <td className="px-4 py-3">{r.customer.name}</td>
                   <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.issueDate)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{formatINR(r.total)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">{formatINR(r.subtotal)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">{formatINR(String(parseFloat(r.cgstAmount) + parseFloat(r.sgstAmount) + parseFloat(r.igstAmount)))}</td>
+                  <td className="px-4 py-3 whitespace-nowrap font-semibold">{formatINR(r.total)}</td>
                   <td className="px-4 py-3 whitespace-nowrap">{formatINR(r.balance)}</td>
                   <td className="px-4 py-3">
                     <span className={statusPillClass(r.status)}>{INVOICE_STATUS_LABEL[r.status] ?? r.status}</span>
@@ -180,7 +188,7 @@ export default function InvoicesPage() {
                   </td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No invoices yet.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">No invoices yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -197,6 +205,9 @@ export default function InvoicesPage() {
                 <span className={statusPillClass(r.status)}>{INVOICE_STATUS_LABEL[r.status] ?? r.status}</span>
               </div>
               <p className="text-sm font-semibold text-gray-900 truncate">{r.customer.name}</p>
+              <div className="data-card-row"><span className="label">Amount</span><span className="value">{formatINR(r.subtotal)}</span></div>
+              <div className="data-card-row"><span className="label">GST</span><span className="value">{formatINR(String(parseFloat(r.cgstAmount) + parseFloat(r.sgstAmount) + parseFloat(r.igstAmount)))}</span></div>
+              <div className="data-card-row"><span className="label">Total</span><span className="value">{formatINR(r.total)}</span></div>
               <div className="data-card-row"><span className="label">Balance</span><span className="value font-semibold">{formatINR(r.balance)}</span></div>
             </Link>
           ))
