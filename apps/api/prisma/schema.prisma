@@ -95,6 +95,7 @@ model User {
   billsRecorded        Bill[]             @relation("BillRecorder")
   paymentsMade         PaymentMade[]      @relation("PaymentMadeRecorder")
   expensesRecorded     Expense[]          @relation("ExpenseRecorder")
+  invoiceEdits         InvoiceEditLog[]   @relation("InvoiceEditor")
   workOrdersAssigned   WorkOrder[]        @relation("WorkOrderAssignee")
   workOrdersCreated    WorkOrder[]        @relation("WorkOrderCreator")
 }
@@ -609,6 +610,22 @@ model Invoice {
 
   lineItems InvoiceLineItem[]
   payments  PaymentReceived[]
+  editLogs  InvoiceEditLog[]
+}
+
+/// Audit trail for edits made to an invoice after it has already been issued/paid.
+/// Draft edits are not logged here (a draft isn't a real document yet); once an invoice
+/// has a real customer-facing status, any correction gets a row here so "who changed what,
+/// when" stays visible on the invoice - requested explicitly so issued/paid invoices can be
+/// corrected without silently rewriting history.
+model InvoiceEditLog {
+  id         String   @id @default(cuid())
+  invoiceId  String
+  invoice    Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  editedById String
+  editedBy   User     @relation("InvoiceEditor", fields: [editedById], references: [id])
+  summary    String   // human-readable diff, e.g. "Total: Rs 8,49,600 -> Rs 8,50,000; Due date: 10/07/2026 -> 15/07/2026"
+  editedAt   DateTime @default(now())
 }
 
 model InvoiceLineItem {

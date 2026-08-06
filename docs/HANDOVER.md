@@ -892,3 +892,80 @@ the Invoices page and confirm 0001 now sorts first.
 **Shipped:** API-only change, `zan-app-api` deployed. `admin-web` unaffected, no push
 needed for this fix specifically (though it will be included whenever the next commit is
 pushed, since the source change lives in the same repo).
+
+
+## 46. Finance dashboard chart/payable misalignment - stale PaymentReceived date (2026-07-29)
+
+**Ask:** "the finance dashboard is not in alignment with the payable... the graphs are
+showing in different months."
+
+**Root cause:** when §44 corrected `INV/2026-27/0001`'s issue date to 09/04/2026, only the
+`Invoice.issueDate` column was updated - the invoice's linked `PaymentReceived.receivedDate`
+was left at its old placeholder value (10/07/2026, from §42's original data entry). Since
+the "Revenue vs expenses" chart (`GET /finance/reports/monthly-revenue`) buckets money by
+`PaymentReceived.receivedDate`, not by the invoice's own date, this invoice's Rs 8,49,600
+kept showing up under July even though the invoice itself now correctly reads April -
+exactly the "graphs showing in different months" symptom.
+
+**Fix:** updated that one `PaymentReceived.receivedDate` to match the corrected invoice
+date (09/04/2026). All 4 invoices' issue date and payment date now match exactly. No code
+change - this was a data-consistency gap left over from §44, not a dashboard bug.
+
+**Lesson for next time:** an `Invoice`'s date and its `PaymentReceived` row(s)' dates are
+independent columns - correcting one does not correct the other. Any future invoice date
+correction should also check/update its linked payment date(s) in the same pass.
+
+
+## 47. Edit issued/paid invoices, with a visible audit trail (2026-07-29)
+
+**Ask:** "i dont have options to edit correct invoice once its paid if we made a mistake" -
+the invoice detail page had **no edit UI at all** (not even for drafts), and the API
+explicitly rejected `PUT /invoices/:id` for anything but `draft` status.
+
+**Decisions confirmed with the user before building:**
+- Everything is editable post-issue/paid: amounts, line items, customer, dates, terms - not
+  restricted to non-financial fields.
+- Anyone with `manage_invoices` (current Finance/Sales/Management access) can edit - no
+  extra restriction to Super Admin/Management only.
+- Edits to an already-issued/paid invoice must leave a visible audit trail (who changed
+  what, when), rather than silently rewriting the document.
+
+**Schema (migration `20260806122609_add_invoice_edit_log`):** new `InvoiceEditLog` model
+(`invoiceId`, `editedById`, `summary`, `editedAt`), back-relations on `Invoice`
+(`editLogs`) and `User` (`invoiceEdits`). Applied to both local dev and production
+(`zan-app`, via Supabase `apply_migration` + RLS enabled + `_prisma_migrations` ledger
+entry, matching established practice).
+
+**Backend (`apps/api/src/routes/invoices.ts`):**
+- `PUT /:id` no longer requires `draft` status - only `cancelled` invoices are blocked
+  from editing (a cancelled invoice is a dead end, same as before for payments).
+- Fixed a pre-existing bug as a side effect: `issueDate` was in `invoiceUpdateSchema` all
+  along but the route never applied it, even for drafts - now wired up.
+- Totals are recomputed whenever line items change **or** place-of-supply changes (place of
+  supply determines CGST+SGST vs IGST, so it affects totals even without touching line
+  items) - previously only line-item changes triggered a recompute.
+- If amounts change after payments were already recorded, invoice `status` is recomputed
+  via the same `deriveInvoiceStatus` logic a new payment would use, so a corrected total
+  that's no longer fully covered correctly drops from `paid` back to `partially_paid`
+  rather than leaving a stale status.
+- For any invoice that was already non-draft, a diff is computed (customer, issue/due date,
+  place of supply, notes/terms changed-or-not, line item count, total, status) and written
+  to `InvoiceEditLog` as one human-readable summary line - draft edits are not logged
+  (a draft isn't a real document yet).
+- `GET /:id` now includes `editLogs` (newest first, with the editor's name).
+
+**Admin-web (`apps/admin-web/src/app/invoices/[id]/page.tsx`):** new "Edit invoice" button
+(any non-cancelled status) opening a modal identical in shape to the existing "New invoice"
+modal (customer picker, place of supply, dates, line-item editor, notes/terms), pre-filled
+from the current invoice. If the invoice isn't a draft, a warning banner explains the edit
+will be logged, and submitting requires a `window.confirm()` before saving - consistent
+with the existing `cancel()` action's confirmation pattern. A new "Edit history" card
+(shown only when logs exist) lists each change with who/when.
+
+**Verified:** `tsc --noEmit` clean on both apps. Deployed to production via the standard
+manual `zan-app-api` dance (3-spot `@recd/shared` patch), `/health` confirmed 200 on the
+new deployment. Not click-tested through a live browser this session - recommend the user
+test editing one of the real invoices (e.g. correcting a date) and confirm the Edit history
+entry appears correctly.
+
+**Shipped:** both API (deployed) and admin-web (needs `git push` to auto-deploy) changed.

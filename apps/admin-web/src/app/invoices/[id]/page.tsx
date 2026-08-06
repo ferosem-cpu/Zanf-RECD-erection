@@ -8,6 +8,7 @@ import { formatINR, formatDate, INVOICE_STATUS_LABEL, PAYMENT_METHOD_LABEL, stat
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string; lineTotal: string; }
 interface Payment { id: string; amount: string; method: string; reference?: string | null; receivedDate: string; notes?: string | null; }
+interface EditLog { id: string; summary: string; editedAt: string; editedBy: { name: string } }
 interface InvoiceDetail {
   id: string;
   invoiceNumber: string;
@@ -31,7 +32,9 @@ interface InvoiceDetail {
   customer: { id: string; name: string };
   lineItems: LineItem[];
   payments: Payment[];
+  editLogs: EditLog[];
 }
+interface Customer { id: string; name: string; state?: string | null; }
 
 export default function InvoiceDetailPage() {
   const router = useRouter();
@@ -40,6 +43,7 @@ export default function InvoiceDetailPage() {
   const canRecord = hasPermission("record_payments");
 
   const [inv, setInv] = useState<InvoiceDetail | null>(null);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [action, setAction] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -50,8 +54,9 @@ export default function InvoiceDetailPage() {
     if (!id) return;
     setError(null);
     api<InvoiceDetail>(`/invoices/${id}`).then(setInv).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
+    if (canManage) api<Customer[]>("/customers").then(setCustomers).catch(() => {});
   }
-  useEffect(load, [id]);
+  useEffect(load, [id, canManage]);
 
   async function issue() {
     setAction("issue"); setMsg(null);
@@ -81,6 +86,78 @@ export default function InvoiceDetailPage() {
       setPayOpen(false); setPay({ amount: "", method: "bank_transfer", reference: "", notes: "" });
       setMsg("Payment recorded."); load();
     } catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setAction(null); }
+  }
+
+  // Editing - available for any non-cancelled invoice, including issued/paid ones. Edits to
+  // an already-issued invoice are logged server-side (InvoiceEditLog) so the correction stays
+  // visible rather than silently rewriting the document - see the "Edit history" card below.
+  const [editOpen, setEditOpen] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ customerId: "", placeOfSupply: "", issueDate: "", dueDate: "", notes: "", terms: "" });
+  const [editLines, setEditLines] = useState<{ description: string; hsnCode: string; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string }[]>([]);
+
+  function openEdit() {
+    if (!inv) return;
+    setEditError(null);
+    setEditForm({
+      customerId: inv.customer.id,
+      placeOfSupply: inv.placeOfSupply ?? "",
+      issueDate: inv.issueDate.slice(0, 10),
+      dueDate: inv.dueDate ? inv.dueDate.slice(0, 10) : "",
+      notes: inv.notes ?? "",
+      terms: inv.terms ?? "",
+    });
+    setEditLines(inv.lineItems.map((l) => ({
+      description: l.description,
+      hsnCode: l.hsnCode ?? "",
+      quantity: l.quantity,
+      unitPrice: l.unitPrice,
+      discountPct: l.discountPct,
+      taxRatePct: l.taxRatePct,
+    })));
+    setEditOpen(true);
+  }
+  function addEditLine() {
+    setEditLines((l) => [...l, { description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" }]);
+  }
+  function updateEditLine(i: number, patch: Partial<(typeof editLines)[number]>) {
+    setEditLines((l) => l.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  }
+  function removeEditLine(i: number) {
+    setEditLines((l) => l.filter((_, idx) => idx !== i));
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!inv) return;
+    setEditError(null);
+    if (inv.status !== "draft") {
+      const ok = window.confirm(
+        `This invoice is already ${INVOICE_STATUS_LABEL[inv.status] ?? inv.status}. Changes will be recorded in the edit history below. Continue?`,
+      );
+      if (!ok) return;
+    }
+    setAction("edit");
+    try {
+      await api(`/invoices/${id}`, { method: "PUT", body: JSON.stringify({
+        customerId: editForm.customerId,
+        placeOfSupply: editForm.placeOfSupply || undefined,
+        issueDate: new Date(editForm.issueDate).toISOString(),
+        dueDate: editForm.dueDate ? new Date(editForm.dueDate).toISOString() : undefined,
+        notes: editForm.notes || undefined,
+        terms: editForm.terms || undefined,
+        lineItems: editLines.map((l) => ({
+          description: l.description,
+          hsnCode: l.hsnCode || undefined,
+          quantity: parseFloat(l.quantity) || 0,
+          unitPrice: parseFloat(l.unitPrice) || 0,
+          discountPct: parseFloat(l.discountPct) || 0,
+          taxRatePct: parseFloat(l.taxRatePct) || 18,
+        })),
+      }) });
+      setEditOpen(false);
+      setMsg("Invoice updated."); load();
+    } catch (err) { setEditError(err instanceof Error ? err.message : "Failed to update invoice"); } finally { setAction(null); }
   }
 
   if (error) return <p className="text-sm text-red-600 p-4">{error}</p>;
@@ -169,6 +246,20 @@ export default function InvoiceDetailPage() {
         )}
       </div>
 
+      {inv.editLogs.length > 0 && (
+        <div className="card p-4">
+          <h2 className="text-sm font-semibold mb-2">Edit history</h2>
+          <div className="space-y-2 text-sm">
+            {inv.editLogs.map((e) => (
+              <div key={e.id} className="border-b pb-2 last:border-b-0 last:pb-0">
+                <p className="text-gray-700">{e.summary}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{e.editedBy.name} · {formatDate(e.editedAt)}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {canManage && inv.status === "draft" && (
         <button className="btn-primary px-4 py-2 text-sm" disabled={!!action} onClick={issue}>Issue invoice</button>
       )}
@@ -177,6 +268,9 @@ export default function InvoiceDetailPage() {
       )}
       {canRecord && (inv.status === "issued" || inv.status === "partially_paid") && (
         <button className="btn-primary px-4 py-2 text-sm" onClick={() => setPayOpen(true)}>Record payment</button>
+      )}
+      {canManage && inv.status !== "cancelled" && (
+        <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" onClick={openEdit}>Edit invoice</button>
       )}
 
       <button onClick={() => router.push(`/invoices/${inv.id}/print`)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Print</button>
@@ -211,6 +305,87 @@ export default function InvoiceDetailPage() {
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setPayOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Cancel</button>
                 <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action ? "Saving…" : "Record"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editOpen && inv && (
+        <div className="modal-backdrop" onClick={() => setEditOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Edit invoice</h3>
+              <button onClick={() => setEditOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            {inv.status !== "draft" && (
+              <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-800 mb-4">
+                This invoice has already been {INVOICE_STATUS_LABEL[inv.status] ?? inv.status}. Any change you save here will be
+                added to the Edit history below, visible to everyone with invoice access.
+              </div>
+            )}
+            <form onSubmit={saveEdit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+                  <select required className="field w-full" value={editForm.customerId} onChange={(e) => {
+                    const cid = e.target.value;
+                    const c = customers.find((x) => x.id === cid);
+                    setEditForm({ ...editForm, customerId: cid, placeOfSupply: c?.state ?? editForm.placeOfSupply });
+                  }}>
+                    {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Place of supply (state)</label>
+                  <input className="field w-full" value={editForm.placeOfSupply} onChange={(e) => setEditForm({ ...editForm, placeOfSupply: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Issue date</label>
+                  <input type="date" required className="field w-full" value={editForm.issueDate} onChange={(e) => setEditForm({ ...editForm, issueDate: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Due date</label>
+                  <input type="date" className="field w-full" value={editForm.dueDate} onChange={(e) => setEditForm({ ...editForm, dueDate: e.target.value })} />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Line items</label>
+                  <button type="button" onClick={addEditLine} className="text-xs font-medium text-[var(--theme-accent)]">+ Add line</button>
+                </div>
+                <div className="space-y-2">
+                  {editLines.map((l, i) => (
+                    <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateEditLine(i, { description: e.target.value })} required />
+                        <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateEditLine(i, { hsnCode: e.target.value })} />
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <input type="number" step="0.01" className="field" placeholder="Qty" value={l.quantity} onChange={(e) => updateEditLine(i, { quantity: e.target.value })} />
+                        <input type="number" step="0.01" className="field" placeholder="Unit price" value={l.unitPrice} onChange={(e) => updateEditLine(i, { unitPrice: e.target.value })} />
+                        <input type="number" step="0.01" className="field" placeholder="Tax %" value={l.taxRatePct} onChange={(e) => updateEditLine(i, { taxRatePct: e.target.value })} />
+                      </div>
+                      <button type="button" onClick={() => removeEditLine(i)} className="text-xs text-red-500">Remove</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+                <textarea className="field w-full" rows={2} value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Terms</label>
+                <textarea className="field w-full" rows={2} value={editForm.terms} onChange={(e) => setEditForm({ ...editForm, terms: e.target.value })} />
+              </div>
+
+              {editError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{editError}</p>}
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => setEditOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action === "edit" ? "Saving…" : "Save changes"}</button>
               </div>
             </form>
           </div>
