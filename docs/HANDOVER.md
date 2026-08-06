@@ -969,3 +969,33 @@ test editing one of the real invoices (e.g. correcting a date) and confirm the E
 entry appears correctly.
 
 **Shipped:** both API (deployed) and admin-web (needs `git push` to auto-deploy) changed.
+
+
+## 48. Edit/remove already-recorded payments (2026-07-29)
+
+**Ask:** "i am not able to edit partially paid section, the edit works only on invoice
+amount" - §47's invoice edit modal covers invoice fields (customer, dates, line items,
+terms) but has no way to correct a payment that was already recorded (wrong amount, date,
+method, reference) - the only payment action was "Record payment" (add new), never edit
+or remove an existing one.
+
+**Backend (`apps/api/src/routes/invoices.ts`):**
+- `PUT /:id/payments/:paymentId` - edits an existing `PaymentReceived` row (amount, method,
+  reference, receivedDate, notes - all optional/partial via new `paymentUpdateSchema` in
+  `packages/shared`). Validates the corrected amount doesn't push total paid above the
+  invoice total (same guard as recording a new payment). Recomputes invoice `status` via
+  `deriveInvoiceStatus` afterward. Logs a diff to `InvoiceEditLog` (same table/pattern as
+  §47), since a payment can only exist against a non-draft invoice.
+- `DELETE /:id/payments/:paymentId` - removes a payment recorded in error entirely,
+  recomputes status, logs the removal (amount/method/date) to `InvoiceEditLog`.
+- Both gated by `record_payments` (same permission as adding a payment).
+
+**Admin-web (`invoices/[id]/page.tsx`):** each row in "Payment history" now has **Edit**
+and **Remove** actions (visible to anyone with `record_payments`). Edit opens a small modal
+pre-filled with that payment's values; Remove asks for confirmation first
+(`window.confirm`), matching the existing invoice-cancel pattern.
+
+**Verified:** `tsc --noEmit` clean on both apps. Deployed to production via the standard
+manual `zan-app-api` dance, `/health` confirmed 200. Not click-tested live this session.
+
+**Shipped:** API deployed; admin-web needs `git push` to auto-deploy.

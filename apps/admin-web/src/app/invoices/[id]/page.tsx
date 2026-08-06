@@ -160,6 +160,52 @@ export default function InvoiceDetailPage() {
     } catch (err) { setEditError(err instanceof Error ? err.message : "Failed to update invoice"); } finally { setAction(null); }
   }
 
+  // Correcting/removing an already-recorded payment - distinct from the "Record payment"
+  // flow above, which only adds new ones.
+  const [editPayId, setEditPayId] = useState<string | null>(null);
+  const [editPayForm, setEditPayForm] = useState({ amount: "", method: "bank_transfer", reference: "", receivedDate: "", notes: "" });
+  const [payActionError, setPayActionError] = useState<string | null>(null);
+
+  function openEditPayment(p: Payment) {
+    setPayActionError(null);
+    setEditPayForm({
+      amount: p.amount,
+      method: p.method,
+      reference: p.reference ?? "",
+      receivedDate: p.receivedDate.slice(0, 10),
+      notes: p.notes ?? "",
+    });
+    setEditPayId(p.id);
+  }
+
+  async function savePaymentEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editPayId) return;
+    setPayActionError(null);
+    setAction("editPay");
+    try {
+      await api(`/invoices/${id}/payments/${editPayId}`, { method: "PUT", body: JSON.stringify({
+        amount: parseFloat(editPayForm.amount),
+        method: editPayForm.method,
+        reference: editPayForm.reference || undefined,
+        receivedDate: new Date(editPayForm.receivedDate).toISOString(),
+        notes: editPayForm.notes || undefined,
+      }) });
+      setEditPayId(null);
+      setMsg("Payment updated."); load();
+    } catch (err) { setPayActionError(err instanceof Error ? err.message : "Failed to update payment"); } finally { setAction(null); }
+  }
+
+  async function deletePayment(paymentId: string) {
+    const ok = window.confirm("Remove this payment? This cannot be undone, and the invoice's status will be recalculated.");
+    if (!ok) return;
+    setAction("deletePay"); setMsg(null);
+    try {
+      await api(`/invoices/${id}/payments/${paymentId}`, { method: "DELETE" });
+      setMsg("Payment removed."); load();
+    } catch (err) { setMsg(err instanceof Error ? err.message : "Failed to remove payment"); } finally { setAction(null); }
+  }
+
   if (error) return <p className="text-sm text-red-600 p-4">{error}</p>;
   if (!inv) return <p className="text-sm text-gray-500 p-4">Loading…</p>;
 
@@ -233,13 +279,21 @@ export default function InvoiceDetailPage() {
         ) : (
           <div className="space-y-2 text-sm">
             {inv.payments.map((p) => (
-              <div key={p.id} className="flex justify-between border-b pb-2">
+              <div key={p.id} className="flex justify-between items-center border-b pb-2 gap-3">
                 <div>
                   <span className="font-medium">{formatINR(p.amount)}</span>
                   <span className="text-gray-500 ml-2">{PAYMENT_METHOD_LABEL[p.method] ?? p.method}</span>
                   {p.reference && <span className="text-gray-400 ml-2">({p.reference})</span>}
                 </div>
-                <span className="text-gray-500">{formatDate(p.receivedDate)}</span>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-gray-500">{formatDate(p.receivedDate)}</span>
+                  {canRecord && (
+                    <>
+                      <button type="button" onClick={() => openEditPayment(p)} className="text-xs font-medium text-[var(--theme-accent)]">Edit</button>
+                      <button type="button" disabled={!!action} onClick={() => deletePayment(p.id)} className="text-xs font-medium text-red-500">Remove</button>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -305,6 +359,46 @@ export default function InvoiceDetailPage() {
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setPayOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Cancel</button>
                 <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action ? "Saving…" : "Record"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editPayId && (
+        <div className="modal-backdrop" onClick={() => setEditPayId(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Edit payment</h3>
+              <button onClick={() => setEditPayId(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form onSubmit={savePaymentEdit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Amount (₹)</label>
+                <input type="number" step="0.01" required className="field w-full" value={editPayForm.amount} onChange={(e) => setEditPayForm({ ...editPayForm, amount: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Method</label>
+                <select className="field w-full" value={editPayForm.method} onChange={(e) => setEditPayForm({ ...editPayForm, method: e.target.value })}>
+                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="upi">UPI</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="cash">Cash</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Date received</label>
+                <input type="date" required className="field w-full" value={editPayForm.receivedDate} onChange={(e) => setEditPayForm({ ...editPayForm, receivedDate: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Reference (UTR / cheque no)</label>
+                <input className="field w-full" value={editPayForm.reference} onChange={(e) => setEditPayForm({ ...editPayForm, reference: e.target.value })} />
+              </div>
+              {payActionError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{payActionError}</p>}
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => setEditPayId(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Cancel</button>
+                <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action === "editPay" ? "Saving…" : "Save"}</button>
               </div>
             </form>
           </div>

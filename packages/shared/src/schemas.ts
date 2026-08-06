@@ -228,6 +228,8 @@ export const paymentCreateSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
+export const paymentUpdateSchema = paymentCreateSchema.partial();
+
 export const supplierCreateSchema = z.object({
   name: z.string().min(1),
   gstin: z.string().max(20).optional(),

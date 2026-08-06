@@ -9,6 +9,7 @@ import {
   invoiceUpdateSchema,
   invoiceCancelSchema,
   paymentCreateSchema,
+  paymentUpdateSchema,
   INVOICE_DOC_TYPE,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
@@ -427,3 +428,103 @@ invoicesRouter.get("/:id/payments", requirePermission(PERMISSION_KEY.MANAGE_INVO
   });
   res.json(payments);
 });
+
+// Correct a previously-recorded payment (wrong amount, date, method, reference, etc.) - as
+// distinct from POST /:id/payments, which only ever adds a new one. Recomputes the invoice's
+// paid-vs-total status afterward (same as recording a new payment) and, since the invoice is
+// necessarily non-draft by the time a payment exists against it, logs the correction to
+// InvoiceEditLog - same audit-trail requirement as invoice field edits (see §47).
+invoicesRouter.put(
+  "/:id/payments/:paymentId",
+  requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
+  async (req: AuthenticatedRequest, res) => {
+    const id = asString(req.params.id);
+    const paymentId = asString(req.params.paymentId);
+    const parsed = paymentUpdateSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const data = parsed.data;
+
+    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { payments: true } });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    if (invoice.status === INVOICE_STATUS.CANCELLED) {
+      return res.status(400).json({ error: "Cannot edit payments on a cancelled invoice" });
+    }
+    const payment = invoice.payments.find((p) => p.id === paymentId);
+    if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+    const otherPaid = invoice.payments.filter((p) => p.id !== paymentId).reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+    const newAmount = data.amount !== undefined ? new Prisma.Decimal(String(data.amount)) : new Prisma.Decimal(payment.amount);
+    if (otherPaid.plus(newAmount).greaterThan(new Prisma.Decimal(invoice.total))) {
+      return res.status(400).json({ error: "This amount would exceed the invoice total" });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedPayment = await tx.paymentReceived.update({
+        where: { id: paymentId },
+        data: {
+          amount: data.amount !== undefined ? newAmount : undefined,
+          method: data.method,
+          reference: data.reference,
+          receivedDate: data.receivedDate ? new Date(data.receivedDate) : undefined,
+          notes: data.notes,
+        },
+      });
+
+      const newStatus = deriveInvoiceStatus(new Prisma.Decimal(invoice.total), otherPaid.plus(newAmount));
+      const updatedInvoice = await tx.invoice.update({ where: { id }, data: { status: newStatus } });
+
+      const changes: string[] = [];
+      if (data.amount !== undefined && newAmount.toString() !== new Prisma.Decimal(payment.amount).toString()) {
+        changes.push(`Payment amount: Rs ${new Prisma.Decimal(payment.amount).toFixed(2)} -> Rs ${newAmount.toFixed(2)}`);
+      }
+      if (data.method && data.method !== payment.method) changes.push(`Payment method: ${payment.method} -> ${data.method}`);
+      if (data.reference !== undefined && data.reference !== payment.reference) changes.push("Payment reference updated");
+      if (data.receivedDate) {
+        const newDate = new Date(data.receivedDate).toISOString().slice(0, 10);
+        const oldDate = payment.receivedDate.toISOString().slice(0, 10);
+        if (newDate !== oldDate) changes.push(`Payment date: ${oldDate} -> ${newDate}`);
+      }
+      if (newStatus !== invoice.status) changes.push(`Status: ${invoice.status} -> ${newStatus}`);
+      if (changes.length > 0) {
+        await tx.invoiceEditLog.create({
+          data: { invoiceId: id, editedById: req.auth!.userId, summary: changes.join("; ") },
+        });
+      }
+
+      return updatedInvoice;
+    });
+    res.json(updated);
+  },
+);
+
+// Remove a payment recorded in error entirely (as opposed to correcting its details above).
+invoicesRouter.delete(
+  "/:id/payments/:paymentId",
+  requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
+  async (req: AuthenticatedRequest, res) => {
+    const id = asString(req.params.id);
+    const paymentId = asString(req.params.paymentId);
+
+    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { payments: true } });
+    if (!invoice) return res.status(404).json({ error: "Invoice not found" });
+    const payment = invoice.payments.find((p) => p.id === paymentId);
+    if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+    const remainingPaid = invoice.payments.filter((p) => p.id !== paymentId).reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.paymentReceived.delete({ where: { id: paymentId } });
+      const newStatus = deriveInvoiceStatus(new Prisma.Decimal(invoice.total), remainingPaid);
+      const updatedInvoice = await tx.invoice.update({ where: { id }, data: { status: newStatus } });
+      await tx.invoiceEditLog.create({
+        data: {
+          invoiceId: id,
+          editedById: req.auth!.userId,
+          summary: `Payment removed: Rs ${new Prisma.Decimal(payment.amount).toFixed(2)} (${payment.method}, ${payment.receivedDate.toISOString().slice(0, 10)}); Status: ${invoice.status} -> ${newStatus}`,
+        },
+      });
+      return updatedInvoice;
+    });
+    res.json(updated);
+  },
+);
