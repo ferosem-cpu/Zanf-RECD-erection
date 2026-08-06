@@ -220,6 +220,11 @@ export const PAYMENT_METHOD = {
   UPI: "upi",
   CHEQUE: "cheque",
   CASH: "cash",
+  /** TDS withheld by the customer at the time of payment - a real settlement of the
+   * receivable (the customer remits it to the government on the vendor's behalf, so it's
+   * a tax credit, not lost revenue), tracked as a payment row so the invoice's paid/balance
+   * math and status derivation work exactly like any other payment method. */
+  TDS: "tds",
   OTHER: "other",
 } as const;
 export type PaymentMethod = (typeof PAYMENT_METHOD)[keyof typeof PAYMENT_METHOD];

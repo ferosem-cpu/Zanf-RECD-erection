@@ -38,6 +38,7 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   upi: "UPI",
   cheque: "Cheque",
   cash: "Cash",
+  tds: "TDS Deducted",
   other: "Other",
 };
 

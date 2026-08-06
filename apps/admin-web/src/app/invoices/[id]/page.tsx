@@ -71,21 +71,53 @@ export default function InvoiceDetailPage() {
     catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setAction(null); }
   }
 
+  // Recording payment(s) - one form can record several part-payments at once, each with its
+  // own amount/method/UTR-or-cheque-reference/date, since real payments often arrive in
+  // multiple tranches with different references. Rows are submitted sequentially against the
+  // existing POST /:id/payments (each call re-validates against the remaining outstanding
+  // balance using the invoice's up-to-date paid total, so this stays correct without needing
+  // a separate bulk endpoint) and the invoice is reloaded once at the end so the total shown
+  // reflects the sum of everything just entered.
+  const today = () => new Date().toISOString().slice(0, 10);
   const [payOpen, setPayOpen] = useState(false);
-  const [pay, setPay] = useState({ amount: "", method: "bank_transfer", reference: "", notes: "" });
+  const [payRows, setPayRows] = useState([{ amount: "", method: "bank_transfer", reference: "", receivedDate: today(), notes: "" }]);
+  const [payError, setPayError] = useState<string | null>(null);
+
+  function openPay() {
+    setPayError(null);
+    setPayRows([{ amount: "", method: "bank_transfer", reference: "", receivedDate: today(), notes: "" }]);
+    setPayOpen(true);
+  }
+  function addPayRow() {
+    setPayRows((r) => [...r, { amount: "", method: "bank_transfer", reference: "", receivedDate: today(), notes: "" }]);
+  }
+  function updatePayRow(i: number, patch: Partial<(typeof payRows)[number]>) {
+    setPayRows((r) => r.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  }
+  function removePayRow(i: number) {
+    setPayRows((r) => r.filter((_, idx) => idx !== i));
+  }
+
   async function recordPayment(e: React.FormEvent) {
     e.preventDefault();
-    setAction("pay"); setMsg(null);
+    setAction("pay"); setPayError(null);
     try {
-      await api(`/invoices/${id}/payments`, { method: "POST", body: JSON.stringify({
-        amount: parseFloat(pay.amount),
-        method: pay.method,
-        reference: pay.reference || undefined,
-        notes: pay.notes || undefined,
-      }) });
-      setPayOpen(false); setPay({ amount: "", method: "bank_transfer", reference: "", notes: "" });
-      setMsg("Payment recorded."); load();
-    } catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setAction(null); }
+      for (const row of payRows) {
+        await api(`/invoices/${id}/payments`, { method: "POST", body: JSON.stringify({
+          amount: parseFloat(row.amount),
+          method: row.method,
+          reference: row.reference || undefined,
+          receivedDate: row.receivedDate ? new Date(row.receivedDate).toISOString() : undefined,
+          notes: row.notes || undefined,
+        }) });
+      }
+      setPayOpen(false);
+      setMsg(payRows.length > 1 ? `${payRows.length} payments recorded.` : "Payment recorded.");
+      load();
+    } catch (err) {
+      setPayError(err instanceof Error ? err.message : "Failed to record payment");
+      load(); // reflect whatever rows succeeded before the failure
+    } finally { setAction(null); }
   }
 
   // Editing - available for any non-cancelled invoice, including issued/paid ones. Edits to
@@ -321,7 +353,7 @@ export default function InvoiceDetailPage() {
         <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-red-600" disabled={!!action} onClick={cancel}>Cancel invoice</button>
       )}
       {canRecord && (inv.status === "issued" || inv.status === "partially_paid") && (
-        <button className="btn-primary px-4 py-2 text-sm" onClick={() => setPayOpen(true)}>Record payment</button>
+        <button className="btn-primary px-4 py-2 text-sm" onClick={openPay}>Record payment</button>
       )}
       {canManage && inv.status !== "cancelled" && (
         <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" onClick={openEdit}>Edit invoice</button>
@@ -336,29 +368,43 @@ export default function InvoiceDetailPage() {
               <h3 className="text-lg font-semibold">Record payment</h3>
               <button onClick={() => setPayOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
+            <p className="text-xs text-gray-400 mb-3">Outstanding balance: {formatINR(inv.balance)}. Add a row per part-payment - each can have its own amount, method, reference and date.</p>
             <form onSubmit={recordPayment} className="space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Amount (₹)</label>
-                <input type="number" step="0.01" required className="field w-full" value={pay.amount} onChange={(e) => setPay({ ...pay, amount: e.target.value })} placeholder={inv.balance} />
-                <p className="text-xs text-gray-400 mt-1">Outstanding balance: {formatINR(inv.balance)}</p>
+              <div className="space-y-2">
+                {payRows.map((r, i) => (
+                  <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="number" step="0.01" required className="field" placeholder="Amount (₹)" value={r.amount} onChange={(e) => updatePayRow(i, { amount: e.target.value })} />
+                      <input type="date" required className="field" value={r.receivedDate} onChange={(e) => updatePayRow(i, { receivedDate: e.target.value })} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <select className="field" value={r.method} onChange={(e) => updatePayRow(i, { method: e.target.value })}>
+                        <option value="bank_transfer">Bank Transfer</option>
+                        <option value="upi">UPI</option>
+                        <option value="cheque">Cheque</option>
+                        <option value="cash">Cash</option>
+                        <option value="tds">TDS Deducted</option>
+                        <option value="other">Other</option>
+                      </select>
+                      <input className="field" placeholder="Reference (UTR / cheque no / TDS certificate)" value={r.reference} onChange={(e) => updatePayRow(i, { reference: e.target.value })} />
+                    </div>
+                    {payRows.length > 1 && (
+                      <button type="button" onClick={() => removePayRow(i)} className="text-xs text-red-500">Remove this row</button>
+                    )}
+                  </div>
+                ))}
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Method</label>
-                <select className="field w-full" value={pay.method} onChange={(e) => setPay({ ...pay, method: e.target.value })}>
-                  <option value="bank_transfer">Bank Transfer</option>
-                  <option value="upi">UPI</option>
-                  <option value="cheque">Cheque</option>
-                  <option value="cash">Cash</option>
-                  <option value="other">Other</option>
-                </select>
+              <button type="button" onClick={addPayRow} className="text-xs font-medium text-[var(--theme-accent)]">+ Add another part-payment</button>
+
+              <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm flex justify-between">
+                <span className="text-gray-500">Total of {payRows.length} row{payRows.length === 1 ? "" : "s"}</span>
+                <span className="font-semibold">{formatINR(String(payRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)))}</span>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Reference (UTR / cheque no)</label>
-                <input className="field w-full" value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} />
-              </div>
+
+              {payError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{payError}</p>}
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setPayOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Cancel</button>
-                <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action ? "Saving…" : "Record"}</button>
+                <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action === "pay" ? "Saving…" : "Record"}</button>
               </div>
             </form>
           </div>
@@ -384,6 +430,7 @@ export default function InvoiceDetailPage() {
                   <option value="upi">UPI</option>
                   <option value="cheque">Cheque</option>
                   <option value="cash">Cash</option>
+                  <option value="tds">TDS Deducted</option>
                   <option value="other">Other</option>
                 </select>
               </div>

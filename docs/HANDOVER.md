@@ -999,3 +999,70 @@ pre-filled with that payment's values; Remove asks for confirmation first
 manual `zan-app-api` dance, `/health` confirmed 200. Not click-tested live this session.
 
 **Shipped:** API deployed; admin-web needs `git push` to auto-deploy.
+
+
+## 49. Multi-row "Record payment" - several part-payments in one go (2026-07-29)
+
+**Ask:** "each part payment has its own UTR and date, so when I edit I should be able to
+add another row for part payment. So once I say save the total payment should show up."
+
+**What changed (`apps/admin-web/src/app/invoices/[id]/page.tsx` only - no API change):**
+The "Record payment" modal was a single-row form (amount/method/reference, no date field at
+all - it silently used "now" server-side). Rebuilt as a multi-row form, same pattern as the
+invoice line-item editor: "+ Add another part-payment" adds a row, each row has its own
+amount, method, reference (UTR/cheque no), and **date** (new - previously missing
+entirely), a running total across all rows is shown live, and "Remove this row" appears
+once there's more than one row.
+
+**How it saves:** rows are submitted **sequentially** against the existing
+`POST /:id/payments` endpoint (no new bulk API needed) - each call re-validates against
+the invoice's up-to-date outstanding balance using the invoice's live paid total, so this
+stays correct without a separate batch endpoint. The invoice is reloaded once after all
+rows finish, so the Total/Paid/Balance KPIs and status reflect the sum of everything just
+entered. If one row fails partway through (e.g. exceeds the balance), whatever rows
+succeeded before it are kept and reflected on reload - not rolled back - the error message
+shows which row failed.
+
+**Verified:** `tsc --noEmit` clean. Not click-tested live this session.
+
+**Shipped:** admin-web only, needs `git push` to auto-deploy - no `zan-app-api` redeploy
+needed.
+
+
+## 50. TDS support for customer payments (2026-07-29)
+
+**Ask:** "since this is service industry, the customer deducts TDS, how can we bring this
+into the calculation, for example invoice number 2."
+
+**Design:** TDS withheld by a customer is a real settlement of the receivable (the
+customer remits it to the government on the vendor's behalf - it's a tax credit, not lost
+revenue), so it's modeled as a **payment method**, not a discount or separate schema
+concept. This reuses everything built in §47-49 (multi-row payment recording, edit/delete,
+audit trail) with zero new infrastructure - a real payment (e.g. bank transfer) plus a
+"TDS Deducted" row together sum to the full invoice total, so the invoice correctly shows
+`paid` even though only part of it arrived as cash.
+
+**Changes:**
+- `packages/shared/src/constants.ts`: added `PAYMENT_METHOD.TDS = "tds"`.
+- `packages/shared/src/schemas.ts`: added `"tds"` to `paymentCreateSchema`'s `method` enum
+  (scoped to customer payments only - `paymentMadeCreateSchema`/`expenseCreateSchema`, which
+  are about money Zan-F pays out, were deliberately left untouched).
+- `apps/admin-web/src/lib/finance.ts`: `PAYMENT_METHOD_LABEL.tds = "TDS Deducted"`.
+- `apps/admin-web/src/app/invoices/[id]/page.tsx`: "TDS Deducted" added to both the
+  Record-payment and Edit-payment method dropdowns; the reference field's placeholder now
+  also mentions "TDS certificate" as a valid reference value.
+
+**Applied to `INV/2026-27/0002`** (Energyca Solutions, total Rs 11,21,000) per the user's
+confirmed rate - 1% TDS on the Rs 9,50,000 taxable value = Rs 9,500. While investigating the
+existing payment (found at Rs 9,40,500, not the expected placeholder Rs 11,21,000), the new
+`InvoiceEditLog` audit trail (§47) showed this was the **user's own test edit** from trying
+the feature earlier in this session - confirms the audit trail is working as designed.
+Corrected via direct SQL to the real split: `bank_transfer` Rs 11,11,500 + `tds` Rs 9,500 =
+Rs 11,21,000, status back to `paid`, with a matching `InvoiceEditLog` entry documenting the
+split for consistency with how the UI would have logged the same change.
+
+**Verified:** `tsc --noEmit` clean on both apps. Deployed to production via the standard
+manual `zan-app-api` dance (schema.ts's enum lives server-side too). Invoice 0002 re-queried
+- both payment rows present, sums to total, status `paid`.
+
+**Shipped:** both apps changed; API already deployed, admin-web needs `git push`.

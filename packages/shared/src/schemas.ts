@@ -222,7 +222,7 @@ export const invoiceCancelSchema = z.object({
 
 export const paymentCreateSchema = z.object({
   amount: z.number().positive("Amount must be > 0"),
-  method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]),
+  method: z.enum(["bank_transfer", "upi", "cheque", "cash", "tds", "other"]),
   reference: z.string().max(200).optional(),
   receivedDate: z.string().datetime().optional(),
   notes: z.string().max(1000).optional(),
