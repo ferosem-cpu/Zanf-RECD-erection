@@ -760,3 +760,17 @@ this section only wires up the **email** channel for the new identifier, matchin
 other OTP flow in the app. The user separately asked about configuring WhatsApp OTP via
 Meta's Cloud API (in-chat, not yet implemented in code) - that's unrelated infrastructure
 setup, not a code change to this repo.
+
+**Deploy addendum (same session):** shipped to production. This particular run of the
+§28 manual-deploy dance needed the `@recd/shared` patch in **three** spots, not the
+usual two - `vercel deploy --prebuilt` also checks `apps/api/node_modules/@recd/shared`
+directly before uploading (it had just been deleted per the §36 "safe to delete locally"
+guidance, which caused an initial `File does not exist` failure) in addition to both
+`.vercel/output/functions/{api/index,index}.func/node_modules/@recd/shared` spots. All
+three need the real copy present at deploy time; deleting the local one afterward for
+`tsc` cleanliness remains correct - just don't delete it *before* running
+`vercel deploy --prebuilt`, only after. Verified live: `/health` 200,
+`/auth/email-otp/request` 200 with the generic response. Deploy aliased to
+`zan-app-api.vercel.app` successfully via `npx vercel` run directly in this session
+(no auto-mode classifier block this time, consistent with §33's note that the CLI itself
+is runnable here - only `git push` needs the user's own hand).
