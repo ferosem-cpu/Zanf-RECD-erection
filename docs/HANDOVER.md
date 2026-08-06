@@ -850,3 +850,45 @@ correctly; otherwise this is expected behavior, not a defect.
 
 **Shipped:** `apps/admin-web` only, no API/schema changes, no `zan-app-api` redeploy needed -
 just push and `admin-web` auto-deploys.
+
+
+## 44. Invoice 0001 date correction + stray test Bill removed (2026-07-29)
+
+**Ask 1:** correct `INV/2026-27/0001`'s (Platino Automotive) issue date to 09/04/2026.
+Updated directly in production - still within FY2026-27 (Apr-Mar), no renumbering needed.
+
+**Ask 2:** "outstanding payable shows 33.00 in the finance dashboard" - root-caused to a
+single leftover test `Bill` row (bill #2355, supplier = the seed demo supplier "Steelwell
+Pipes Pvt Ltd", dummy Rs 32 subtotal + Rs 3 tax = Rs 33 total, still `unpaid`) from earlier
+Bills-feature testing, never cleaned up. Confirmed with the user and deleted it - `Bill`
+table is now empty, outstanding payables correctly reads Rs 0.
+
+No code changes this session - both were direct production data fixes via Supabase.
+
+
+## 45. Invoices list ordering fix - sort by invoice number, not createdAt (2026-07-29)
+
+**Ask:** "The sequence of invoice should just start from invoice number one. But after the
+change, invoice 1 went to the bottom, the sequence starting is from 2 on the invoice number
+column."
+
+**Root cause:** `GET /invoices` (`apps/api/src/routes/invoices.ts`) sorted
+`orderBy: { createdAt: "desc" }`. The 4 invoices entered in §42 were all inserted inside one
+SQL transaction, so they share the *exact same* `createdAt` timestamp - under a `createdAt`
+sort, rows with identical timestamps have no defined relative order, so 0001 could land
+anywhere (in this case, the bottom) rather than following the actual invoice sequence.
+
+**Fix:** changed the sort to `orderBy: { invoiceNumber: "asc" }`. Draft invoices (whose
+`invoiceNumber` is a random `DRAFT-<uuid>` placeholder until issued) sort wherever their
+uuid happens to fall - acceptable, since they don't have a real sequence position yet;
+issued/paid invoices, which are what this was actually about, now always list in true
+document-sequence order regardless of when/how they were entered.
+
+**Verified:** `tsc --noEmit` clean; deployed to production via the standard manual
+`zan-app-api` dance (§28/§41's 3-spot `@recd/shared` patch, confirmed `/health` 200 on the
+new deployment). Not re-verified through the actual UI this session - user should refresh
+the Invoices page and confirm 0001 now sorts first.
+
+**Shipped:** API-only change, `zan-app-api` deployed. `admin-web` unaffected, no push
+needed for this fix specifically (though it will be included whenever the next commit is
+pushed, since the source change lives in the same repo).

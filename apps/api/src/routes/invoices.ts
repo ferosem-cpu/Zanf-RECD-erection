@@ -56,7 +56,13 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
       customer: { select: { id: true, name: true } },
       payments: { select: { amount: true } },
     },
-    orderBy: { createdAt: "desc" },
+    // Sort by invoice number (ascending) so the list follows the actual document sequence
+    // (0001, 0002, ...) instead of createdAt - invoices entered together in one batch (e.g.
+    // a data migration) can share the exact same createdAt timestamp, which made their
+    // relative order arbitrary/undefined under a createdAt sort. Drafts (invoiceNumber is
+    // a random "DRAFT-<uuid>" until issued) sort wherever their uuid falls, which is fine
+    // since they don't have a real sequence position yet.
+    orderBy: { invoiceNumber: "asc" },
   });
 
   const now = new Date();
