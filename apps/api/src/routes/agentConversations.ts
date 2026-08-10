@@ -14,6 +14,7 @@ import { AGENT_SYSTEM_PROMPT } from "../agent/systemPrompt";
 import { allTools } from "../agent/tools/registry";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
+import { createQuotationRecord } from "./quotations";
 import type { UnifiedMessage } from "../agent/providers/types";
 
 export const agentConversationsRouter = Router();
@@ -167,6 +168,36 @@ async function executeConfirmedAction(
         });
       });
       return po.id;
+    }
+    case "create_quotation": {
+      interface PendingQuoteLine {
+        productId?: string;
+        description: string;
+        hsnCode?: string;
+        quantity: number;
+        unitPrice: number;
+        discountPct: number;
+        taxRatePct: number;
+      }
+      const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+      const quotation = await prisma.$transaction(async (tx) => {
+        const quoteNumber = await nextDocumentNumber(tx, FINANCE_DOC_TYPE.QUOTATION);
+        return createQuotationRecord(
+          tx,
+          {
+            customerId: String(input.customerId),
+            lineItems: (input.lineItems as PendingQuoteLine[]) ?? [],
+            placeOfSupply: (input.placeOfSupply as string | undefined) ?? undefined,
+            validUntil: input.validUntil ? new Date(String(input.validUntil)).toISOString() : undefined,
+            notes: (input.notes as string | null) ?? undefined,
+            terms: (input.terms as string | null) ?? undefined,
+          },
+          userId,
+          quoteNumber,
+          company?.state,
+        );
+      });
+      return quotation.id;
     }
     default:
       throw new Error(`Don't know how to execute confirmed action for tool "${toolName}".`);

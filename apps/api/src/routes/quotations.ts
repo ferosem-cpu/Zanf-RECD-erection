@@ -45,7 +45,9 @@ function mapLineItemInput(line: {
   };
 }
 
-async function createQuotationRecord(
+/** Exported so the in-app agent's create_quotation write tool (see agentConversations.ts's
+ * confirm route) can reuse the exact same create logic rather than duplicating it. */
+export async function createQuotationRecord(
   tx: Prisma.TransactionClient,
   input: ReturnType<typeof quotationCreateSchema.parse>,
   createdById: string,
