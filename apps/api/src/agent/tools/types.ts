@@ -21,4 +21,8 @@ export interface AgentAuthContext {
   customerId?: string | null;
   vendorId?: string | null;
   permissions: Set<string>;
+  /** The AgentConversation this turn belongs to - needed by write tools so they can attach
+   * an AgentPendingAction to the right thread. Not set for the throwaway /agent/chat-test
+   * route (no persisted conversation), so write tools must handle it being absent. */
+  conversationId?: string;
 }

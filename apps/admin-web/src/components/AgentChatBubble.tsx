@@ -15,6 +15,30 @@ interface StoredMessage {
   role: "user" | "assistant" | "tool";
   content?: string;
   toolCallId?: string;
+  toolName?: string;
+}
+
+interface PendingActionContent {
+  status: "pending_confirmation" | "confirmed" | "rejected";
+  actionId: string;
+  preview?: Record<string, unknown>;
+  resultId?: string | null;
+}
+
+/** A tool-result message is a proposed write action if its JSON content has an actionId -
+ * regardless of which write tool produced it, so new write tools need no frontend changes. */
+function parsePendingAction(m: StoredMessage): PendingActionContent | null {
+  if (m.role !== "tool" || !m.content) return null;
+  try {
+    const parsed = JSON.parse(m.content);
+    return parsed && typeof parsed === "object" && parsed.actionId ? (parsed as PendingActionContent) : null;
+  } catch {
+    return null;
+  }
+}
+
+function labelizeKey(key: string): string {
+  return key.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
 }
 
 export default function AgentChatBubble() {
@@ -31,6 +55,7 @@ export default function AgentChatBubble() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resolvingActionId, setResolvingActionId] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -118,15 +143,35 @@ export default function AgentChatBubble() {
     }
   }
 
+  async function resolveAction(actionId: string, outcome: "confirm" | "reject") {
+    if (!activeId || resolvingActionId) return;
+    setResolvingActionId(actionId);
+    setError(null);
+    try {
+      const result = await api<{ messages: StoredMessage[] }>(
+        `/agent/conversations/${activeId}/actions/${actionId}/${outcome}`,
+        { method: "POST" },
+      );
+      setMessages(result.messages ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResolvingActionId(null);
+    }
+  }
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
   if (!checkedVisibility || !visible) return null;
 
-  // Only render user turns and assistant turns that actually said something - tool-call-only
-  // turns and raw tool-result turns are implementation detail, not a human-readable transcript.
-  const visibleMessages = messages.filter((m) => (m.role === "user" || m.role === "assistant") && m.content);
+  // Render user turns, assistant turns that said something, and any tool-result that's a
+  // proposed write action (confirm card) - other tool-call-only/raw-result turns stay hidden
+  // as implementation detail.
+  const visibleMessages = messages.filter(
+    (m) => ((m.role === "user" || m.role === "assistant") && m.content) || parsePendingAction(m),
+  );
 
   return (
     <>
@@ -183,17 +228,63 @@ export default function AgentChatBubble() {
             {visibleMessages.length === 0 && !sending && (
               <p className="text-xs text-gray-400">Ask me anything - I can search shared documents for you.</p>
             )}
-            {visibleMessages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
-                    m.role === "user" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-800"
-                  }`}
-                >
-                  {m.content}
+            {visibleMessages.map((m, i) => {
+              const action = parsePendingAction(m);
+              if (action) {
+                return (
+                  <div key={i} className="flex justify-start">
+                    <div className="max-w-[90%] w-full rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm">
+                      <p className="text-xs font-medium text-amber-700 mb-2">
+                        {action.status === "pending_confirmation" && "Proposed - needs your confirmation"}
+                        {action.status === "confirmed" && "✅ Confirmed and created"}
+                        {action.status === "rejected" && "✕ Rejected"}
+                      </p>
+                      {action.preview && (
+                        <dl className="space-y-0.5 mb-2">
+                          {Object.entries(action.preview)
+                            .filter(([, v]) => v !== null && v !== undefined && v !== "")
+                            .map(([k, v]) => (
+                              <div key={k} className="flex justify-between gap-3 text-xs">
+                                <dt className="text-gray-500">{labelizeKey(k)}</dt>
+                                <dd className="text-gray-800 font-medium text-right">{String(v)}</dd>
+                              </div>
+                            ))}
+                        </dl>
+                      )}
+                      {action.status === "pending_confirmation" && (
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            className="flex-1 rounded-lg bg-gray-900 text-white text-xs py-1.5 disabled:opacity-50"
+                            disabled={resolvingActionId === action.actionId}
+                            onClick={() => resolveAction(action.actionId, "confirm")}
+                          >
+                            {resolvingActionId === action.actionId ? "Working…" : "Confirm"}
+                          </button>
+                          <button
+                            className="flex-1 rounded-lg border border-gray-300 text-gray-600 text-xs py-1.5 disabled:opacity-50"
+                            disabled={resolvingActionId === action.actionId}
+                            onClick={() => resolveAction(action.actionId, "reject")}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
+                      m.role === "user" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-800"
+                    }`}
+                  >
+                    {m.content}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {sending && (
               <div className="flex justify-start">
                 <div className="bg-gray-100 text-gray-400 rounded-2xl px-3 py-2 text-sm">Thinking…</div>

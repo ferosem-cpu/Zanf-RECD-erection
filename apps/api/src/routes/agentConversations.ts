@@ -5,6 +5,7 @@
  * personal chat history like any other user's own data.
  */
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
@@ -71,7 +72,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, async
       systemPrompt: AGENT_SYSTEM_PROMPT,
       history: newHistory,
       tools: allTools,
-      auth: req.auth!,
+      auth: { ...req.auth!, conversationId: row.id },
     });
 
     const updated = await prisma.agentConversation.update({
@@ -87,3 +88,106 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, async
     res.status(500).json({ error: (err as Error).message });
   }
 });
+
+
+/** Executes the real Prisma write for one confirmed pending action, dispatched by toolName.
+ * Mirrors the equivalent REST create-route's logic exactly (see routes/expenses.ts) rather
+ * than reinventing it, so a confirmed agent action and a normal UI-created record behave
+ * identically. Returns the created record's id.
+ */
+async function executeConfirmedAction(
+  toolName: string,
+  input: Record<string, unknown>,
+  userId: string,
+): Promise<string> {
+  switch (toolName) {
+    case "create_expense": {
+      const expense = await prisma.expense.create({
+        data: {
+          categoryId: String(input.categoryId),
+          description: String(input.description),
+          amount: new Prisma.Decimal(String(input.amount)),
+          expenseDate: new Date(String(input.expenseDate)),
+          method: String(input.method),
+          siteId: input.siteId ? String(input.siteId) : null,
+          recordedById: userId,
+        },
+      });
+      return expense.id;
+    }
+    default:
+      throw new Error(`Don't know how to execute confirmed action for tool "${toolName}".`);
+  }
+}
+
+/** Rewrites the tool-result message in a conversation's stored history that matches this
+ * actionId, so the transcript reflects the resolved (confirmed/rejected) state instead of
+ * staying frozen on "pending_confirmation" - the next chat turn's context, and the frontend
+ * re-render, both pick this up automatically. */
+function resolveActionInHistory(
+  messages: UnifiedMessage[],
+  actionId: string,
+  resolution: Record<string, unknown>,
+): UnifiedMessage[] {
+  return messages.map((m) => {
+    if (m.role !== "tool" || !m.content) return m;
+    try {
+      const parsed = JSON.parse(m.content);
+      if (parsed.actionId === actionId) {
+        return { ...m, content: JSON.stringify({ ...parsed, ...resolution }) };
+      }
+    } catch {
+      // not JSON - not a tool-result we care about
+    }
+    return m;
+  });
+}
+
+async function handleResolveAction(
+  req: AuthenticatedRequest,
+  res: import("express").Response,
+  outcome: "confirmed" | "rejected",
+) {
+  const conversation = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
+  if (!conversation || conversation.userId !== req.auth!.userId) {
+    return res.status(404).json({ error: "Conversation not found" });
+  }
+  const action = await prisma.agentPendingAction.findUnique({ where: { id: String(req.params.actionId) } });
+  if (!action || action.conversationId !== conversation.id) {
+    return res.status(404).json({ error: "Pending action not found" });
+  }
+  if (action.status !== "pending") {
+    return res.status(400).json({ error: `This action was already ${action.status}.` });
+  }
+
+  try {
+    let resultId: string | null = null;
+    if (outcome === "confirmed") {
+      resultId = await executeConfirmedAction(action.toolName, action.input as Record<string, unknown>, req.auth!.userId);
+    }
+
+    await prisma.agentPendingAction.update({
+      where: { id: action.id },
+      data: { status: outcome, resultId, resolvedAt: new Date() },
+    });
+
+    const priorHistory = (conversation.messages as unknown as UnifiedMessage[]) ?? [];
+    const newHistory = resolveActionInHistory(priorHistory, action.id, { status: outcome, resultId });
+    const updated = await prisma.agentConversation.update({
+      where: { id: conversation.id },
+      data: { messages: newHistory as unknown as object },
+    });
+
+    res.json({ status: outcome, resultId, messages: updated.messages });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+}
+
+agentConversationsRouter.post("/conversations/:id/actions/:actionId/confirm", authenticate, (req: AuthenticatedRequest, res) =>
+  handleResolveAction(req, res, "confirmed"),
+);
+
+agentConversationsRouter.post("/conversations/:id/actions/:actionId/reject", authenticate, (req: AuthenticatedRequest, res) =>
+  handleResolveAction(req, res, "rejected"),
+);
