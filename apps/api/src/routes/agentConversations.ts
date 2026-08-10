@@ -6,11 +6,11 @@
  */
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
-import { PO_STATUS, FINANCE_DOC_TYPE } from "@recd/shared";
+import { PO_STATUS, FINANCE_DOC_TYPE, INVOICE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
-import { AGENT_SYSTEM_PROMPT } from "../agent/systemPrompt";
+import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { allTools } from "../agent/tools/registry";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
@@ -73,7 +73,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, async
 
   try {
     const result = await runAgentTurn({
-      systemPrompt: AGENT_SYSTEM_PROMPT,
+      systemPrompt: buildAgentSystemPrompt(),
       history: newHistory,
       tools: allTools,
       auth: { ...req.auth!, conversationId: row.id },
@@ -198,6 +198,66 @@ async function executeConfirmedAction(
         );
       });
       return quotation.id;
+    }
+    case "create_invoice": {
+      interface PendingInvoiceLine {
+        productId?: string;
+        description: string;
+        hsnCode?: string;
+        quantity: number;
+        unitPrice: number;
+        discountPct: number;
+        taxRatePct: number;
+      }
+      const lineItems = (input.lineItems as PendingInvoiceLine[]) ?? [];
+      const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+      const totals = computeDocumentTotals(
+        lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: l.discountPct, taxRatePct: l.taxRatePct })),
+        company?.state,
+        input.placeOfSupply as string | undefined,
+      );
+      // Created as a DRAFT with a placeholder number, exactly like routes/invoices.ts's real
+      // POST /invoices - the real sequential invoice number is only allocated later when a
+      // human issues the draft (separate manual step, not something the agent does).
+      const invoice = await prisma.invoice.create({
+        data: {
+          docType: String(input.docType),
+          invoiceNumber: `DRAFT-${crypto.randomUUID()}`,
+          customerId: String(input.customerId),
+          orderId: input.orderId ? String(input.orderId) : undefined,
+          quotationId: input.quotationId ? String(input.quotationId) : undefined,
+          status: INVOICE_STATUS.DRAFT,
+          issueDate: new Date(String(input.issueDate)),
+          dueDate: input.dueDate ? new Date(String(input.dueDate)) : null,
+          placeOfSupply: (input.placeOfSupply as string | undefined) ?? null,
+          subtotal: totals.subtotal,
+          discountAmount: totals.discountAmount,
+          cgstAmount: totals.cgstAmount,
+          sgstAmount: totals.sgstAmount,
+          igstAmount: totals.igstAmount,
+          total: totals.total,
+          notes: (input.notes as string | null) ?? null,
+          terms: (input.terms as string | null) ?? null,
+          createdById: userId,
+          lineItems: {
+            create: lineItems.map((l, i) => ({
+              productId: l.productId,
+              description: l.description,
+              hsnCode: l.hsnCode,
+              quantity: new Prisma.Decimal(String(l.quantity)),
+              unitPrice: new Prisma.Decimal(String(l.unitPrice)),
+              discountPct: new Prisma.Decimal(String(l.discountPct)),
+              taxRatePct: new Prisma.Decimal(String(l.taxRatePct)),
+              lineTotal: new Prisma.Decimal(String(l.quantity * l.unitPrice * (1 - l.discountPct / 100))).toDecimalPlaces(
+                2,
+                Prisma.Decimal.ROUND_HALF_UP,
+              ),
+              sortOrder: i,
+            })),
+          },
+        },
+      });
+      return invoice.id;
     }
     default:
       throw new Error(`Don't know how to execute confirmed action for tool "${toolName}".`);

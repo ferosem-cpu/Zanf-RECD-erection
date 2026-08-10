@@ -10,7 +10,7 @@ import { Router } from "express";
 import type { AuthenticatedRequest } from "../middleware/auth";
 import { authenticate } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
-import { AGENT_SYSTEM_PROMPT } from "../agent/systemPrompt";
+import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { allTools } from "../agent/tools/registry";
 import type { UnifiedMessage } from "../agent/providers/types";
 
@@ -28,7 +28,7 @@ agentTestRouter.post("/chat-test", authenticate, async (req: AuthenticatedReques
 
   try {
     const result = await runAgentTurn({
-      systemPrompt: AGENT_SYSTEM_PROMPT,
+      systemPrompt: buildAgentSystemPrompt(),
       history: newHistory,
       tools: allTools,
       auth: req.auth,

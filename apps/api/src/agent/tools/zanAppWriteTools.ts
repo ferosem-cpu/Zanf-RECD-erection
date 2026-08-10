@@ -6,12 +6,13 @@
  * in agentConversations.ts), which reuses the same logic as the real REST create-route.
  */
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, PAYMENT_METHOD } from "@recd/shared";
+import { PERMISSION_KEY, PAYMENT_METHOD, INVOICE_DOC_TYPE } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { computeDocumentTotals } from "../../services/taxCalc";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
+const VALID_INVOICE_DOC_TYPES = Object.values(INVOICE_DOC_TYPE);
 
 function forbidden(what: string) {
   return { error: `You don't have permission to create ${what}.` };
@@ -390,4 +391,181 @@ const createQuotationTool: AgentTool = {
   },
 };
 
-export const zanAppWriteTools: AgentTool[] = [createExpenseTool, createPurchaseOrderTool, createQuotationTool];
+interface InvoiceLineItemInput {
+  productId?: string;
+  description: string;
+  hsnCode?: string | null;
+  quantity: number;
+  unitPrice: number;
+  discountPct?: number;
+  taxRatePct?: number;
+}
+
+const createInvoiceTool: AgentTool = {
+  name: "create_invoice",
+  description:
+    "Propose a new invoice (proforma or tax invoice) for a customer. This does NOT create " +
+    "the invoice immediately - it prepares it and shows the user a confirm card in the chat; " +
+    "only THEY can approve it by clicking Confirm. Even after confirming, the invoice is " +
+    "created as a DRAFT with no real invoice number yet - Zan-APP only allocates the real " +
+    "sequential invoice number when a human 'issues' the draft from the Invoices page (a " +
+    "separate manual step you cannot do). After calling this, tell the user you've prepared " +
+    "a draft for their review - never say it has been created/issued or quote an invoice " +
+    "number, since neither exists yet.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      docType: { type: "string", enum: [...VALID_INVOICE_DOC_TYPES], description: "'proforma' or 'tax_invoice'." },
+      customerId: { type: "string", description: "Customer id, if already known (e.g. from a prior search)." },
+      customerName: {
+        type: "string",
+        description: "Customer name to look up if customerId isn't known. Provide one of customerId or customerName.",
+      },
+      orderId: { type: "string", description: "Optional - link to an existing Order (from search_orders_and_sites), if this invoice is for one." },
+      quotationId: { type: "string", description: "Optional - link to an existing Quotation (from search_quotations), if this invoice is for one." },
+      lineItems: {
+        type: "array",
+        description: "At least one line item.",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            hsnCode: { type: "string" },
+            quantity: { type: "number" },
+            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax and discount." },
+            discountPct: { type: "number", description: "Discount percent, 0-100. Defaults to 0." },
+            taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
+          },
+          required: ["description", "quantity", "unitPrice"],
+        },
+      },
+      issueDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
+      dueDate: { type: "string", description: "ISO date (YYYY-MM-DD) payment is due by." },
+      notes: { type: "string" },
+      terms: { type: "string" },
+    },
+    required: ["docType", "lineItems"],
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.MANAGE_INVOICES)) return forbidden("invoices");
+    if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
+
+    const docType = String(input.docType ?? "");
+    if (!VALID_INVOICE_DOC_TYPES.includes(docType as (typeof VALID_INVOICE_DOC_TYPES)[number])) {
+      return { error: `docType must be one of: ${VALID_INVOICE_DOC_TYPES.join(", ")}` };
+    }
+    const customerId = input.customerId ? String(input.customerId) : null;
+    const customerName = input.customerName ? String(input.customerName) : null;
+    const orderId = input.orderId ? String(input.orderId) : null;
+    const quotationId = input.quotationId ? String(input.quotationId) : null;
+    const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as InvoiceLineItemInput[]) : [];
+    const issueDateStr = input.issueDate ? String(input.issueDate) : new Date().toISOString().slice(0, 10);
+    const dueDateStr = input.dueDate ? String(input.dueDate) : null;
+    const notes = input.notes ? String(input.notes) : null;
+    const terms = input.terms ? String(input.terms) : null;
+
+    if (!customerId && !customerName) return { error: "Provide either customerId or customerName." };
+    if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
+    for (const [i, li] of lineItemsRaw.entries()) {
+      if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
+      if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
+    }
+
+    let customer = customerId ? await prisma.customer.findUnique({ where: { id: customerId } }) : null;
+    if (!customer && customerName) {
+      const matches = await prisma.customer.findMany({
+        where: { name: { contains: customerName, mode: "insensitive" } },
+        take: 5,
+      });
+      if (matches.length === 1) {
+        customer = matches[0];
+      } else if (matches.length > 1) {
+        return {
+          error: `Multiple customers match "${customerName}": ${matches
+            .map((c) => `${c.name} (id: ${c.id})`)
+            .join(", ")}. Ask the user which one, then retry with the exact customerId.`,
+        };
+      } else {
+        const allCustomers = await prisma.customer.findMany({ select: { name: true }, take: 20 });
+        return {
+          error: `No customer matching "${customerName}". Existing customers: ${allCustomers.map((c) => c.name).join(", ") || "(none yet)"}. Ask the user which one, or offer to add a new customer first.`,
+        };
+      }
+    }
+    if (!customer) return { error: `No customer found with id ${customerId}.` };
+
+    if (orderId) {
+      const order = await prisma.order.findUnique({ where: { id: orderId } });
+      if (!order) return { error: `No order found with id ${orderId}. Use search_orders_and_sites first.` };
+    }
+    if (quotationId) {
+      const quotation = await prisma.quotation.findUnique({ where: { id: quotationId } });
+      if (!quotation) return { error: `No quotation found with id ${quotationId}. Use search_quotations first.` };
+    }
+
+    const normalizedLines = lineItemsRaw.map((li) => ({
+      productId: li.productId,
+      description: li.description,
+      hsnCode: li.hsnCode ?? undefined,
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      discountPct: li.discountPct ?? 0,
+      taxRatePct: li.taxRatePct ?? 18,
+    }));
+
+    // Place of supply defaults to the customer's own billing state, same as create_quotation.
+    const placeOfSupply = customer.state ?? undefined;
+    const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+    const totals = computeDocumentTotals(
+      normalizedLines.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: l.discountPct, taxRatePct: l.taxRatePct })),
+      company?.state,
+      placeOfSupply,
+    );
+
+    const preview = {
+      docType,
+      customer: customer.name,
+      lineItems: normalizedLines.map((l) => `${l.description} x${l.quantity} @ ₹${l.unitPrice}`).join("; "),
+      subtotal: Number(totals.subtotal),
+      discount: Number(totals.discountAmount),
+      cgst: Number(totals.cgstAmount),
+      sgst: Number(totals.sgstAmount),
+      igst: Number(totals.igstAmount),
+      total: Number(totals.total),
+      placeOfSupply: placeOfSupply ?? null,
+      issueDate: issueDateStr,
+      dueDate: dueDateStr,
+    };
+
+    const pending = await prisma.agentPendingAction.create({
+      data: {
+        conversationId: auth.conversationId,
+        toolName: "create_invoice",
+        input: {
+          docType,
+          customerId: customer.id,
+          orderId,
+          quotationId,
+          lineItems: normalizedLines,
+          placeOfSupply,
+          issueDate: issueDateStr,
+          dueDate: dueDateStr,
+          notes,
+          terms,
+        },
+        preview,
+        createdById: auth.userId,
+      },
+    });
+
+    return {
+      status: "pending_confirmation",
+      actionId: pending.id,
+      preview,
+      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. This creates a DRAFT only (no invoice number) - do not say it has been created/issued.",
+    };
+  },
+};
+
+export const zanAppWriteTools: AgentTool[] = [createExpenseTool, createPurchaseOrderTool, createQuotationTool, createInvoiceTool];
