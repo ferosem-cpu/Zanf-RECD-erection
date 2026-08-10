@@ -8,6 +8,7 @@
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, PAYMENT_METHOD } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
+import { computeDocumentTotals } from "../../services/taxCalc";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
@@ -100,4 +101,143 @@ const createExpenseTool: AgentTool = {
   },
 };
 
-export const zanAppWriteTools: AgentTool[] = [createExpenseTool];
+interface PoLineItemInput {
+  description: string;
+  hsnCode?: string | null;
+  quantity: number;
+  unitPrice: number;
+  taxRatePct?: number;
+}
+
+const createPurchaseOrderTool: AgentTool = {
+  name: "create_purchase_order",
+  description:
+    "Propose a new purchase order to a supplier (material/service procurement - steel, " +
+    "piping, transport, subcontract labour). This does NOT create the PO immediately - it " +
+    "prepares it and shows the user a confirm card in the chat; only THEY can approve it by " +
+    "clicking Confirm. The PO number is only allocated at confirm time (GST numbering must " +
+    "stay gap-free, so nothing is reserved for a proposal that might be rejected). After " +
+    "calling this, tell the user you've prepared it for their review - never say it has " +
+    "been created or quote a PO number, since none exists yet.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      supplierId: { type: "string", description: "Supplier id, if already known (e.g. from a prior search)." },
+      supplierName: {
+        type: "string",
+        description: "Supplier name to look up if supplierId isn't known. Provide one of supplierId or supplierName.",
+      },
+      lineItems: {
+        type: "array",
+        description: "At least one line item.",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            hsnCode: { type: "string" },
+            quantity: { type: "number" },
+            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax." },
+            taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
+          },
+          required: ["description", "quantity", "unitPrice"],
+        },
+      },
+      orderDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
+      expectedDate: { type: "string", description: "ISO date (YYYY-MM-DD) - when the goods/service are expected." },
+      notes: { type: "string" },
+      terms: { type: "string" },
+    },
+    required: ["lineItems"],
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS)) return forbidden("purchase orders");
+    if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
+
+    const supplierId = input.supplierId ? String(input.supplierId) : null;
+    const supplierName = input.supplierName ? String(input.supplierName) : null;
+    const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as PoLineItemInput[]) : [];
+    const orderDateStr = input.orderDate ? String(input.orderDate) : new Date().toISOString().slice(0, 10);
+    const expectedDateStr = input.expectedDate ? String(input.expectedDate) : null;
+    const notes = input.notes ? String(input.notes) : null;
+    const terms = input.terms ? String(input.terms) : null;
+
+    if (!supplierId && !supplierName) return { error: "Provide either supplierId or supplierName." };
+    if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
+    for (const [i, li] of lineItemsRaw.entries()) {
+      if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
+      if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
+    }
+
+    let supplier = supplierId ? await prisma.supplier.findUnique({ where: { id: supplierId } }) : null;
+    if (!supplier && supplierName) {
+      const matches = await prisma.supplier.findMany({
+        where: { name: { contains: supplierName, mode: "insensitive" } },
+        take: 5,
+      });
+      if (matches.length === 1) {
+        supplier = matches[0];
+      } else if (matches.length > 1) {
+        return {
+          error: `Multiple suppliers match "${supplierName}": ${matches
+            .map((s) => `${s.name} (id: ${s.id})`)
+            .join(", ")}. Ask the user which one, then retry with the exact supplierId.`,
+        };
+      } else {
+        const allSuppliers = await prisma.supplier.findMany({ select: { name: true }, take: 20 });
+        return {
+          error: `No supplier matching "${supplierName}". Existing suppliers: ${allSuppliers.map((s) => s.name).join(", ") || "(none yet)"}. Ask the user which one, or offer to add a new supplier first.`,
+        };
+      }
+    }
+    if (!supplier) return { error: `No supplier found with id ${supplierId}.` };
+
+    const normalizedLines = lineItemsRaw.map((li) => ({
+      description: li.description,
+      hsnCode: li.hsnCode ?? null,
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      taxRatePct: li.taxRatePct ?? 18,
+    }));
+
+    const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+    // Purchase orders always compute tax as intra-state (CGST+SGST) - matches routes/purchase-orders.ts,
+    // which never passes a placeOfSupply for POs.
+    const totals = computeDocumentTotals(
+      normalizedLines.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
+      company?.state,
+      undefined,
+    );
+
+    const preview = {
+      supplier: supplier.name,
+      lineItems: normalizedLines.map((l) => `${l.description} x${l.quantity} @ ₹${l.unitPrice}`).join("; "),
+      subtotal: Number(totals.subtotal),
+      cgst: Number(totals.cgstAmount),
+      sgst: Number(totals.sgstAmount),
+      igst: Number(totals.igstAmount),
+      total: Number(totals.total),
+      orderDate: orderDateStr,
+      expectedDate: expectedDateStr,
+    };
+
+    const pending = await prisma.agentPendingAction.create({
+      data: {
+        conversationId: auth.conversationId,
+        toolName: "create_purchase_order",
+        input: { supplierId: supplier.id, lineItems: normalizedLines, orderDate: orderDateStr, expectedDate: expectedDateStr, notes, terms },
+        preview,
+        createdById: auth.userId,
+      },
+    });
+
+    return {
+      status: "pending_confirmation",
+      actionId: pending.id,
+      preview,
+      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. No PO number exists yet - do not quote one or say it has been created.",
+    };
+  },
+};
+
+export const zanAppWriteTools: AgentTool[] = [createExpenseTool, createPurchaseOrderTool];
