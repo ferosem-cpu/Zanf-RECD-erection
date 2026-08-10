@@ -1416,3 +1416,51 @@ Built the last remaining piece of the in-app agent: the actual chat window, with
 **Not yet deployed to production** - this needs the same treatment as the provider-settings migration: prisma migrate deploy against the real production DB, plus setting CRON_SECRET as a Vercel env var on zan-app-api (and the cron itself only actually fires once deployed - Vercel Cron doesn't run for undeployed/local code).
 
 **Scope from the original 9-point agent plan that's now fully built:** floating chat bubble (point 1), Super-Admin visibility toggle (point 2), text chat (point 4), 30-day-expiry conversation memory in threads (point 9). Still not built: Zan-APP data tools for invoices/work-orders/customers with confirm-gated writes (points 5-6), external messaging (point 8, deferred). Voice (point 4's later half) also still open.
+
+## 56. Agent module committed and pushed; Zan-APP data tools scoped (2026-08-10)
+
+**Housekeeping:** all of §55's agent work (Drive tools, multi-provider LLM loop,
+`AgentLlmProvider`/`AgentConversation` models + migrations, Settings UI, chat bubble) had
+been sitting uncommitted on `master` since the prior session. Committed as `9bf3372` and
+pushed to `origin/master`. **Still not deployed to production** - both migrations
+(`20260809082042_add_agent_llm_provider`, `20260810061248_add_agent_conversations_and_visibility`)
+still need `prisma migrate deploy` against the real prod DB, and `CRON_SECRET` still needs
+setting on Vercel for `zan-app-api`, per §55.
+
+**Not cleaned up:** the throwaway `apps/api/scripts/verify*.ts` diagnostic scripts (14 files,
+from the Gemini tool-calling debugging session) got committed along with everything else -
+flagged again as candidates to prune once real tests exist, still not done.
+
+**Scoped (not yet built): read + write Zan-APP data tools for the agent.** User wants the
+in-app agent to (a) look up anything in the app by asking in chat - vendors, quotations,
+invoices, purchase orders, expenses, customers, orders/sites, work orders, complaints - and
+(b) create quotations, invoices, purchase orders, and expenses via chat, not just invoices.
+
+Plan agreed:
+- **Read tools** (low risk, no confirm-gate needed): one search tool per entity group
+  (`search_vendors`, `search_customers`, `search_quotations`, `search_invoices`,
+  `search_purchase_orders`, `search_expenses`, `search_orders_and_sites`,
+  `search_work_orders`, `search_complaints`) returning lightweight summaries, plus a
+  `get_document_detail` tool for full line-item drill-down. Straightforward Prisma reads
+  reusing existing permission logic - no schema changes needed.
+- **Write tools** (`create_quotation`, `create_invoice`, `create_purchase_order`,
+  `create_expense`): confirm-gated using the `onToolCall` hook already in `llm.ts` (built in
+  §55, unused until now). Agent proposes the document, chat shows a confirm card with the
+  real computed numbers (GST split via existing calc logic, not re-derived by the LLM), and
+  only on confirm does it call into the *existing* create-route logic (same
+  `DocumentSequence` numbering, same validation) rather than duplicating it. Open question
+  flagged to the user: whether the agent should resolve fuzzy customer/supplier name matches
+  itself or always search-then-confirm-identity first before proposing a document - leaning
+  toward the latter to avoid picking the wrong near-match record.
+- **Build order agreed:** (1) read tools first - fast, safe, independently useful; (2)
+  `create_expense` first write tool - simplest, proves the confirm-gate UI pattern; (3)
+  `create_purchase_order` and `create_quotation`; (4) `create_invoice` last, since it's the
+  most consequential document type.
+- **Not started yet** - next session should build Part A (read tools) unless told otherwise.
+
+**Also discussed, not yet started:** file upload from chat straight into the `ZanF_DropBox`
+Drive folder. Needs the Drive OAuth scope widened from `drive.readonly` to `drive.file` (or
+full `drive`) - a re-consent flow, same 7-day-token caveat as the original read-only setup
+until Google verification is done. New upload route + attach control in
+`AgentChatBubble.tsx`. Scoped but deprioritized behind the data tools above per user's "let's
+get back to the build" redirect this session.
