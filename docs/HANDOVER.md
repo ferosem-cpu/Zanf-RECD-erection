@@ -1637,3 +1637,53 @@ fine (only *skipped* numbers are the actual GST concern, and none were skipped h
 3. Stray smoke-test suppliers/PO noted above - not cleaned up.
 4. `verifyCreatePurchaseOrderFlow.ts` adds to the growing `apps/api/scripts/verify*.ts` pile,
    still not consolidated into real tests.
+
+
+## 60. create_quotation write tool built and verified live (2026-08-10)
+
+Third write tool - completes the agreed order except `create_invoice`. Committed and pushed
+as `23b66ef`.
+
+**`create_quotation`** (`zanAppWriteTools.ts`): same resolve-then-propose pattern as
+`create_purchase_order`, but customer-side. Resolves `customerId`/`customerName` (ambiguous
+matches list candidates and ask; no match lists real customers). Defaults `placeOfSupply` to
+the customer's own billing state when not explicitly given, matching the real quotation form's
+default behaviour (drives CGST+SGST vs IGST). Computes a preview-only total via
+`computeDocumentTotals` - **no quote number allocated at proposal time**, same gap-free-GST-
+numbering discipline as POs.
+
+**Code reuse improvement over the PO tool:** rather than duplicating `createQuotationRecord`'s
+logic a second time, `routes/quotations.ts`'s existing (previously module-private)
+`createQuotationRecord(tx, input, createdById, quoteNumber, companyState)` helper was exported
+and directly reused in `agentConversations.ts`'s confirm-time `"create_quotation"` case - only
+the `nextDocumentNumber()` allocation wraps around it inside the same `$transaction`. This is
+the cleaner pattern the PO tool should probably be refactored to match later (it currently
+duplicates the line-item/Decimal construction inline instead of exporting+reusing
+`purchase-orders.ts`'s private `mapPoLine`).
+
+**Verified live, full loop, real data** (`scripts/verifyCreateQuotationFlow.ts`): asked the
+agent to quote a real existing customer ("Sundaram Textiles Pvt Ltd") for 2x a 62.5 kVA RECD
+retrofit kit @ ₹85,000, 18% GST. Agent proactively called `search_customers` first (not
+prompted to), then proposed the quotation with a self-chosen HSN code (`850300`) it wasn't
+given - worth noting for later, since an incorrect self-chosen HSN code wouldn't be caught by
+any validation and could matter for GST filing; may be worth having the tool require an
+explicit `hsnCode` rather than letting the model infer one, in a later pass. Correctly computed
+₹170,000 subtotal + ₹15,300 CGST + ₹15,300 SGST = ₹200,600, did not quote a quote number before
+confirming. Confirmed via the API - real `Quotation` row created as `QTN/2026-27/0008` with one
+correct line item and correct sequential numbering. Checked directly via Prisma.
+
+**apps/api `tsc --noEmit` clean.**
+
+**Not yet done:**
+1. **`create_invoice` is the last tool in the agreed order** - not yet built. Likely the most
+   involved of the four: `docType` (proforma vs tax_invoice), optional links to an existing
+   `Order`/`Quotation`, and the existing TDS-as-payment pattern from the `b263796` invoice work
+   sits downstream of it (not needed for creation itself, but worth being aware of).
+2. Production still not deployed - same four outstanding items as §59.
+3. HSN-code self-inference gap noted above - worth a decision on whether to require it
+   explicitly for `create_quotation`/`create_purchase_order`/`create_invoice` rather than
+   trusting the model's guess.
+4. Minor code-reuse inconsistency flagged above (PO tool duplicates line-item construction
+   inline; quotation tool reuses the real route's helper directly) - cosmetic, not a bug, but
+   worth aligning both to the same pattern in a cleanup pass.
+5. Growing `apps/api/scripts/verify*.ts` pile again, unconsolidated.
