@@ -1687,3 +1687,76 @@ correct line item and correct sequential numbering. Checked directly via Prisma.
    inline; quotation tool reuses the real route's helper directly) - cosmetic, not a bug, but
    worth aligning both to the same pattern in a cleanup pass.
 5. Growing `apps/api/scripts/verify*.ts` pile again, unconsolidated.
+
+
+## 61. create_invoice write tool built, live-tested date bug found and fixed (2026-08-10)
+
+Fourth and last write tool from the original plan (§57). **All four write tools from the
+agent build order are now built and verified live.** Committed and pushed as `a25dbeb`.
+
+**`create_invoice`** (`zanAppWriteTools.ts`): `docType` (`proforma`/`tax_invoice`), resolves
+customer same as PO/quotation tools, optional `orderId`/`quotationId` links (validated to
+exist if given, not auto-filled from them). Computes a preview total the same way as
+`create_quotation`. **Notably simpler than PO/quotation on the numbering question**: Zan-APP's
+real invoice creation (`routes/invoices.ts` `POST /invoices`) already creates every invoice as
+`status: draft` with a placeholder `DRAFT-<uuid>` invoiceNumber - the real sequential
+`INV/<FY>/00xx` or `PI/<FY>/00xx` number is only allocated later via a separate `/issue`
+route/action a human takes manually. So `create_invoice`'s confirm step doesn't need
+`nextDocumentNumber()` or a `$transaction` at all - it just creates the real DRAFT `Invoice` +
+line items directly, mirroring the real route's create logic exactly. The agent has no way to
+issue an invoice (allocate the real number) - that stays a manual step, and both the tool
+description and system prompt tell the model to never claim otherwise.
+
+**Real bug found and fixed during live verification - date hallucination:** the first test run
+asked the agent to create an invoice "due in 30 days." It called `create_invoice` with
+`issueDate: "2023-10-05"` (not today) and `dueDate: "2023-11-04"` (30 days from that wrong
+date) - the model invented a plausible-looking but wrong "today," probably influenced by
+training-data-era dates, since nothing in the prompt told it the actual current date. Fixed by
+converting `AGENT_SYSTEM_PROMPT` from a static exported constant into `buildAgentSystemPrompt()`,
+called fresh on every turn, which now injects the real current date and explicitly instructs
+the model not to guess dates. Updated both call sites (`agentConversations.ts` and the
+`agentTest.ts` throwaway route) to call the function. **Re-tested after the fix and it worked
+correctly** - `issueDate: "2026-08-10"`, `dueDate: "2026-09-09"`, both right.
+
+This is worth flagging as a **general class of risk for every write tool**, not just
+`create_invoice` - any tool that lets the model supply or compute a date (order dates, expected
+dates, valid-until dates) was silently exposed to the same failure mode; the fix at the
+system-prompt level protects all of them retroactively, not just this one, since it's a single
+shared prompt-builder now used by every write tool's turn.
+
+**Verified live, full loop, real data, twice** (`scripts/verifyCreateInvoiceFlow.ts` - once
+pre-fix to catch the bug, once post-fix to confirm it): agent searched for the customer first,
+proposed a tax invoice with a self-chosen HSN code again (same pattern noted in §60 for
+quotations - still not required explicitly), correct ₹25,000 subtotal + ₹2,250 CGST + ₹2,250
+SGST = ₹29,500, correct dates after the fix, did not claim the invoice was issued or quote an
+invoice number. Confirmed via the API - real `Invoice` row created with `status: draft`,
+correct `DRAFT-<uuid>` placeholder number, correct line item, correct dates. Checked directly
+via Prisma.
+
+**apps/api `tsc --noEmit` clean.**
+
+**Where this leaves the agent module overall:**
+- **9 read tools** (§57) + **`get_document_detail`** (§57) + **4 write tools** (§58-61), all
+  confirm-gated through the same reusable `AgentPendingAction` infrastructure and generic
+  chat-UI confirm card (§58). This is everything originally scoped for "Part A" and "Part B"
+  in §56/§57.
+
+**Not yet done / open items carried forward:**
+1. **Production still not deployed** - now the single biggest gap. Five outstanding items:
+   the two migrations from §55/§56, the `AgentPendingAction` migration from §58, `CRON_SECRET`
+   still unset, and none of this session's four write tools have ever run against production
+   data - only local dev.
+2. **HSN-code self-inference** (flagged in §60, recurred here) - the model keeps confidently
+   picking HSN codes nobody gave it (`850300` for a generator kit, `998199` for AMC service
+   charges) with zero validation. Worth deciding whether to require `hsnCode` explicitly across
+   all three document-line tools rather than trusting the guess, given GST-filing stakes.
+3. **Code-reuse inconsistency** (flagged in §60) - `create_purchase_order`'s confirm case
+   duplicates line-item/Decimal construction inline instead of exporting+reusing
+   `purchase-orders.ts`'s private `mapPoLine`, unlike `create_quotation`'s cleaner reuse of
+   `createQuotationRecord`. Cosmetic, not a bug.
+4. Stray smoke-test suppliers/PO from §59 still not cleaned up.
+5. `apps/api/scripts/verify*.ts` pile is now quite large (7+ files across this session alone) -
+   still not consolidated into real automated tests.
+6. Nothing beyond the original 4-write-tool plan has been scoped yet - e.g. editing/updating
+   existing records via the agent, or the file-upload-to-Drive feature discussed in §56, remain
+   un-started with no immediate plan to pick them up.
