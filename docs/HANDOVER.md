@@ -1586,3 +1586,54 @@ process convention on this machine causing this repeatedly.
    diagnosing after the fact.
 4. `verifyCreateExpenseFlow.ts` (and the other `apps/api/scripts/verify*.ts` files) still
    flagged as candidates to prune once real tests exist - still not done, list keeps growing.
+
+
+## 59. create_purchase_order write tool built and verified live (2026-08-10)
+
+Second write tool from §57/§58's agreed order. Committed and pushed as `e8c5e5d`.
+
+**`create_purchase_order`** (`zanAppWriteTools.ts`): accepts either `supplierId` (if already
+known) or `supplierName` to look up - on no match, lists existing suppliers in the error; on
+multiple matches, lists the candidates with their ids and asks the agent to get the user to
+pick rather than guessing. Validates each line item (description/quantity/unitPrice). Computes
+a **preview-only** total via `computeDocumentTotals` (same intra-state-only CGST+SGST
+treatment as the real route, since `routes/purchase-orders.ts` never passes a
+`placeOfSupply` for POs) - critically, **does NOT allocate a PO number at proposal time**,
+since GST document numbering must stay strictly gap-free and a proposal might get rejected.
+The `AgentPendingAction.input` stores the resolved `supplierId` + normalized line items;
+nothing else is reserved.
+
+**Confirm-time execution** (`agentConversations.ts`, `executeConfirmedAction` `"create_purchase_order"`
+case): recomputes totals fresh (never trusts the stored preview), then - inside a single
+`$transaction` - calls `nextDocumentNumber()` for the real `PO/<FY>/00xx` number and creates
+the `PurchaseOrder` + line items in the same atomic step, mirroring `routes/purchase-orders.ts`
+exactly (down to the `lineTotal` rounding).
+
+**Verified live, full loop, real data** (`scripts/verifyCreatePurchaseOrderFlow.ts`): asked the
+agent to create a PO for a real existing supplier ("Final Smoke Supplier" - see note below),
+10 bags of cement @ ₹400, 18% GST. Agent correctly proposed ₹4,000 subtotal + ₹360 CGST + ₹360
+SGST = ₹4,720, did not quote a PO number before confirming (as instructed). Confirmed via the
+API - real `PurchaseOrder` row created as `PO/2026-27/0005` with one line item, correct
+sequential numbering, correct GST split, correctly attributed to Super Admin. Checked directly
+via Prisma, not just trusting the API response.
+
+**Aside - stray test data discovered:** the live supplier list surfaced during this test
+included obvious leftover smoke-test rows not related to this session's work - "Final Smoke
+Supplier", "Smoke Supplier 2", "Smoke Supplier 3", "Smoke Supplier Pvt Ltd" - alongside the one
+real supplier ("Steelwell Pipes Pvt Ltd"). Not cleaned up (out of scope for this session, and
+this session's own verification PO now references "Final Smoke Supplier" too) - flagged here
+since it echoes the exact kind of test-data cleanup done in §51-54, and the PO created by this
+session's test (`PO/2026-27/0005`) should probably be deleted along with them whenever that
+cleanup happens, to keep the sequence conceptually clean even though gaps in issued numbers are
+fine (only *skipped* numbers are the actual GST concern, and none were skipped here).
+
+**apps/api `tsc --noEmit` clean.**
+
+**Not yet done:**
+1. `create_quotation` and `create_invoice` still not built - same pattern, agreed order says
+   quotation next, invoice last.
+2. Production still not deployed (four outstanding migrations now: §55/§56's two, §58's
+   `AgentPendingAction`, and `CRON_SECRET` still unset).
+3. Stray smoke-test suppliers/PO noted above - not cleaned up.
+4. `verifyCreatePurchaseOrderFlow.ts` adds to the growing `apps/api/scripts/verify*.ts` pile,
+   still not consolidated into real tests.
