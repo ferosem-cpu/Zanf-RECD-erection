@@ -1508,3 +1508,81 @@ Built the read half of §56's plan. Committed and pushed as `171a894`.
    hook in `llm.ts`, per the plan in §56. Build order agreed there: `create_expense` first
    (simplest, proves the confirm-gate UI), then PO/quotation, then invoice last.
 4. File-upload-to-Drive (scoped in §56, deprioritized) still not started.
+
+
+## 58. Agent Part B started - create_expense confirm-gated write tool, verified live (2026-08-10)
+
+Built the first write tool from §57's agreed order. Committed as `9d083ea`, verification
+script as `97d4ff3`.
+
+**New confirm-gate infrastructure (reusable by every future write tool, not just this one):**
+- New `AgentPendingAction` model + migration (`20260810090939_add_agent_pending_action`) -
+  a write-tool handler creates one of these instead of writing real data; it holds the
+  LLM-proposed `input` (validated/resolved) and a human-readable `preview`. Nothing is
+  written to the real tables until the user explicitly confirms.
+- `AgentAuthContext` extended with `conversationId` (threaded through from
+  `agentConversationsRouter` into `runAgentTurn`) so write-tool handlers know which
+  conversation to attach the pending action to.
+- Two new routes on `agentConversationsRouter`: `POST /conversations/:id/actions/:actionId/confirm`
+  and `.../reject`. Confirm dispatches by `toolName` to a small `executeConfirmedAction()`
+  switch that performs the actual Prisma write (currently just the `create_expense` case,
+  mirroring `routes/expenses.ts` exactly); reject just marks it rejected. Both rewrite the
+  matching tool-result message inside the conversation's stored `messages` JSON (matched by
+  `actionId`) so the transcript reflects final state on reload, not stuck on "pending".
+- `AgentChatBubble.tsx`: any tool-result message carrying an `actionId` now renders as an
+  amber confirm card (preview key/value list + Confirm/Reject buttons) instead of being
+  hidden - detection is generic (`parsePendingAction()`), so future write tools need zero
+  frontend changes to get a working confirm card.
+
+**`create_expense` tool** (`zanAppWriteTools.ts`): resolves `categoryKey` against
+`ExpenseCategory` (by key or label, case-insensitive) - on no match, returns the full list of
+valid categories in the error so the agent relays it to the user instead of guessing;
+validates `method` against `PAYMENT_METHOD` (minus `tds`, invoice-only); optionally validates
+a `siteId`. `systemPrompt.ts` updated to make the model treat this as propose-only - told
+explicitly never to say something was created before the user confirms.
+
+**Verified live, full loop, real data** (`scripts/verifyCreateExpenseFlow.ts`): logged in as
+Super Admin, created a real conversation, sent "create an expense for 5300 rupees, transport
+category, for crane hire charges, paid by cash" through the real HTTP endpoint - agent
+correctly resolved the category, created a pending action, replied without claiming it was
+already created. Called the confirm route - a real `Expense` row was created (checked
+directly via Prisma: correct category/amount/method/date/recordedBy). This is the first
+write-capable path in the agent that's been proven end-to-end against a live LLM call, not
+just typechecked.
+
+**Incident found and fixed along the way - NVIDIA provider key got corrupted:** while
+debugging why the live test returned `500 All configured LLM providers failed`, decrypting
+the stored NVIDIA key revealed it had become a bare UUID
+(`484a6b3b-1f58-4406-b431-715ee3bf3a26`) instead of a real `nvapi-...` key - confirmed via a
+side-by-side decrypt-and-compare against the correct key I'd verified earlier this same
+session. Best guess: a stale Settings form submission from the earlier "hung UI" episode (see
+prior session) went through once the page unfroze and saved whatever was sitting in the API
+key field at that moment. **Not root-caused or fixed in the frontend** - only symptom-fixed by
+having the user re-paste their real NVIDIA key through Settings. Also separately fixed
+(pending user's earlier OK): NVIDIA's `model` field was `nvidia/llama-3.1-nemotron-ultra-253b-v1`,
+which 404's on the shared inference endpoint despite being listed in the catalog (likely
+needs a dedicated NIM deployment, not available on the free shared tier) - swapped to
+`nvidia/llama-3.3-nemotron-super-49b-v1`, confirmed working. Gemini remains `429` quota-exhausted
+(free-tier daily cap) - no code fix, just needs time or a paid tier.
+
+**Local dev gotcha reconfirmed:** `prisma migrate dev`/`generate` hit `EPERM` (Windows file
+lock on `query_engine-windows.dll.node`) again after this schema change, same as noted before.
+This time neither dev server's own PID had it locked (killing them didn't release it) - had to
+scan all `node.exe` processes for one with the `query_engine` module loaded
+(`Get-Process | Where { $_.Modules -like '*query_engine*' }`) and kill that specific one. Both
+dev servers restarted cleanly afterward. Worth checking if there's a stray/orphaned node
+process convention on this machine causing this repeatedly.
+
+**apps/api and apps/admin-web `tsc --noEmit` both clean.**
+
+**Not yet done:**
+1. Still only one write tool. Per the agreed order: `create_purchase_order` and
+   `create_quotation` next, `create_invoice` last.
+2. **Not deployed to production** - now THREE outstanding items for the eventual prod
+   deploy: the two migrations from §55/§56, plus this session's `AgentPendingAction`
+   migration, plus `CRON_SECRET`.
+3. The NVIDIA-key-corruption incident's root cause (the hung-UI episode) is still unexplained
+   - if it recurs, worth actually connecting to the browser to catch it live rather than
+   diagnosing after the fact.
+4. `verifyCreateExpenseFlow.ts` (and the other `apps/api/scripts/verify*.ts` files) still
+   flagged as candidates to prune once real tests exist - still not done, list keeps growing.
