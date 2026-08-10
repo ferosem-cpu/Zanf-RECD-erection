@@ -6,5 +6,11 @@
       "source": "/(.*)",
       "destination": "/api/index"
     }
+  ],
+  "crons": [
+    {
+      "path": "/agent/cron/cleanup-conversations",
+      "schedule": "0 3 * * *"
+    }
   ]
 }

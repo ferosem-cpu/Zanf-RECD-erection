@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import Nav from "./Nav";
 import BottomNav from "./BottomNav";
+import AgentChatBubble from "./AgentChatBubble";
 
 // Each protected route lists the permissions that grant access. Holding ANY of them is enough.
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
@@ -189,6 +190,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
         <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 print:p-0 overflow-auto">{children}</main>
       </div>
       <BottomNav onProfileClick={() => setMobileNavOpen(true)} />
+      <AgentChatBubble />
     </div>
   );
 }

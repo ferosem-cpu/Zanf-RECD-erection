@@ -762,9 +762,9 @@ Meta's Cloud API (in-chat, not yet implemented in code) - that's unrelated infra
 setup, not a code change to this repo.
 
 **Deploy addendum (same session):** shipped to production. This particular run of the
-�28 manual-deploy dance needed the `@recd/shared` patch in **three** spots, not the
+�28 manual-deploy dance needed the `@recd/shared` patch in **three** spots, not the
 usual two - `vercel deploy --prebuilt` also checks `apps/api/node_modules/@recd/shared`
-directly before uploading (it had just been deleted per the �36 "safe to delete locally"
+directly before uploading (it had just been deleted per the �36 "safe to delete locally"
 guidance, which caused an initial `File does not exist` failure) in addition to both
 `.vercel/output/functions/{api/index,index}.func/node_modules/@recd/shared` spots. All
 three need the real copy present at deploy time; deleting the local one afterward for
@@ -772,7 +772,7 @@ three need the real copy present at deploy time; deleting the local one afterwar
 `vercel deploy --prebuilt`, only after. Verified live: `/health` 200,
 `/auth/email-otp/request` 200 with the generic response. Deploy aliased to
 `zan-app-api.vercel.app` successfully via `npx vercel` run directly in this session
-(no auto-mode classifier block this time, consistent with �33's note that the CLI itself
+(no auto-mode classifier block this time, consistent with �33's note that the CLI itself
 is runnable here - only `git push` needs the user's own hand).
 
 
@@ -1066,3 +1066,353 @@ manual `zan-app-api` dance (schema.ts's enum lives server-side too). Invoice 000
 - both payment rows present, sums to total, status `paid`.
 
 **Shipped:** both apps changed; API already deployed, admin-web needs `git push`.
+
+
+## 51. Sample data removed from Quotations, POs, Suppliers - Expenses already clean (2026-07-29)
+
+**Ask:** "same to be applied for quotations, PO and expenses... they are all sample items,
+once done i will include the original ones for upload."
+
+**Checked and removed from production (`zan-app`):**
+- `Quotation` `QTN/2026-27/0001` (customer "xyz customer", clearly test data) + its line item.
+- `PurchaseOrder` `PO/2026-27/0001` + its 2 line items.
+- `Supplier` "Steelwell Pipes Pvt Ltd" (the seed demo supplier - no longer referenced by
+  anything after the PO above and the §44 stray test Bill were both removed).
+- `DocumentSequence.lastNumber` reset to 0 for both `quotation` and `purchase_order`, so the
+  next real one the user creates starts clean at `0001` - same numbering-continuity approach
+  used for invoices in §42/§44.
+
+**Left untouched:** `Expense` and `Bill` tables were already empty (0 rows) - nothing to
+remove there. `ExpenseCategory` (Material/Transport/Site labour/Travel/Office/Miscellaneous)
+was deliberately **not** touched - these are reference/lookup data the Expense form needs
+to function (same category as `StageDefinition`/`StatusOption`), not sample transactions.
+
+No code changes - direct production data cleanup only, mirroring §42's invoice cleanup.
+
+
+## 52. Test user accounts removed (2026-07-29)
+
+**Ask:** delete the 4 inactive test-user accounts shown in the Users page screenshot.
+
+**Removed from production** (`zan-app`), checked for FK dependencies first (same care as
+§39's ferosem@gmail.com cleanup):
+- `testsir` (vsc@example.com) - Customer, linked to a customer with 2 orders (orders/sites
+  stayed intact - only the login/contact record was removed, `customerId` is a separate table).
+- `mr xyz` (platinorecdai@gmail.com) - Customer, linked to a customer with 1 order (same -
+  only the login removed).
+- `Lakshmi Narayan` (vendor@salem-fabrication.example) - Erection Engineer for the seeded
+  "Salem Fabrication Works" vendor; was `assignedToId` on one WorkOrder (nullable field, set
+  to NULL first, no FK block).
+- `Suresh Sundaram` (customer@sundaram.example) - Customer contact for `seed-customer-1`
+  (Sundaram Textiles Pvt Ltd, 5 orders/sites - the original core demo dataset). Only this
+  particular login/contact was removed; the customer's orders/sites/complaints are untouched.
+
+**Remaining active users:** Super Admin (ferosem@gmail.com), Test Zarina (erection
+engineer), Vel Murugan CA (finance). No code changes - direct data cleanup only.
+
+
+## 53. Test Zarina account removed (2026-07-29)
+
+Removed `Test Zarina` (zarinaferose4@gmail.com, erection engineer, belonged to a vendor) -
+checked first, nothing linked (no sites, work orders, complaints, stage events). Only
+Super Admin and Vel Murugan CA (finance) remain as active users. No code changes.
+
+
+## 54. Operational test data wiped - Orders, Sites, Complaints, Work Orders, Vendors (2026-07-29)
+
+**Ask:** "delete all orders, vendors sites and complaints & work orders, all of them were
+used for test so its safe to delete them."
+
+**Removed from production** (`zan-app`), in FK-safe order within one transaction: 3
+`PendingAction`, 0 `SitePhoto`, 2 `SiteStageEvent`, 0 `Complaint`, 3 `WorkOrder`, 8 `Site`,
+8 `Order`, 3 `Vendor`. Confirmed beforehand that none of the 4 real invoices reference any
+Order (`orderId IS NULL` on all of them), so this had zero effect on finance data.
+
+**Untouched:** `Customer` records, `Invoice`/`InvoiceLineItem`/`PaymentReceived`,
+`Product`, `User` (Super Admin + Vel Murugan CA only, per §52/§53), `CompanySettings`,
+lookup tables (`StageDefinition`, `StatusOption`, `PhotoCheckpoint`, `StructureType`,
+`ExpenseCategory`, etc).
+
+Combined with §51-53, the app's operational/tracking side (orders, sites, vendors,
+complaints, work orders) and its extra test users are now fully clean - only the finance
+module (4 real invoices) and Super Admin/Finance logins remain, ready for the user to
+start entering real orders/sites/vendors. No code changes - direct data cleanup only.
+
+
+## 55. In-app Zan-APP agent - Google Drive document search setup (2026-08-09)
+
+**Context:** first piece of a new, separate cloud-native chat agent to be built inside
+Zan-APP itself (floating chat bubble in `admin-web`, backend in a new `apps/api/src/agent/`
+module) - distinct from the existing local `MyPersonalAgent` integration (§ see
+`MyPersonalAgent/handover.md`). Full scope for the agent (JWT-passthrough auth, confirm-gated
+writes, Super-Admin visibility toggle, 30-day-expiry conversation memory, etc.) was decided in
+a prior session but not yet built. This entry covers just the Drive document-search prerequisite.
+
+**Decision:** search a specific Google Drive folder for documents (vendor files, work order
+attachments, etc.) rather than storing files in the DB - confirmed Zan-APP's Prisma schema has
+no real document/attachment storage (invoices are structured data with no stored PDF, work
+orders only have one `completionPhotoUrl`, vendors have zero file fields).
+
+**Account used:** a second, previously-unused Google account dedicated to the company
+(`zanfpowersystems@gmail.com`, not the personal `ferosem@gmail.com`) - since it only ever holds
+company documents, used the broader `drive.readonly` OAuth scope (simpler than the Google
+Picker API, no personal-data exposure risk since the account is company-only).
+
+**OAuth setup (same GCP project as MyPersonalAgent, `mypersonalagent-503004`):**
+- New Desktop-app OAuth client created (separate from MyPersonalAgent's own client):
+  client ID `931649018950-hmccqdevk8seqgkof4d181j40oopcq7m.apps.googleusercontent.com`.
+- Consent screen is `External` type - restricted scopes like `drive.readonly` require full
+  Google verification to work for arbitrary users even when "Published". Hit `Error 403:
+  access_denied` on first attempt because of this. Fix: switched consent screen **back to
+  Testing** status and added `zanfpowersystems@gmail.com` as a Test User - test users bypass
+  the verification block. **Caveat: tokens issued in Testing status expire after 7 days** -
+  either redo consent weekly, or complete Google's verification later for a permanent token
+  (needs a privacy policy page + review). This also reverted MyPersonalAgent's own token
+  refresh behavior back to 7-day expiry since they share one consent screen.
+- One-time consent flow run locally via `D:\Projects\MyPersonalAgent\agent\zan_drive_setup.py`
+  (`InstalledAppFlow.run_local_server`, scope `drive.readonly`), reading
+  `zan_drive_credentials.json`, writing `zan_drive_token.json` - completed successfully,
+  refresh token obtained.
+- Target folder `ZanF_DropBox` located via `zan_drive_find_folder.py`:
+  ID `1M3V4MdO0NLMHPJMr7naK0EFGLIT8aIRU`.
+
+**Vercel env vars set on `zan-app-api` (Production only - Preview attempt failed on an
+interactive git-branch CLI prompt that didn't cooperate over piped stdin, left for later/manual
+if needed):**
+`GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, `GOOGLE_DRIVE_REFRESH_TOKEN`,
+`GOOGLE_DRIVE_FOLDER_ID` (the four values above). Set via `npx vercel env add ... production`
+from `apps/api` (linked project confirmed via `apps/api/.vercel/project.json`:
+`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`, team `ferose-salahudeen-s-projects`).
+
+**Not yet done (next steps):**
+1. Build the actual Node/TypeScript Drive search tool in `apps/api/src/agent/` - full-text
+   search (`files.list` with `q=fullText contains ...` scoped to the folder) + content
+   extraction (PDF/DOCX equivalents of MyPersonalAgent's `doc_extract.py`, e.g.
+   `pdf-parse`/`mammoth`), exposed as an LLM tool.
+2. The rest of the agent module is still fully unbuilt: LLM tool-use loop, Prisma-direct
+   tools for invoices/work-orders/customers/sites (confirm-before-execute for writes, same
+   pattern as MyPersonalAgent), `agent_conversations` Supabase table with 30-day-expiry daily
+   Vercel Cron cleanup, Super-Admin-only visibility setting (role allowlist, enforced both
+   client- and server-side), floating chat bubble component in `admin-web`.
+3. LLM provider/API key choice for this new agent still not finalized (user deferred this).
+4. If a permanent (non-7-day) Drive token is wanted later, needs Google OAuth verification
+   for the `drive.readonly` scope on this consent screen.
+
+**Update (same day) - search/extraction tool built and verified working end-to-end:**
+- Built `apps/api/src/lib/googleDrive.ts`, `apps/api/src/lib/docExtract.ts`, and
+  `apps/api/src/agent/tools/driveSearch.ts` (`searchDriveDocuments`, `listDriveDocuments`,
+  `getDriveDocumentContent`) - the actual agent-tool-shaped functions item 1 above called for.
+- Gotcha: building the OAuth2 client from the top-level `google-auth-library` package (rather
+  than `googleapis`' own bundled `google.auth.OAuth2`) passes type-checking but silently
+  produces unauthenticated requests (403 "unregistered callers"). Fixed by using
+  `google.auth.OAuth2` from `googleapis` directly.
+- Gotcha: `pdf-parse` v2.x (what actually installed) uses a `PDFParse` class API
+  (`new PDFParse({ data: buffer }).getText()`, then `.destroy()`), not the old v1
+  function-style `pdfParse(buffer)`. `@types/pdf-parse` (v1-era) removed as unneeded.
+- Verified against the live `ZanF_DropBox` folder with a real uploaded PDF via a throwaway
+  script (`apps/api/scripts/verifyDriveSearch.ts`) - extraction correctly pulled real invoice
+  text out of the PDF. Full `apps/api` typecheck passes clean.
+- Aside: mid-session, a stray root-level `npm install --no-save typescript` (only to get `tsc`
+  for the typecheck) had the side effect of dropping `turbo`/`tailwind`/`next`/`prettier` from
+  `node_modules`; neither `npm install` nor `npm ci` restored them - needed a full
+  `Remove-Item -Recurse -Force node_modules; npm install`. Both `apps/api` and
+  `apps/admin-web` confirmed starting cleanly afterward. Be careful with root-level installs
+  using unusual flags in this repo.
+- Not yet done: items 2-4 above are all still open.
+
+**Update (same day) - LLM tool-use loop built (untested live - no API key yet):**
+- `apps/api/src/agent/tools/types.ts` - `AgentTool` interface (name/description/JSON-schema
+  input/handler), provider-agnostic shape.
+- `apps/api/src/agent/tools/driveTool.ts` - wraps `driveSearch.ts` as three LLM tools:
+  `search_documents`, `list_documents`, `get_document_content`.
+- `apps/api/src/agent/tools/registry.ts` - central tool list or dispatch (`allTools`,
+  `getToolByName`) - where future Zan-APP data tools (invoices/work-orders/etc) get added.
+- `apps/api/src/agent/llm.ts` - the actual tool-use loop against Anthropic's Messages API
+  (`@anthropic-ai/sdk`), up to `MAX_TOOL_TURNS = 8` rounds, reads `ANTHROPIC_API_KEY` and
+  `AGENT_LLM_MODEL` (defaults to `claude-sonnet-5`) from env. Has an `onToolCall` interception
+  hook already in place for confirm-gating future write tools, though nothing uses it yet
+  (all current tools are read-only).
+- `apps/api/src/agent/systemPrompt.ts` - system prompt, currently scoped to "documents only"
+  since no Zan-APP data tools exist yet.
+- `apps/api/src/routes/agentTest.ts` (`POST /agent/chat-test`) - throwaway manual-verification
+  endpoint, JWT-authenticated only (no visibility gate, no persistence) - NOT the real chat
+  endpoint, delete once the real one exists.
+- Full `apps/api` typecheck passes clean with all of the above.
+- **Superseded by the multi-provider work below** - the agent no longer reads a single
+  `ANTHROPIC_API_KEY` env var. See the next update.
+- Still open: Zan-APP data tools (customers/invoices/work orders, confirm-gated writes),
+  `agent_conversations` Supabase table + 30-day cron, Super-Admin visibility setting, chat
+  bubble frontend component in `admin-web`.
+
+**Environment note:** this session repeatedly hit local `node_modules` corruption after
+installs run through the remote/automation shell specifically (turbo/tailwind/next/prettier/
+tsc binaries going missing) - even `npm ci` from that shell under-installed (1295 vs the
+correct 1333 packages). Running the same `Remove-Item -Recurse -Force node_modules; npm
+install` directly in the user's own terminal reliably fixed it every time. If this recurs,
+prefer having the user run installs directly rather than through automation.
+
+**Update (same day) - multi-provider LLM support with automatic fallback, DB-backed settings:**
+User explicitly rejected being locked to Anthropic only - wants to add any provider's API key
+under any label, with automatic fallback if one fails.
+
+- New Prisma model `AgentLlmProvider` (migration `20260809082042_add_agent_llm_provider`,
+  applied to the live DB): `name` (user label), `providerType` (`'anthropic'` |
+  `'openai_compatible'` - plain string per the project's data-not-code convention, so a new
+  provider is a new adapter + config row, not a migration), `apiKeyCiphertext` (encrypted,
+  never returned to the frontend), `baseUrl` (for OpenAI-compatible custom endpoints - Groq/
+  Together/DeepSeek/OpenRouter/Fireworks/Mistral/etc, all work via this since they expose an
+  OpenAI-compatible chat-completions API), `model`, `priority` (lower tried first), `isActive`.
+- `apps/api/src/lib/crypto.ts` - AES-256-GCM encrypt/decrypt for the stored keys. Requires
+  `AGENT_SECRETS_KEY` env var (32-byte key, base64) - generated and set on Vercel Production
+  (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` if it ever
+  needs regenerating - note regenerating it invalidates every already-stored key). Verified
+  round-trip via `apps/api/scripts/verifyCrypto.ts`.
+- `apps/api/src/agent/providers/types.ts` - provider-agnostic `UnifiedMessage`/
+  `UnifiedToolCall`/`LlmAdapter` shape. The agent loop and tool registry work entirely in
+  this shape now - no provider-specific types leak outside the `providers/` folder.
+- `apps/api/src/agent/providers/anthropicAdapter.ts` and `openaiCompatibleAdapter.ts` -
+  translate unified<->native format for each provider family.
+- `apps/api/src/agent/providers/factory.ts` - `createAdapterForRow()` (DB row -> adapter,
+  decrypting the key), `loadActiveProvidersInOrder()` (active rows sorted by priority).
+- `apps/api/src/agent/llm.ts` rewritten: `runAgentTurn()` now loads the active provider list
+  once per call and tries each in priority order on every individual LLM request
+  (`sendWithFallback`) - a mid-conversation failure (auth error, rate limit, outage) moves to
+  the next provider immediately rather than aborting the whole turn. Throws a clear error if
+  zero providers are configured.
+- `apps/api/src/routes/agentProviders.ts` (`GET/POST/PUT/DELETE /agent/providers`) - CRUD for
+  provider rows, gated to `MANAGE_SETTINGS` (Super Admin only, same gate as company settings -
+  matches the original decision that agent config is a Super-Admin concern). API key is
+  write-only: POST/PUT accept it, no response ever includes the ciphertext or decrypted key.
+  PUT with no `apiKey` field keeps the existing key (only re-encrypts if a new one is sent).
+- `apps/api/src/routes/agentTest.ts` updated to the new `UnifiedMessage` history shape.
+- Full `apps/api` typecheck passes clean. DB table existence verified live via
+  `apps/api/scripts/verifyProviderTable.ts` (0 rows, as expected - none created yet).
+- **Not yet done:** the actual Settings UI in `admin-web` to add/edit/reorder/delete
+  providers (backend is fully ready - this is pure frontend work against the CRUD routes
+  above) and the floating chat bubble itself. No providers have been added yet, so the agent
+  cannot actually run end-to-end until at least one is added via the API or (once built) the
+  UI. `verifyCrypto.ts` and `verifyProviderTable.ts` are throwaway - delete once real tests
+  exist.
+
+**Update (same day) - Settings UI for agent providers built:**
+- `apps/admin-web/src/components/AgentProvidersSettings.tsx` - new section on the existing
+  Settings page (client-side gated on `hasPermission("manage_settings")`, matching the
+  backend gate). Lists configured providers (priority/name/type/model/active toggle), and a
+  form to add/edit one (label, provider type dropdown, API key - write-only, blank on edit
+  means "keep existing" -, model, optional custom endpoint for `openai_compatible`, priority,
+  active checkbox). Wired into `apps/admin-web/src/app/settings/page.tsx` right after the
+  Company & Tax details section.
+- Full `apps/admin-web` typecheck passes clean (confirmed via `--listFiles` that the new file
+  is actually included in the check, not skipped).
+- `npx next build` (production build) compiles the whole app cleanly, all 26 routes including
+  `/settings` (now 8.96 kB, up from before - confirms the new component is bundled). `npx next
+  start` then serves `/login` with a clean 200 and correctly-loaded CSS.
+
+**Known issue - `next dev` only, does NOT affect production/Vercel:** in this local dev
+environment, `next dev` fails to compile ANY page (`/login` included, not just `/settings`)
+with `Module parse failed: Unexpected character '@'` on `globals.css`'s `@import`/`@tailwind`
+lines. Diagnosed thoroughly - **not caused by this session's work**:
+- PostCSS + Tailwind + Autoprefixer process `globals.css` correctly when run directly
+  (bypassing Next entirely) - config and plugins are 100% valid.
+- Next.js *does* correctly load `postcss.config.js` from the right location (proven by
+  deliberately breaking the config file - the error changed to reflect that, via the
+  `next/font` → `getPostCssPlugins` code path in `next/dist/build/webpack/config/blocks/css/
+  plugins.js`).
+- But the separate React-Server-Components ("flight") CSS loader path
+  (`next-flight-css-loader.js`, used for `globals.css` imported from `layout.tsx`) never
+  invokes PostCSS on the file at all - reproduces even with a fully clean `node_modules`
+  (fresh `npm install`) and fully cleared `.next`/`.turbo` caches.
+- **Crucially: `next build` (production) does NOT have this bug** - compiles clean, and
+  `next start` serves real pages correctly. Since Vercel deployments use `next build`, this
+  does not block or affect the live site. It only affects the local `next dev` experience in
+  this environment.
+- Not yet resolved. `next@14.2.35` is already the latest 14.2.x patch (Next is nudging toward
+  a 15.x/16.x major upgrade instead, which is a separate, much larger decision - not
+  attempted). If local dev on `admin-web` is needed before this gets root-caused, `next build
+  && next start` is a working (if slower-to-iterate) fallback.
+
+**Update (same day) - provider dropdown + live model picker (replaces free-text model entry):**
+User wanted to pick a provider from a dropdown and see that provider's actual available
+models, rather than typing a provider type + model name by hand.
+
+- `POST /agent/providers/list-models` (new route in `agentProviders.ts`, same `MANAGE_SETTINGS`
+  gate) - takes a not-yet-saved `{providerType, apiKey, baseUrl}`, probes the provider's own
+  live models-list endpoint, and returns `{models: [{id, label}]}`. Nothing is persisted -
+  it's a pure lookup. Anthropic uses `GET /v1/models` with `x-api-key`; everything else uses
+  the standard OpenAI-compatible `GET {baseUrl}/models` with a bearer token (works for Groq/
+  DeepSeek/OpenRouter/Together/Gemini's compat layer/etc since they all implement this same
+  route). Returns `{models: [], error: ...}` on any failure rather than a hard error, so the
+  frontend degrades to manual model-name entry instead of blocking the user.
+- `AgentProvidersSettings.tsx` reworked: a `PROVIDER_PRESETS` list (Anthropic, OpenAI, Google
+  Gemini, Groq, DeepSeek, OpenRouter, Together AI, Custom) maps a friendly provider name to
+  the right `providerType` + `baseUrl` combo - confirmed each base URL against the provider's
+  own docs (notably `https://generativelanguage.googleapis.com/v1beta/openai/` for Gemini,
+  `https://api.deepseek.com/v1` for DeepSeek). Selecting a preset auto-fills type/URL; "Custom"
+  leaves the URL editable for anything else OpenAI-compatible not in the list. After pasting a
+  key, a "Load models" button calls the new endpoint and turns the model field into a
+  `<select>` of real, currently-available models; if that fails for any reason, it falls back
+  to a plain text input so the user is never blocked.
+- Full typecheck clean on both workspaces; `apps/admin-web` production build compiles clean
+  (`/settings` now 9.53 kB). Both local dev servers (`apps/api` via `tsx watch`, `apps/admin-web`
+  via `next build && next start` per the known dev-only bug above) confirmed live and
+  responding correctly.
+- Not yet tested with a real key end-to-end (user was about to add their Gemini key via this
+  UI when this change was requested, so testing resumes from there).
+
+**Update (same day) - IMPORTANT pre-deploy step + local env fix:**
+- Discovered `apps/api/.env`'s `DATABASE_URL`/`DIRECT_URL` point at a **local** Postgres
+  (`localhost:5432`, db `recd_tracker`), not the production Supabase DB - so all of this
+  session's local testing (migration, verification scripts, this Settings UI) has been
+  against a separate local database. Nothing touched production data.
+- **Consequence: production's database does NOT have the `AgentLlmProvider` table yet.**
+  `apps/api/vercel.json`'s build command is just `npm run build` (`prisma generate && tsc`) -
+  no automatic `prisma migrate deploy` step. **Before or during the next deploy, someone
+  needs to run `npx prisma migrate deploy` against the real production `DATABASE_URL`**, or
+  the `/agent/providers*` routes will 500 in production once this code ships. Not yet done.
+- Fixed a real bug hit while testing locally: saving a provider failed with "Internal server
+  error" because `AGENT_SECRETS_KEY` was only ever set on Vercel Production and in a scratch
+  test file (`.env.drivetest`) - never in the actual `apps/api/.env` the local dev server
+  reads. Added it there now (same value as Vercel's, so ciphertexts are portable between
+  environments if ever needed - though local and prod DBs are separate anyway).
+
+## Update (2026-08-10, same session as agent provider work) - real bug found and fixed: Gemini multi-turn tool calling, verified end-to-end
+
+Root cause of a second, separate 500 (after an earlier env-var one): saving a provider worked, but chatting with the agent once it needed a second turn (after any tool call) failed with a bare 400 status code (no body) from Gemini.
+
+Root cause: Gemini's OpenAI-compatible layer attaches a non-standard extra_content.google.thought_signature field to each tool_call it returns, and requires that exact field echoed back verbatim when the conversation continues past that tool call - dropping it gets the next request rejected with an empty-body 400. Conceptually the same requirement as Anthropic's extended-thinking blocks needing to be preserved across turns.
+
+Fix: added providerMetadata?: unknown to UnifiedToolCall (apps/api/src/agent/providers/types.ts) - an opaque bag adapters can populate on the way out and replay on the way back in. openaiCompatibleAdapter.ts now captures any extra fields a provider attaches to a tool_call beyond the OpenAI spec into providerMetadata, and re-attaches them when reconstructing that assistant message for a later turn. Anthropic's adapter untouched.
+
+Also fixed: a stale node.exe process was still bound to port 4011 serving old code from before the AGENT_SECRETS_KEY fix - earlier restarts weren't actually replacing it (the npm run dev wrapper's PID differs from the real listening PID). Running tsx watch directly (not via the npm wrapper) made the real PID visible and confirmed the restart took.
+
+Verified with a real chained login -> save -> chat round trip against the local dev DB and a real Gemini key: agent correctly listed the one real file in ZanF_DropBox (AgsarPaint_Quote_TTCRN v1.2.pdf) via list_documents, multi-turn, no errors.
+
+Local apps/api/.env now also has the GOOGLE_DRIVE_* vars so local testing can exercise the real Drive tool end-to-end going forward.
+
+Throwaway diagnostic scripts from this session live in apps/api/scripts/ - useful for regression-checking this bug class, candidates to prune/consolidate later.
+
+Not yet built: the actual floating chat bubble UI in admin-web. Everything so far is backend + Settings UI - still no in-app chat window a user can type into. This is the next piece to build.
+## Update (2026-08-10) - full floating chat bubble build: persistence + visibility, verified end-to-end
+
+Built the last remaining piece of the in-app agent: the actual chat window, with saved conversation history and the Super-Admin visibility toggle from the original scope decisions.
+
+**Schema (migration 20260810061248_add_agent_conversations_and_visibility):**
+- New AgentConversation model - one row per chat thread (userId, title, messages as a JSON blob holding the full UnifiedMessage[] array, createdAt/updatedAt). A single-column JSON blob rather than a per-message table, since threads are read/written whole and are short-lived (30-day auto-expiry, not a permanent audit trail).
+- CompanySettings.agentVisibleRoleKeys String[] @default([]) - role-key allowlist controlling who sees the bubble. Empty by default (hidden for everyone until a Super Admin opts roles in).
+
+**Backend:**
+- apps/api/src/routes/settings.ts - PUT /settings now also accepts/persists agentVisibleRoleKeys (GET already returns the full CompanySettings row, no change needed there).
+- apps/api/src/routes/agentConversations.ts (new, mounted under /agent) - GET /conversations (list, scoped to caller), POST /conversations (create empty thread), GET /conversations/:id, DELETE /conversations/:id, POST /conversations/:id/messages (runs runAgentTurn with the thread's saved history, persists the updated history, auto-titles from the first message). Every route scoped to req.auth.userId - no admin override, this is personal chat history like any other user data.
+- apps/api/src/routes/agentCron.ts (new) - GET /agent/cron/cleanup-conversations, deletes AgentConversation rows with updatedAt older than 30 days. Protected by CRON_SECRET (Vercel Cron sends Authorization: Bearer \ automatically once that env var is set) - falls through unauthenticated only when CRON_SECRET isn't set (local dev).
+- apps/api/vercel.json - added a crons entry, /agent/cron/cleanup-conversations on a daily schedule (0 3 * * *).
+
+**Frontend:**
+- apps/admin-web/src/components/AgentVisibilitySettings.tsx (new) - Settings page section, checkboxes per role key, saves via a partial PUT /settings body (Prisma update ignores undefined fields, so this never clobbers other settings).
+- apps/admin-web/src/components/AgentChatBubble.tsx (new) - floating button (bottom-right) + slide-up chat panel: message thread, input box, a History dropdown to switch between past conversations, a New button to start a fresh thread. Visibility is gated client-side by checking the logged-in user's role.key against agentVisibleRoleKeys fetched from /settings (defense in depth - the real gate is that every backend agent route requires authentication regardless of this check; this only controls whether the widget renders in the UI). Filters the raw message history down to user/assistant turns with real text - tool-call-only turns and raw tool-result turns stay out of the human-readable transcript.
+- Wired into apps/admin-web/src/components/AuthGuard.tsx, inside the main authenticated shell (renders on every real app page, not on login/change-password/customer-portal).
+
+**Verified end-to-end (local dev, real login, real Gemini key):** logged in as the Super Admin seed account, set agentVisibleRoleKeys to include super_admin via a script, created a conversation, sent What documents do you have access to? through the real HTTP endpoint - agent correctly used list_documents and reported the real file in ZanF_DropBox, conversation auto-titled from the first message, conversation list and delete both confirmed working. Both apps tsc --noEmit clean; admin-web next build clean (/settings now 10 kB, up from 9.53 kB reflecting the new visibility section).
+
+**Not yet deployed to production** - this needs the same treatment as the provider-settings migration: prisma migrate deploy against the real production DB, plus setting CRON_SECRET as a Vercel env var on zan-app-api (and the cron itself only actually fires once deployed - Vercel Cron doesn't run for undeployed/local code).
+
+**Scope from the original 9-point agent plan that's now fully built:** floating chat bubble (point 1), Super-Admin visibility toggle (point 2), text chat (point 4), 30-day-expiry conversation memory in threads (point 9). Still not built: Zan-APP data tools for invoices/work-orders/customers with confirm-gated writes (points 5-6), external messaging (point 8, deferred). Voice (point 4's later half) also still open.

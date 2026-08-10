@@ -15,6 +15,8 @@ import {
 } from "@/lib/settingsStore";
 import { extractDominantColors, colorsToTheme } from "@/lib/colorExtractor";
 import { api } from "@/lib/apiClient";
+import AgentProvidersSettings from "@/components/AgentProvidersSettings";
+import AgentVisibilitySettings from "@/components/AgentVisibilitySettings";
 
 export default function SettingsPage() {
   const [activeTheme, setActiveTheme] = useState("slate");
@@ -475,6 +477,10 @@ export default function SettingsPage() {
           </form>
         </section>
       )}
+
+      {/* ── In-app agent LLM providers ──────────────────────────────────── */}
+      <AgentProvidersSettings />
+      <AgentVisibilitySettings />
 
       {/* ── Live Preview ────────────────────────────────────────────────── */}
       <section className="card p-4 sm:p-6">

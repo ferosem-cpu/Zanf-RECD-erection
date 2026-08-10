@@ -98,6 +98,8 @@ model User {
   invoiceEdits         InvoiceEditLog[]   @relation("InvoiceEditor")
   workOrdersAssigned   WorkOrder[]        @relation("WorkOrderAssignee")
   workOrdersCreated    WorkOrder[]        @relation("WorkOrderCreator")
+  agentLlmProvidersCreated AgentLlmProvider[] @relation("AgentLlmProviderCreator")
+  agentConversations       AgentConversation[] @relation("AgentConversationUser")
 }
 
 model OtpCode {
@@ -489,6 +491,11 @@ model CompanySettings {
   /// Authorised signatory printed on quotations, invoices and purchase orders.
   signatoryName        String?
   signatoryDataUrl     String?
+
+  /// In-app agent visibility (§ agent module in HANDOVER.md): role keys allowed to see the
+  /// floating chat bubble. Empty array = hidden for everyone. Plain string array, not a
+  /// relation/lookup table, since this is a small admin-editable allowlist, not growing data.
+  agentVisibleRoleKeys String[] @default([])
 }
 
 // ---------------------------------------------------------------------------
@@ -771,4 +778,47 @@ model Expense {
   recordedById String
   recordedBy   User            @relation("ExpenseRecorder", fields: [recordedById], references: [id])
   createdAt    DateTime        @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// In-app agent - LLM provider settings (§55 in HANDOVER.md)
+// ---------------------------------------------------------------------------
+
+/// A user-configured LLM provider credential for the in-app agent. providerType is a plain
+/// string (not a Prisma enum) per the project's data-not-code convention - new providers
+/// (Google, Azure OpenAI, etc.) are a new adapter + a config row, not a migration. The API
+/// key itself is stored encrypted (see lib/crypto.ts) - never returned to the frontend after
+/// creation. Multiple rows can be active at once; the agent tries them in `priority` order
+/// (lowest first) and falls back to the next on failure.
+model AgentLlmProvider {
+  id                String   @id @default(cuid())
+  name              String   // user-given label, e.g. "My OpenAI key", "Groq fallback"
+  providerType      String   // 'anthropic' | 'openai_compatible' (adapter lookup key)
+  apiKeyCiphertext  String   // AES-256-GCM encrypted, base64 - never sent to the frontend
+  baseUrl           String?  // for openai_compatible custom endpoints (Groq/Together/OpenRouter/etc)
+  model             String   // model name to request from this provider
+  priority          Int      @default(0) // lower tried first
+  isActive          Boolean  @default(true)
+  createdById       String
+  createdBy         User     @relation("AgentLlmProviderCreator", fields: [createdById], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+/// One chat thread with the in-app agent. `messages` holds the full UnifiedMessage[] array
+/// (role/content/toolCalls/tool results) as JSON - a single-column blob rather than a
+/// separate per-message table, since threads are read/written whole (never queried per-
+/// message) and are short-lived (auto-deleted after 30 days by a daily cron - see the agent
+/// module section in HANDOVER.md for the cleanup job). `title` is a short label derived from
+/// the first user message, shown in the conversation list.
+model AgentConversation {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("AgentConversationUser", fields: [userId], references: [id], onDelete: Cascade)
+  title     String?
+  messages  Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }

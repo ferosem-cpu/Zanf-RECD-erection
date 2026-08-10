@@ -19,6 +19,10 @@ import { purchaseOrdersRouter } from "./routes/purchase-orders";
 import { expensesRouter } from "./routes/expenses";
 import { financeDashboardRouter } from "./routes/financeDashboard";
 import { workOrdersRouter } from "./routes/workOrders";
+import { agentTestRouter } from "./routes/agentTest";
+import { agentProvidersRouter } from "./routes/agentProviders";
+import { agentConversationsRouter } from "./routes/agentConversations";
+import { agentCronRouter } from "./routes/agentCron";
 
 const app = express();
 app.use(cors());
@@ -46,6 +50,10 @@ app.use("/purchase-orders", purchaseOrdersRouter);
 app.use("/expenses", expensesRouter);
 app.use("/finance", financeDashboardRouter);
 app.use("/work-orders", workOrdersRouter);
+app.use("/agent", agentTestRouter);
+app.use("/agent", agentProvidersRouter);
+app.use("/agent", agentConversationsRouter);
+app.use("/agent", agentCronRouter);
 
 // Catches anything a route handler throws or rejects with (Express 5 forwards rejected
 // async handlers here automatically) so a downstream failure - like the database being
