@@ -1464,3 +1464,47 @@ full `drive`) - a re-consent flow, same 7-day-token caveat as the original read-
 until Google verification is done. New upload route + attach control in
 `AgentChatBubble.tsx`. Scoped but deprioritized behind the data tools above per user's "let's
 get back to the build" redirect this session.
+
+
+## 57. Agent Part A - Zan-APP read tools built (2026-08-10)
+
+Built the read half of §56's plan. Committed and pushed as `171a894`.
+
+- **`apps/api/src/agent/tools/zanAppReadTools.ts`** - nine search tools, one per entity
+  group: `search_customers`, `search_vendors`, `search_quotations`, `search_invoices`,
+  `search_purchase_orders`, `search_expenses`, `search_orders_and_sites`,
+  `search_work_orders`, `search_complaints`. Each is a lightweight Prisma `findMany`
+  (name/number contains-match, optional status filter, capped at 15 results) that enforces
+  the *same* `PERMISSION_KEY` check as the equivalent REST route (e.g. `search_invoices`
+  requires `MANAGE_INVOICES`, same as `GET /invoices`) - scoping logic isn't duplicated or
+  reinvented, just mirrored. `search_work_orders` and `search_complaints` also mirror their
+  routes' row-level scoping (field engineers/assignees only see their own assigned items,
+  same as `ACT_ASSIGNED_WORK_ORDERS`/`ACT_ASSIGNED_COMPLAINTS` do today). Money fields
+  (`Prisma.Decimal`) are converted to plain `number` for the LLM - fine since these tools
+  never write anything back.
+- **`apps/api/src/agent/tools/zanAppDetailTool.ts`** - single `get_document_detail` tool,
+  dispatched by `docType` (`customer | vendor | quotation | invoice | purchase_order |
+  expense | order | work_order | complaint`) + `id`. Returns full line items/payments/
+  contacts - the search tools above stay summary-only on purpose so results lists don't
+  balloon. Same per-docType permission checks as the search tools.
+- **`registry.ts`** - `allTools` now `[...driveTools, ...zanAppReadTools, getDocumentDetailTool]`.
+- **`systemPrompt.ts`** - rewritten to list all the new tools, tell the agent to always
+  search before quoting an id (never guess), and state plainly it's still **read-only** -
+  explicitly told to say "I can't do that yet" rather than pretend to create/edit/delete
+  anything, since Part B (write tools) doesn't exist yet.
+- `apps/api` `tsc --noEmit` clean.
+
+**Not yet done:**
+1. No live end-to-end verification of these tools yet (unlike §55's Drive tools, which were
+   tested against a real conversation) - next session should smoke-test at least a couple of
+   the search tools against real data (e.g. "find invoices for Energyca", "look up the
+   Salem Fabrication vendor") before moving on to Part B.
+2. **Not deployed to production** - same standing issue as §55/§56: this is local-only until
+   the pending `prisma migrate deploy` + `CRON_SECRET` work happens (this session's read
+   tools don't need a new migration themselves, but the agent module as a whole still isn't
+   live).
+3. **Part B (write tools) not started**: `create_quotation`, `create_invoice`,
+   `create_purchase_order`, `create_expense` - confirm-gated via the existing `onToolCall`
+   hook in `llm.ts`, per the plan in §56. Build order agreed there: `create_expense` first
+   (simplest, proves the confirm-gate UI), then PO/quotation, then invoice last.
+4. File-upload-to-Drive (scoped in §56, deprioritized) still not started.
