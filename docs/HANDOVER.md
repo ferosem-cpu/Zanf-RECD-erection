@@ -1760,3 +1760,52 @@ via Prisma.
 6. Nothing beyond the original 4-write-tool plan has been scoped yet - e.g. editing/updating
    existing records via the agent, or the file-upload-to-Drive feature discussed in §56, remain
    un-started with no immediate plan to pick them up.
+
+
+## 62. Missing edit UI added for expenses, quotations, purchase orders (2026-08-10)
+
+User-reported gap, unrelated to the agent work: no way to edit a quotation in the UI. Checked
+the equivalent surfaces for PO, expenses, and work orders while at it, per user's request.
+Committed and pushed as `504b4d7`.
+
+**Findings before building anything:**
+- **Work orders already had a full edit UI** (`work-orders/page.tsx`'s "Manage"/"Update" modal
+  - status, assignee, completion notes/photo via `PATCH /work-orders/:id`) - no gap, no
+  changes made.
+- **Quotations, purchase orders, and expenses all already had working backend edit endpoints**
+  (`quotationUpdateSchema`/`PUT /quotations/:id`, `purchaseOrderUpdateSchema`/
+  `PUT /purchase-orders/:id`, `expenseUpdateSchema`+`DELETE`/`PUT /expenses/:id`) - the entire
+  gap was frontend. No API/schema/migration changes needed for this session's work.
+
+**Built:**
+- **`expenses/page.tsx`** - Edit button added to each row (desktop table + mobile card),
+  opens a modal that mirrors the existing "Add expense" form, saves via `PUT /expenses/:id`.
+- **`quotations/[id]/page.tsx`** - "Edit quotation" button, shown only when `status === "draft"`
+  (matching the server-side restriction - `routes/quotations.ts`'s `PUT` rejects non-draft
+  edits), opens a full line-item edit modal. Built by directly following the pattern already
+  established in `invoices/[id]/page.tsx`'s edit flow (add/remove line rows, customer/place-of-
+  supply/notes/terms fields) rather than inventing a new one.
+- **`purchase-orders/[id]/page.tsx`** - "Edit PO" button, same draft-only gating, same
+  line-item modal pattern (supplier instead of customer, no `discountPct` field since POs
+  don't use discount - matches the read-only PO line-item table, which also has no discount
+  column).
+
+**Verified:** `apps/admin-web` `tsc --noEmit` clean. Since `next dev` is still broken by the
+pre-existing `globals.css` `@import`/`@tailwind` ordering bug (see the "`next dev` CSS loader
+bug" note elsewhere in this file), rebuilt via `next build` and restarted `next start` on
+:6011 to serve these changes locally - not yet clicked through in the browser by a human,
+just typechecked and served.
+
+**Not yet done:**
+1. **Not manually verified in the browser** - unlike the agent work this session, these edit
+   modals haven't been clicked through end-to-end yet. Worth a quick pass next time: edit a
+   draft quotation's line items, a draft PO's line items, and an expense, confirm totals
+   recompute correctly and the record actually updates.
+2. Neither quotations nor POs have an edit-history/audit-log equivalent to invoices'
+   `InvoiceEditLog` - not requested, but worth knowing this asymmetry exists if it comes up
+   later (invoices log every edit, quotations/POs currently don't log anything, they just
+   silently overwrite - acceptable today since editing is draft-only for both, unlike invoices
+   which allow editing issued/paid documents).
+3. Production still not deployed - same standing gap as previous sections; this session's
+   change is a pure additive frontend change with no new migration, so it doesn't add to that
+   list, but it's still only live in local dev right now.
