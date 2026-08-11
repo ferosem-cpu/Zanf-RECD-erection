@@ -29,6 +29,11 @@ export default function ExpensesPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash" });
 
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editFormError, setEditFormError] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash" });
+
   function load() {
     api<ExpenseRow[]>("/expenses").then(setRows).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
     if (canManage) api<Cat[]>("/meta/expense-categories").then(setCats).catch(() => {});
@@ -54,6 +59,33 @@ export default function ExpensesPage() {
     if (!confirm("Delete this expense?")) return;
     await api(`/expenses/${id}`, { method: "DELETE" }).catch(() => {});
     load();
+  }
+
+  function openEdit(r: ExpenseRow) {
+    setEditFormError(null);
+    setEditForm({
+      categoryId: r.category.id,
+      description: r.description,
+      amount: r.amount,
+      expenseDate: r.expenseDate.slice(0, 10),
+      method: r.method,
+    });
+    setEditId(r.id);
+  }
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editId) return;
+    setEditSaving(true); setEditFormError(null);
+    try {
+      if (!editForm.categoryId) throw new Error("Please choose a category");
+      await api(`/expenses/${editId}`, { method: "PUT", body: JSON.stringify({
+        categoryId: editForm.categoryId, description: editForm.description,
+        amount: parseFloat(editForm.amount) || 0, expenseDate: new Date(editForm.expenseDate).toISOString(), method: editForm.method,
+      }) });
+      setEditId(null);
+      load();
+    } catch (err) { setEditFormError(err instanceof Error ? err.message : "Failed"); }
+    finally { setEditSaving(false); }
   }
 
   const total = rows.reduce((s, r) => s + parseFloat(r.amount), 0);
@@ -91,7 +123,12 @@ export default function ExpensesPage() {
                   <td className="px-4 py-3">{r.description}</td>
                   <td className="px-4 py-3 text-gray-500">{PAYMENT_METHOD_LABEL[r.method] ?? r.method}</td>
                   <td className="px-4 py-3 whitespace-nowrap font-medium">{formatINR(r.amount)}</td>
-                  {canManage && <td className="px-4 py-3 text-right"><button onClick={() => remove(r.id)} className="text-xs text-red-500">Delete</button></td>}
+                  {canManage && (
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button onClick={() => openEdit(r)} className="text-xs font-medium text-[var(--theme-accent)] mr-3">Edit</button>
+                      <button onClick={() => remove(r.id)} className="text-xs text-red-500">Delete</button>
+                    </td>
+                  )}
                 </tr>
               ))}
               {rows.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No expenses yet.</td></tr>}
@@ -112,6 +149,12 @@ export default function ExpensesPage() {
             <p className="text-sm text-gray-600 truncate">{r.description}</p>
             <div className="data-card-row"><span className="label">Date</span><span className="value">{formatDate(r.expenseDate)}</span></div>
             <div className="data-card-row"><span className="label">Method</span><span className="value">{PAYMENT_METHOD_LABEL[r.method] ?? r.method}</span></div>
+            {canManage && (
+              <div className="mt-3 flex gap-2">
+                <button onClick={() => openEdit(r)} className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium">Edit</button>
+                <button onClick={() => remove(r.id)} className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-red-500">Delete</button>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -159,6 +202,55 @@ export default function ExpensesPage() {
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
                 <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">{saving ? "Saving…" : "Add expense"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {editId && (
+        <div className="modal-backdrop" onClick={() => setEditId(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Edit expense</h3>
+              <button onClick={() => setEditId(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form onSubmit={saveEdit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                <select required className="field w-full" value={editForm.categoryId} onChange={(e) => setEditForm({ ...editForm, categoryId: e.target.value })}>
+                  <option value="">Select a category</option>
+                  {cats.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Description</label>
+                <input required className="field w-full" value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Amount (₹)</label>
+                  <input type="number" step="0.01" required className="field w-full" value={editForm.amount} onChange={(e) => setEditForm({ ...editForm, amount: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
+                  <input type="date" required className="field w-full" value={editForm.expenseDate} onChange={(e) => setEditForm({ ...editForm, expenseDate: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Method</label>
+                <select className="field w-full" value={editForm.method} onChange={(e) => setEditForm({ ...editForm, method: e.target.value })}>
+                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="upi">UPI</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="cash">Cash</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              {editFormError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{editFormError}</p>}
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => setEditId(null)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                <button type="submit" disabled={editSaving} className="btn-primary px-4 py-2 text-sm">{editSaving ? "Saving…" : "Save changes"}</button>
               </div>
             </form>
           </div>

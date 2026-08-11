@@ -36,6 +36,8 @@ interface QuotationDetail {
   lineItems: LineItem[];
   invoices: { id: string; invoiceNumber: string; docType: string; status: string }[];
 }
+interface Customer { id: string; name: string; state?: string | null; }
+type EditLine = { description: string; hsnCode: string; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string };
 
 export default function QuotationDetailPage() {
   const router = useRouter();
@@ -43,6 +45,7 @@ export default function QuotationDetailPage() {
   const canManage = hasPermission("manage_quotations");
 
   const [q, setQ] = useState<QuotationDetail | null>(null);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [action, setAction] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -53,8 +56,9 @@ export default function QuotationDetailPage() {
     if (!id) return;
     setError(null);
     api<QuotationDetail>(`/quotations/${id}`).then(setQ).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
+    if (canManage) api<Customer[]>("/customers").then(setCustomers).catch(() => {});
   }
-  useEffect(load, [id]);
+  useEffect(load, [id, canManage]);
 
   async function doStatus(status: string) {
     setAction(status);
@@ -94,6 +98,68 @@ export default function QuotationDetailPage() {
     } finally {
       setAction(null);
     }
+  }
+
+  // Editing - only draft quotations can be edited (enforced server-side too); once sent,
+  // corrections should go through a fresh revision rather than a silent rewrite.
+  const [editOpen, setEditOpen] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({ customerId: "", placeOfSupply: "", validUntil: "", notes: "", terms: "" });
+  const [editLines, setEditLines] = useState<EditLine[]>([]);
+
+  function openEdit() {
+    if (!q) return;
+    setEditError(null);
+    setEditForm({
+      customerId: q.customer.id,
+      placeOfSupply: q.placeOfSupply ?? "",
+      validUntil: q.validUntil ? q.validUntil.slice(0, 10) : "",
+      notes: q.notes ?? "",
+      terms: q.terms ?? "",
+    });
+    setEditLines(q.lineItems.map((l) => ({
+      description: l.description,
+      hsnCode: l.hsnCode ?? "",
+      quantity: l.quantity,
+      unitPrice: l.unitPrice,
+      discountPct: l.discountPct,
+      taxRatePct: l.taxRatePct,
+    })));
+    setEditOpen(true);
+  }
+  function addEditLine() {
+    setEditLines((l) => [...l, { description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" }]);
+  }
+  function updateEditLine(i: number, patch: Partial<EditLine>) {
+    setEditLines((l) => l.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  }
+  function removeEditLine(i: number) {
+    setEditLines((l) => l.filter((_, idx) => idx !== i));
+  }
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!q) return;
+    setEditError(null);
+    setAction("edit");
+    try {
+      await api(`/quotations/${id}`, { method: "PUT", body: JSON.stringify({
+        customerId: editForm.customerId,
+        placeOfSupply: editForm.placeOfSupply || undefined,
+        validUntil: editForm.validUntil ? new Date(editForm.validUntil).toISOString() : undefined,
+        notes: editForm.notes || undefined,
+        terms: editForm.terms || undefined,
+        lineItems: editLines.map((l) => ({
+          description: l.description,
+          hsnCode: l.hsnCode || undefined,
+          quantity: parseFloat(l.quantity) || 0,
+          unitPrice: parseFloat(l.unitPrice) || 0,
+          discountPct: parseFloat(l.discountPct) || 0,
+          taxRatePct: parseFloat(l.taxRatePct) || 18,
+        })),
+      }) });
+      setEditOpen(false);
+      setMsg("Quotation updated."); load();
+    } catch (err) { setEditError(err instanceof Error ? err.message : "Failed to update quotation"); } finally { setAction(null); }
   }
 
   if (error) return <p className="text-sm text-red-600 p-4">{error}</p>;
@@ -153,6 +219,7 @@ export default function QuotationDetailPage() {
       {canManage && q.status === "draft" && (
         <div className="flex flex-wrap gap-2">
           <button className="btn-primary px-4 py-2 text-sm" disabled={!!action} onClick={() => doStatus("sent")}>Mark sent</button>
+          <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" disabled={!!action} onClick={openEdit}>Edit quotation</button>
         </div>
       )}
       {canManage && q.status === "sent" && (
@@ -183,6 +250,78 @@ export default function QuotationDetailPage() {
       )}
 
       <button onClick={() => router.push(`/quotations/${q.id}/print`)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Print</button>
+
+      {editOpen && q && (
+        <div className="modal-backdrop" onClick={() => setEditOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Edit quotation</h3>
+              <button onClick={() => setEditOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form onSubmit={saveEdit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
+                  <select required className="field w-full" value={editForm.customerId} onChange={(e) => {
+                    const cid = e.target.value;
+                    const c = customers.find((x) => x.id === cid);
+                    setEditForm({ ...editForm, customerId: cid, placeOfSupply: c?.state ?? editForm.placeOfSupply });
+                  }}>
+                    {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Place of supply (state)</label>
+                  <input className="field w-full" value={editForm.placeOfSupply} onChange={(e) => setEditForm({ ...editForm, placeOfSupply: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Valid until</label>
+                  <input type="date" className="field w-full" value={editForm.validUntil} onChange={(e) => setEditForm({ ...editForm, validUntil: e.target.value })} />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-semibold uppercase tracking-wide text-gray-500">Line items</label>
+                  <button type="button" onClick={addEditLine} className="text-xs font-medium text-[var(--theme-accent)]">+ Add line</button>
+                </div>
+                <div className="space-y-2">
+                  {editLines.map((l, i) => (
+                    <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateEditLine(i, { description: e.target.value })} required />
+                        <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateEditLine(i, { hsnCode: e.target.value })} />
+                      </div>
+                      <div className="grid grid-cols-4 gap-2">
+                        <input type="number" step="0.01" className="field" placeholder="Qty" value={l.quantity} onChange={(e) => updateEditLine(i, { quantity: e.target.value })} />
+                        <input type="number" step="0.01" className="field" placeholder="Unit price" value={l.unitPrice} onChange={(e) => updateEditLine(i, { unitPrice: e.target.value })} />
+                        <input type="number" step="0.01" className="field" placeholder="Discount %" value={l.discountPct} onChange={(e) => updateEditLine(i, { discountPct: e.target.value })} />
+                        <input type="number" step="0.01" className="field" placeholder="Tax %" value={l.taxRatePct} onChange={(e) => updateEditLine(i, { taxRatePct: e.target.value })} />
+                      </div>
+                      <button type="button" onClick={() => removeEditLine(i)} className="text-xs text-red-500">Remove</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Notes</label>
+                <textarea className="field w-full" rows={2} value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Terms</label>
+                <textarea className="field w-full" rows={2} value={editForm.terms} onChange={(e) => setEditForm({ ...editForm, terms: e.target.value })} />
+              </div>
+
+              {editError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{editError}</p>}
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => setEditOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+                <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action === "edit" ? "Saving…" : "Save changes"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
