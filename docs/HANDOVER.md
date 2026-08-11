@@ -1809,3 +1809,71 @@ just typechecked and served.
 3. Production still not deployed - same standing gap as previous sections; this session's
    change is a pure additive frontend change with no new migration, so it doesn't add to that
    list, but it's still only live in local dev right now.
+
+
+## 63. HSN/SAC code made mandatory on all document line items (2026-08-11)
+
+User-reported: could issue documents (quotations/POs/invoices) without an HSN code. Fixed at
+the root, not just patched around. Committed and pushed as `f4da643`.
+
+**Root cause found (not just a missing validation rule):** `purchase-orders/page.tsx`'s "New
+purchase order" create form tracked `hsnCode` in its line-item state, but the JSX never
+rendered an input for it - the field was invisible in the UI, so every PO ever created through
+that form silently submitted `hsnCode: undefined` no matter what the user intended. This was
+very likely the actual hole being hit, not just a case of the field being present-but-optional.
+
+**Fixes:**
+- **`packages/shared/src/schemas.ts`** - `lineItemSchema.hsnCode` changed from
+  `.max(20).optional()` to `.min(1, "HSN/SAC code is required").max(20)`. This one shared
+  schema is reused by `quotationCreateSchema`, `invoiceCreateSchema`, `purchaseOrderCreateSchema`,
+  and all three `.partial()`-derived update schemas - so this single change enforces HSN on
+  both create *and* edit, across all three document types, in one place.
+- **`purchase-orders/page.tsx`** - added the missing HSN input to the create form (the actual
+  bug).
+- Added `required` to the HSN `<input>` on every other line-item form that had the field
+  present but not enforced: quotations create + edit, purchase-orders edit, invoices create +
+  edit. (Invoices' create form already had the field wired correctly - just missing
+  `required`.)
+- **`zanAppWriteTools.ts`** - `create_quotation`, `create_purchase_order`, and `create_invoice`
+  now require `hsnCode` per line item in both the JSON-schema `required` array and the
+  handler's manual validation loop, returning a clear error ("hsnCode is required - ask the
+  user... rather than guessing") if missing. This directly closes the risk flagged twice
+  before (§60, §61) where the model was confidently inventing HSN codes nobody gave it -
+  now it can't get through the write flow at all without one, gap-free-numbering-style
+  enforcement rather than a soft suggestion.
+
+**Non-obvious gotcha hit while fixing this:** the API doesn't import `@recd/shared`'s
+TypeScript source - `package.json`'s `main` points at `dist/index.js`, compiled output. Editing
+`schemas.ts` alone had **zero effect** until `packages/shared` was rebuilt (`npm run build`
+inside that package) and the API dev server (`tsx watch`) was restarted to pick up the new
+compiled file. First verification attempt against the running API returned `201` (wrongly
+succeeded) purely because of this staleness, not because the Zod change was wrong - worth
+remembering for any future `packages/shared` edit: rebuild + restart API, or it silently keeps
+running on the old compiled rules.
+
+**Verified live against the real running API** (not just typechecked): `POST /quotations`
+with no `hsnCode` on the line item correctly returned `400` with a Zod field error; the same
+request with a valid `hsnCode` correctly returned `201` with the code stored. Both test
+quotations (`QTN/2026-27/0010` created pre-fix without HSN, `QTN/2026-27/0011` created
+post-fix with HSN) were deleted afterward as throwaway verification artifacts.
+
+**Both dev servers rebuilt and restarted** to serve the fix: `packages/shared` rebuilt,
+`apps/api` dev server restarted, `apps/admin-web` rebuilt via `next build` (still on the
+`next start` production-mode workaround from §62's "`next dev` CSS loader bug" note, not
+`next dev`) and restarted on :6011.
+
+**`apps/api` and `apps/admin-web` `tsc --noEmit` both clean.**
+
+**Not yet done:**
+1. No DB-level `NOT NULL` constraint added on `hsnCode` columns (`QuotationLineItem`,
+   `InvoiceLineItem`, `PurchaseOrderLineItem`) - enforcement is at the Zod/API layer only.
+   Deliberate choice: a DB constraint would need a migration and would break on any existing
+   rows with a null HSN (there may be some, given this bug existed). If a hard DB constraint
+   is wanted later, it needs a data-backfill pass first.
+2. Existing historical documents created before this fix may still have blank/null HSN codes
+   on their line items - this fix only prevents *new* bad data, it doesn't clean up old rows.
+   Worth a query at some point to see how many existing quotations/POs/invoices are affected,
+   particularly ones created via the PO form given the bug's root cause.
+3. Production still not deployed - same standing gap; this session's changes need the same
+   eventual `npx prisma migrate deploy` + rebuild treatment as everything else, though note
+   this specific change needs no new migration (no schema.prisma change, purely Zod-layer).
