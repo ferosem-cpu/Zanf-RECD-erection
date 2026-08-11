@@ -104,7 +104,7 @@ const createExpenseTool: AgentTool = {
 
 interface PoLineItemInput {
   description: string;
-  hsnCode?: string | null;
+  hsnCode: string;
   quantity: number;
   unitPrice: number;
   taxRatePct?: number;
@@ -135,12 +135,12 @@ const createPurchaseOrderTool: AgentTool = {
           type: "object",
           properties: {
             description: { type: "string" },
-            hsnCode: { type: "string" },
+            hsnCode: { type: "string", description: "REQUIRED - HSN/SAC code for GST. Never omit or guess; ask the user for the correct code if you don't know it for certain." },
             quantity: { type: "number" },
             unitPrice: { type: "number", description: "Per-unit price in rupees, before tax." },
             taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
           },
-          required: ["description", "quantity", "unitPrice"],
+          required: ["description", "hsnCode", "quantity", "unitPrice"],
         },
       },
       orderDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
@@ -166,6 +166,7 @@ const createPurchaseOrderTool: AgentTool = {
     if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
     for (const [i, li] of lineItemsRaw.entries()) {
       if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (!li.hsnCode || !li.hsnCode.trim()) return { error: `Line item ${i + 1}: hsnCode is required - ask the user for the correct HSN/SAC code rather than guessing.` };
       if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
       if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
     }
@@ -195,7 +196,7 @@ const createPurchaseOrderTool: AgentTool = {
 
     const normalizedLines = lineItemsRaw.map((li) => ({
       description: li.description,
-      hsnCode: li.hsnCode ?? null,
+      hsnCode: li.hsnCode,
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       taxRatePct: li.taxRatePct ?? 18,
@@ -244,7 +245,7 @@ const createPurchaseOrderTool: AgentTool = {
 interface QuoteLineItemInput {
   productId?: string;
   description: string;
-  hsnCode?: string | null;
+  hsnCode: string;
   quantity: number;
   unitPrice: number;
   discountPct?: number;
@@ -275,13 +276,13 @@ const createQuotationTool: AgentTool = {
           type: "object",
           properties: {
             description: { type: "string" },
-            hsnCode: { type: "string" },
+            hsnCode: { type: "string", description: "REQUIRED - HSN/SAC code for GST. Never omit or guess; ask the user for the correct code if you don't know it for certain." },
             quantity: { type: "number" },
             unitPrice: { type: "number", description: "Per-unit price in rupees, before tax and discount." },
             discountPct: { type: "number", description: "Discount percent, 0-100. Defaults to 0." },
             taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
           },
-          required: ["description", "quantity", "unitPrice"],
+          required: ["description", "hsnCode", "quantity", "unitPrice"],
         },
       },
       validUntil: { type: "string", description: "ISO date (YYYY-MM-DD) the quote expires." },
@@ -305,6 +306,7 @@ const createQuotationTool: AgentTool = {
     if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
     for (const [i, li] of lineItemsRaw.entries()) {
       if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (!li.hsnCode || !li.hsnCode.trim()) return { error: `Line item ${i + 1}: hsnCode is required - ask the user for the correct HSN/SAC code rather than guessing.` };
       if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
       if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
     }
@@ -335,7 +337,7 @@ const createQuotationTool: AgentTool = {
     const normalizedLines = lineItemsRaw.map((li) => ({
       productId: li.productId,
       description: li.description,
-      hsnCode: li.hsnCode ?? undefined,
+      hsnCode: li.hsnCode,
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       discountPct: li.discountPct ?? 0,
@@ -394,7 +396,7 @@ const createQuotationTool: AgentTool = {
 interface InvoiceLineItemInput {
   productId?: string;
   description: string;
-  hsnCode?: string | null;
+  hsnCode: string;
   quantity: number;
   unitPrice: number;
   discountPct?: number;
@@ -430,13 +432,13 @@ const createInvoiceTool: AgentTool = {
           type: "object",
           properties: {
             description: { type: "string" },
-            hsnCode: { type: "string" },
+            hsnCode: { type: "string", description: "REQUIRED - HSN/SAC code for GST. Never omit or guess; ask the user for the correct code if you don't know it for certain." },
             quantity: { type: "number" },
             unitPrice: { type: "number", description: "Per-unit price in rupees, before tax and discount." },
             discountPct: { type: "number", description: "Discount percent, 0-100. Defaults to 0." },
             taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
           },
-          required: ["description", "quantity", "unitPrice"],
+          required: ["description", "hsnCode", "quantity", "unitPrice"],
         },
       },
       issueDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
@@ -468,6 +470,7 @@ const createInvoiceTool: AgentTool = {
     if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
     for (const [i, li] of lineItemsRaw.entries()) {
       if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (!li.hsnCode || !li.hsnCode.trim()) return { error: `Line item ${i + 1}: hsnCode is required - ask the user for the correct HSN/SAC code rather than guessing.` };
       if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
       if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
     }
@@ -507,7 +510,7 @@ const createInvoiceTool: AgentTool = {
     const normalizedLines = lineItemsRaw.map((li) => ({
       productId: li.productId,
       description: li.description,
-      hsnCode: li.hsnCode ?? undefined,
+      hsnCode: li.hsnCode,
       quantity: li.quantity,
       unitPrice: li.unitPrice,
       discountPct: li.discountPct ?? 0,

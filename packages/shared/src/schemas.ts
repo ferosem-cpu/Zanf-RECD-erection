@@ -170,7 +170,7 @@ export const assignSiteVendorSchema = z.object({
 export const lineItemSchema = z.object({
   productId: z.string().optional(),
   description: z.string().min(1).max(500),
-  hsnCode: z.string().max(20).optional(),
+  hsnCode: z.string().min(1, "HSN/SAC code is required").max(20),
   quantity: z.number().positive("Quantity must be > 0"),
   unitPrice: z.number().nonnegative("Unit price cannot be negative"),
   discountPct: z.number().min(0).max(100).default(0),

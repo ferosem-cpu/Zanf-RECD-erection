@@ -212,7 +212,7 @@ export default function QuotationsPage() {
                     <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} required />
-                        <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} />
+                        <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} required />
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                         <input type="number" step="0.01" className="field" placeholder="Qty" value={l.quantity} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
