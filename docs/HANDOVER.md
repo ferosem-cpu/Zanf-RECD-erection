@@ -1877,3 +1877,163 @@ post-fix with HSN) were deleted afterward as throwaway verification artifacts.
 3. Production still not deployed - same standing gap; this session's changes need the same
    eventual `npx prisma migrate deploy` + rebuild treatment as everything else, though note
    this specific change needs no new migration (no schema.prisma change, purely Zod-layer).
+
+## 64. Quotations couldn't be converted to orders (no Product picker existed anywhere) - fixed and shipped (2026-08-12)
+
+**Report:** clicking "Convert to order" on an accepted quotation returned `400 Quotation
+needs at least one line with a product to create an order` (`quotations.ts`'s
+`POST /:id/convert-to-order` requires `lineItems[0].productId`, since `Order.productId` is a
+required FK - one order = one real catalog product).
+
+**Root cause was worse than "pick a product on this one quotation":** neither the "New
+Quotation" modal (`quotations/page.tsx`) nor the "Edit Quotation" modal
+(`quotations/[id]/page.tsx`, built in §62) ever rendered a Product `<select>` - `productId`
+was tracked in component state and sent in the API payload, but no JSX ever let a user set
+it. Same class of bug as §63's PO-form HSN gap (field wired in state, never rendered). Net
+effect: **no quotation could ever be converted to an order**, and every save through the Edit
+modal silently stripped `productId` off existing lines too (the edit payload never included
+it, and `PUT /quotations/:id` does a full delete-and-recreate of line items).
+
+**Fix (`apps/admin-web` only, no API/schema changes):** added a Product dropdown as the first
+field on each line-item row in both modals (`New Quotation` and `Edit Quotation`). Picking a
+product sets `productId` and auto-fills the description if empty; leaving it on "No product
+(free text line)" still works for pure-quote lines, with a small inline warning that an
+unlinked line can't later convert to an order. The Edit modal now also fetches `/meta/products`
+and round-trips `productId` on save instead of dropping it.
+
+**Verified + shipped to production:** `npm run build --workspace=apps/admin-web` clean (0 type
+errors), committed `eb6039f`, pushed to `master` - `admin-web` (git-connected) auto-deployed,
+confirmed `/login` and `/quotations` both 200 on `admin-web-three-blush.vercel.app`. No
+`zan-app-api` changes needed, so production data/DB was untouched by this fix.
+
+**Tooling note for future sessions:** this fix (and the deploy dance below) was done via the
+**Desktop Commander MCP** running a real shell directly on the user's machine, not this
+harness's own sandboxed `device_bash` (which reported "workspace unavailable" for this
+project) - `Desktop Commander__start_process`/`interact_with_process`/`read_process_output`
+worked reliably for local builds, `git`, and the Vercel CLI. One transport quirk hit
+repeatedly: any command string containing a literal `$` (PowerShell variables, `$_` in
+pipelines) gets silently stripped before reaching PowerShell, breaking anything using
+`$var`/`$_`. **Workaround: write the PowerShell (or Node) as a `.ps1`/`.js` file via
+`write_file` first, then execute it with `-File`** - script files preserve `$` correctly;
+inline `-Command "..."` strings do not.
+
+## 65. In-app AI agent deployed to production for the first time (2026-08-12)
+
+**Report that triggered this:** the in-app agent (floating chat bubble, built across
+§55-§61) wasn't visible on the Vercel-deployed app at all.
+
+**Root cause had two independent layers, both confirmed directly against production before
+touching anything:**
+1. **Database:** the `zan-app` Supabase project was missing all three agent migrations
+   (`20260809082042_add_agent_llm_provider`, `20260810061248_add_agent_conversations_and_visibility`,
+   `20260810090939_add_agent_pending_action`) - confirmed via `list_migrations` (ledger stopped
+   at `add_invoice_edit_log`, Aug 6) and a direct column check (`CompanySettings` had no
+   `agentVisibleRoleKeys` column at all).
+2. **Backend:** `zan-app-api` never had the agent routes deployed - confirmed by hitting
+   `GET https://zan-app-api.vercel.app/agent/providers` directly and getting Express's generic
+   `Cannot GET /agent/providers` 404, i.e. the route doesn't exist in whatever's currently
+   live. `admin-web` (git-connected) had already auto-deployed the *frontend* chat-bubble
+   component on every push since §56, but `zan-app-api` only ever ships via the manual
+   `vercel build` + `vercel deploy --prebuilt` dance (§28), which was never run after the
+   agent work was built - exactly the "still not deployed to production" gap §55-§61 kept
+   flagging.
+
+**What was done, with explicit user go-ahead first (this touches the production DB and
+redeploys the live API):**
+- Applied all three migrations directly to the `zan-app` Supabase project via the Supabase
+  MCP `apply_migration` (additive only - two new tables, one new nullable-default column, no
+  existing data touched) and recorded matching rows in `_prisma_migrations` (checksums
+  computed locally via `Get-FileHash`) so the ledger stays consistent with local dev, per
+  established practice (§30/§33).
+- Set the still-missing `CRON_SECRET` env var on `zan-app-api` (generated via
+  `crypto.randomBytes(32)`, added through `vercel env add ... production`) - needed for the
+  daily conversation-cleanup cron from §55 to actually authenticate once it starts firing.
+- **Found and fixed a real, previously-undiscovered bug while building:** `apps/api/src/routes/agentConversations.ts`'s
+  `create_quotation` confirm-handler had a local `PendingQuoteLine` interface with
+  `hsnCode?: string` (optional) - stale from before §63 made `hsnCode` mandatory across the
+  shared schema. `createQuotationRecord()` now expects `hsnCode: string`, so this line never
+  actually compiled since §63 shipped; it just hadn't been rebuilt yet to surface the error.
+  `zanAppWriteTools.ts` already validates `hsnCode` as required before a `create_quotation`
+  pending action is ever stored, so the runtime data was always safe - this was purely a
+  stale type annotation. Fixed by tightening the interface to match; `tsc -p tsconfig.json
+  --noEmit` confirmed clean (16s, standalone) immediately after.
+- Ran the manual `zan-app-api` deploy dance (`vercel pull --yes --environment production` →
+  `vercel build --prod` → deploy `--prebuilt --prod`), stopping the local `zan-api` dev server
+  first per the standing Windows Prisma `EPERM` gotcha (§12/§32).
+
+**Gotcha worth flagging for next time:** `vercel build --prod` for this project took roughly
+15-20 minutes running through the Desktop Commander automation shell in this session -
+`tsc` alone finished in 16 seconds standalone, so the time was entirely in Vercel's own
+`@vercel/nft` file-tracing step over this repo's `node_modules`, not compilation. CPU/memory
+climbed steadily throughout (never hung, confirmed via `Get-Process`/`Get-CimInstance`
+polling) - it's I/O-bound, not stuck, but automation-shell I/O appears meaningfully slower
+than a normal terminal here (echoes §55's existing note about automation-shell installs being
+flaky/slow on this machine). If a `zan-app-api` deploy ever needs to happen fast, running
+`vercel build --prod` / `vercel deploy --prebuilt --prod` directly in the user's own terminal
+is likely far quicker than through remote automation.
+
+**Final status: fully live and verified.** See §66 immediately below for the second bug
+found (a real production crash, unrelated to anything reported) and the confirmed-working
+final deploy.
+
+**Still true after this session (carried forward from §55-§61, unaffected by the above):**
+`CompanySettings.agentVisibleRoleKeys` defaults to an empty array, so the chat bubble stays
+invisible to everyone until a Super Admin opts specific roles in via Settings → Agent
+Visibility - that UI section already exists and just needs to be used. Likewise, no
+`AgentLlmProvider` row exists yet in production, so the agent won't actually respond to a
+message until at least one LLM provider (API key) is added via Settings → the "Agent
+providers" section, same as local dev required in §55.
+
+## 66. First `zan-app-api` deploy crashed on boot (`pdf-parse`/`DOMMatrix`) - found via `vercel logs`, fixed, redeployed clean (2026-08-12)
+
+**Not something the user reported** - found by checking `npx vercel logs` after the §65
+deploy finished, as a routine post-deploy check. `GET /health` was returning
+`FUNCTION_INVOCATION_FAILED` on the freshly-deployed production API.
+
+**Root cause:** `apps/api/src/lib/docExtract.ts` had `import { PDFParse } from "pdf-parse";`
+as a static top-level import. `pdf-parse` tries to load the optional native `@napi-rs/canvas`
+package for PDF rendering; when that binary isn't available (as on Vercel's Linux serverless
+runtime here), its fallback path throws `ReferenceError: DOMMatrix is not defined` **at
+require-time**, not at call-time. Because `docExtract.ts` sits on the startup import chain
+(`index.ts` → `agentTestRouter`/`agentConversationsRouter` → the agent tool registry →
+`driveSearch.ts` → `docExtract.ts`), that one throw crashed the *entire* Express app on
+Vercel's cold start - every route, including `/health`, not just Drive document search. This
+is a pre-existing landmine in the agent's PDF-extraction code from earlier work (§55-ish),
+never surfaced before because this was the first time `zan-app-api` had ever actually been
+built and deployed with the agent code included.
+
+**Fix:** changed the `pdf-parse` import to a dynamic `await import("pdf-parse")` scoped
+inside `extractText()`'s PDF branch only, wrapped in a try/catch that throws a clean
+`ExtractionError` if it fails. This confines any `pdf-parse`/`@napi-rs/canvas` failure to "PDF
+extraction isn't available" for that one Drive-search call, instead of taking the whole API
+down. No other behavior changed - DOCX/text/CSV/Markdown extraction paths are untouched.
+
+**Verified via `tsc -p tsconfig.json --noEmit`** (clean, 15.37s) before rebuilding.
+
+**Redeployed:** third `vercel build --prod` run (this time including the `docExtract.ts` fix)
+completed successfully (`Build Completed in apps\api\.vercel\output`, both
+`functions/api/index.func` and `functions/index.func` produced). Re-patched `@recd/shared`
+into all five spots the npm-workspaces symlink issue requires (confirmed this build produces
+5, not 3 - the `.vercel/output/functions/{api/index,index}.func` bundles each have their own
+`node_modules/@recd/shared` at both the function root and nested under `apps/api/`):
+- `apps/api/node_modules/@recd/shared`
+- `.vercel/output/functions/api/index.func/node_modules/@recd/shared`
+- `.vercel/output/functions/api/index.func/apps/api/node_modules/@recd/shared`
+- `.vercel/output/functions/index.func/node_modules/@recd/shared`
+- `.vercel/output/functions/index.func/apps/api/node_modules/@recd/shared`
+
+Then `npx vercel deploy --prebuilt --prod` from `apps/api` - succeeded and aliased to
+`https://zan-app-api.vercel.app` in 35s.
+
+**Final verification, both green:**
+- `GET https://zan-app-api.vercel.app/health` → `200 {"ok":true}`
+- `GET https://zan-app-api.vercel.app/agent/providers` → `401 Unauthorized` (correct - route
+  exists and correctly requires auth, no crash)
+- `npx vercel logs https://zan-app-api.vercel.app` shows both requests served cleanly, no
+  errors.
+
+**Net result: the in-app agent's backend is now genuinely live in production**, on top of
+everything §65 already did (migrations applied, `CRON_SECRET` set). The two remaining gates
+before end users can actually use it are unchanged and are configuration, not code: a Super
+Admin needs to opt roles into Settings → Agent Visibility, and someone needs to add an LLM
+provider under Settings → Agent providers.

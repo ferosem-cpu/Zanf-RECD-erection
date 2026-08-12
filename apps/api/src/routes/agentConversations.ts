@@ -173,7 +173,7 @@ async function executeConfirmedAction(
       interface PendingQuoteLine {
         productId?: string;
         description: string;
-        hsnCode?: string;
+        hsnCode: string;
         quantity: number;
         unitPrice: number;
         discountPct: number;
