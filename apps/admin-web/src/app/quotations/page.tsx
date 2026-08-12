@@ -210,10 +210,28 @@ export default function QuotationsPage() {
                 <div className="space-y-2">
                   {lines.map((l, i) => (
                     <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <select
+                          className="field"
+                          value={l.productId}
+                          onChange={(e) => {
+                            const pid = e.target.value;
+                            const p = products.find((x) => x.id === pid);
+                            updateLine(i, {
+                              productId: pid,
+                              description: p && !l.description ? `${p.name} (${p.model})` : l.description,
+                            });
+                          }}
+                        >
+                          <option value="">No product (free text line)</option>
+                          {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
+                        </select>
                         <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} required />
                         <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} required />
                       </div>
+                      {!l.productId && (
+                        <p className="text-[11px] text-amber-600">No product selected — this line can't be converted into an order later. Pick a product if this quotation might turn into an order.</p>
+                      )}
                       <div className="grid grid-cols-3 gap-2">
                         <input type="number" step="0.01" className="field" placeholder="Qty" value={l.quantity} onChange={(e) => updateLine(i, { quantity: e.target.value })} />
                         <input type="number" step="0.01" className="field" placeholder="Unit price" value={l.unitPrice} onChange={(e) => updateLine(i, { unitPrice: e.target.value })} />

@@ -8,6 +8,7 @@ import { formatINR, formatDate, QUOTATION_STATUS_LABEL, statusPillClass } from "
 
 interface LineItem {
   id: string;
+  productId?: string | null;
   description: string;
   hsnCode?: string | null;
   quantity: string;
@@ -37,7 +38,8 @@ interface QuotationDetail {
   invoices: { id: string; invoiceNumber: string; docType: string; status: string }[];
 }
 interface Customer { id: string; name: string; state?: string | null; }
-type EditLine = { description: string; hsnCode: string; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string };
+interface Product { id: string; name: string; model: string; }
+type EditLine = { productId: string; description: string; hsnCode: string; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string };
 
 export default function QuotationDetailPage() {
   const router = useRouter();
@@ -46,6 +48,7 @@ export default function QuotationDetailPage() {
 
   const [q, setQ] = useState<QuotationDetail | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [action, setAction] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
@@ -56,7 +59,10 @@ export default function QuotationDetailPage() {
     if (!id) return;
     setError(null);
     api<QuotationDetail>(`/quotations/${id}`).then(setQ).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
-    if (canManage) api<Customer[]>("/customers").then(setCustomers).catch(() => {});
+    if (canManage) {
+      api<Customer[]>("/customers").then(setCustomers).catch(() => {});
+      api<Product[]>("/meta/products").then(setProducts).catch(() => {});
+    }
   }
   useEffect(load, [id, canManage]);
 
@@ -118,6 +124,7 @@ export default function QuotationDetailPage() {
       terms: q.terms ?? "",
     });
     setEditLines(q.lineItems.map((l) => ({
+      productId: l.productId ?? "",
       description: l.description,
       hsnCode: l.hsnCode ?? "",
       quantity: l.quantity,
@@ -128,7 +135,7 @@ export default function QuotationDetailPage() {
     setEditOpen(true);
   }
   function addEditLine() {
-    setEditLines((l) => [...l, { description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" }]);
+    setEditLines((l) => [...l, { productId: "", description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" }]);
   }
   function updateEditLine(i: number, patch: Partial<EditLine>) {
     setEditLines((l) => l.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
@@ -149,6 +156,7 @@ export default function QuotationDetailPage() {
         notes: editForm.notes || undefined,
         terms: editForm.terms || undefined,
         lineItems: editLines.map((l) => ({
+          productId: l.productId || undefined,
           description: l.description,
           hsnCode: l.hsnCode || undefined,
           quantity: parseFloat(l.quantity) || 0,
@@ -288,10 +296,28 @@ export default function QuotationDetailPage() {
                 <div className="space-y-2">
                   {editLines.map((l, i) => (
                     <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <select
+                          className="field"
+                          value={l.productId}
+                          onChange={(e) => {
+                            const pid = e.target.value;
+                            const p = products.find((x) => x.id === pid);
+                            updateEditLine(i, {
+                              productId: pid,
+                              description: p && !l.description ? `${p.name} (${p.model})` : l.description,
+                            });
+                          }}
+                        >
+                          <option value="">No product (free text line)</option>
+                          {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
+                        </select>
                         <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateEditLine(i, { description: e.target.value })} required />
                         <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateEditLine(i, { hsnCode: e.target.value })} required />
                       </div>
+                      {!l.productId && (
+                        <p className="text-[11px] text-amber-600">No product selected — this line can't be converted into an order later. Pick a product if this quotation might turn into an order.</p>
+                      )}
                       <div className="grid grid-cols-4 gap-2">
                         <input type="number" step="0.01" className="field" placeholder="Qty" value={l.quantity} onChange={(e) => updateEditLine(i, { quantity: e.target.value })} />
                         <input type="number" step="0.01" className="field" placeholder="Unit price" value={l.unitPrice} onChange={(e) => updateEditLine(i, { unitPrice: e.target.value })} />
