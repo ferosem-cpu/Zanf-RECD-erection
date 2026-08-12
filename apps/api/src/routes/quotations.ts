@@ -201,6 +201,30 @@ quotationsRouter.put(
   },
 );
 
+// Permanently remove a quotation - only when nothing downstream depends on it (no order
+// converted from it, no invoice/proforma created from it), so this can never orphan a real
+// financial document. Mainly for cleaning up test/mistake quotations.
+quotationsRouter.delete(
+  "/:id",
+  requirePermission(PERMISSION_KEY.MANAGE_QUOTATIONS),
+  async (req: AuthenticatedRequest, res) => {
+    const id = asString(req.params.id);
+    const existing = await prisma.quotation.findUnique({
+      where: { id },
+      include: { invoices: { select: { id: true } } },
+    });
+    if (!existing) return res.status(404).json({ error: "Quotation not found" });
+    if (existing.convertedOrderId) {
+      return res.status(400).json({ error: "Cannot delete a quotation that has already been converted to an order" });
+    }
+    if (existing.invoices.length > 0) {
+      return res.status(400).json({ error: "Cannot delete a quotation that has an invoice or proforma created from it" });
+    }
+    await prisma.quotation.delete({ where: { id } });
+    res.status(204).end();
+  },
+);
+
 quotationsRouter.post(
   "/:id/status",
   requirePermission(PERMISSION_KEY.MANAGE_QUOTATIONS),

@@ -63,6 +63,16 @@ export default function QuotationsPage() {
   }
   useEffect(load, [canManage]);
 
+  async function remove(id: string) {
+    if (!confirm("Delete this quotation? This can't be undone.")) return;
+    try {
+      await api(`/quotations/${id}`, { method: "DELETE" });
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete quotation");
+    }
+  }
+
   function addLine() {
     setLines((l) => [...l, { productId: "", description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" }]);
   }
@@ -133,6 +143,7 @@ export default function QuotationsPage() {
                 <th className="px-4 py-3">Issue date</th>
                 <th className="px-4 py-3">Total</th>
                 <th className="px-4 py-3">Status</th>
+                {canManage && <th className="px-4 py-3"></th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -143,9 +154,14 @@ export default function QuotationsPage() {
                   <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.issueDate)}</td>
                   <td className="px-4 py-3 whitespace-nowrap">{formatINR(r.total)}</td>
                   <td className="px-4 py-3"><span className={statusPillClass(r.status)}>{QUOTATION_STATUS_LABEL[r.status] ?? r.status}</span></td>
+                  {canManage && (
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button onClick={() => remove(r.id)} className="text-xs text-red-500">Delete</button>
+                    </td>
+                  )}
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No quotations yet.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No quotations yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -156,14 +172,21 @@ export default function QuotationsPage() {
           <div className="card p-6 text-center text-sm text-gray-400">No quotations yet.</div>
         ) : (
           rows.map((r) => (
-            <Link key={r.id} href={`/quotations/${r.id}`} className="data-card block">
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <span className="font-mono text-xs font-semibold text-gray-900">{r.quoteNumber}</span>
-                <span className={statusPillClass(r.status)}>{QUOTATION_STATUS_LABEL[r.status] ?? r.status}</span>
-              </div>
-              <p className="text-sm font-semibold text-gray-900 truncate">{r.customer.name}</p>
-              <div className="data-card-row"><span className="label">Total</span><span className="value font-semibold">{formatINR(r.total)}</span></div>
-            </Link>
+            <div key={r.id} className="data-card">
+              <Link href={`/quotations/${r.id}`} className="block">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <span className="font-mono text-xs font-semibold text-gray-900">{r.quoteNumber}</span>
+                  <span className={statusPillClass(r.status)}>{QUOTATION_STATUS_LABEL[r.status] ?? r.status}</span>
+                </div>
+                <p className="text-sm font-semibold text-gray-900 truncate">{r.customer.name}</p>
+                <div className="data-card-row"><span className="label">Total</span><span className="value font-semibold">{formatINR(r.total)}</span></div>
+              </Link>
+              {canManage && (
+                <div className="mt-2 text-right">
+                  <button onClick={() => remove(r.id)} className="text-xs text-red-500">Delete</button>
+                </div>
+              )}
+            </div>
           ))
         )}
       </div>

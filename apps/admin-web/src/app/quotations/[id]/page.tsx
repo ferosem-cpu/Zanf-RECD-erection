@@ -79,6 +79,19 @@ export default function QuotationDetailPage() {
       setAction(null);
     }
   }
+  async function remove() {
+    if (!q) return;
+    if (!confirm(`Delete quotation ${q.quoteNumber}? This can't be undone.`)) return;
+    setAction("delete");
+    setMsg(null);
+    try {
+      await api(`/quotations/${id}`, { method: "DELETE" });
+      router.push("/quotations");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed to delete quotation");
+      setAction(null);
+    }
+  }
   async function convert() {
     setAction("convert");
     setMsg(null);
@@ -257,7 +270,14 @@ export default function QuotationDetailPage() {
         </div>
       )}
 
-      <button onClick={() => router.push(`/quotations/${q.id}/print`)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Print</button>
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => router.push(`/quotations/${q.id}/print`)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Print</button>
+        {canManage && !q.convertedOrderId && q.invoices.length === 0 && (
+          <button onClick={remove} disabled={!!action} className="rounded-lg border border-red-300 px-4 py-2 text-sm text-red-600 hover:bg-red-50">
+            {action === "delete" ? "Deleting…" : "Delete quotation"}
+          </button>
+        )}
+      </div>
 
       {editOpen && q && (
         <div className="modal-backdrop" onClick={() => setEditOpen(false)}>
