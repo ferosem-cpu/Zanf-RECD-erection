@@ -70,3 +70,58 @@ ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (r
 
   res.status(201).json(order);
 });
+
+/**
+ * Delete an order and its site (and the site's own operational records - stage events,
+ * photos, pending actions, work orders, contacts, document requirements, delivery status).
+ * Refuses if anything with real business/financial history points at this order or its
+ * site (invoices, a quotation converted into it, purchase orders, expenses, complaints) -
+ * those need to be resolved or removed first, since silently cascading them away would
+ * destroy audit trail the finance module depends on.
+ */
+ordersRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const orderId = asString(req.params.id);
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { site: true } });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  if (req.auth!.customerId && order.customerId !== req.auth!.customerId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const siteId = order.site?.id;
+  const [invoiceCount, quotationCount, poByOrderCount, poBySiteCount, expenseCount, complaintCount] = await Promise.all([
+    prisma.invoice.count({ where: { orderId } }),
+    prisma.quotation.count({ where: { convertedOrderId: orderId } }),
+    prisma.purchaseOrder.count({ where: { orderId } }),
+    siteId ? prisma.purchaseOrder.count({ where: { siteId } }) : Promise.resolve(0),
+    siteId ? prisma.expense.count({ where: { siteId } }) : Promise.resolve(0),
+    siteId ? prisma.complaint.count({ where: { siteId } }) : Promise.resolve(0),
+  ]);
+
+  const blockers: string[] = [];
+  if (invoiceCount) blockers.push(`${invoiceCount} invoice(s)`);
+  if (quotationCount) blockers.push(`${quotationCount} quotation(s) converted from this order`);
+  if (poByOrderCount + poBySiteCount) blockers.push(`${poByOrderCount + poBySiteCount} purchase order(s)`);
+  if (expenseCount) blockers.push(`${expenseCount} expense(s)`);
+  if (complaintCount) blockers.push(`${complaintCount} complaint(s)`);
+  if (blockers.length) {
+    return res.status(400).json({
+      error: `Cannot delete this order - it has linked records: ${blockers.join(", ")}. Resolve or remove those first.`,
+    });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    if (siteId) {
+      await tx.siteContact.deleteMany({ where: { siteId } });
+      await tx.siteDocumentRequirement.deleteMany({ where: { siteId } });
+      await tx.recdDelivery.deleteMany({ where: { siteId } });
+      await tx.sitePhoto.deleteMany({ where: { siteId } });
+      await tx.siteStageEvent.deleteMany({ where: { siteId } });
+      await tx.pendingAction.deleteMany({ where: { siteId } });
+      await tx.workOrder.deleteMany({ where: { siteId } });
+      await tx.site.delete({ where: { id: siteId } });
+    }
+    await tx.order.delete({ where: { id: orderId } });
+  });
+
+  res.status(204).send();
+});

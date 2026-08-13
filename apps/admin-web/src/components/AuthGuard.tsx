@@ -11,6 +11,7 @@ import AgentChatBubble from "./AgentChatBubble";
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/dashboard": ["view_dashboard"],
   "/orders": ["manage_orders"],
+  "/customers": ["manage_orders", "manage_quotations", "manage_invoices"],
   "/sites": ["view_site_status"],
   "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
   "/vendors": ["manage_vendors"],
@@ -25,7 +26,7 @@ const ROUTE_PERMISSIONS: Record<string, string[]> = {
 };
 
 // Where to send a staff user who lands on /login etc. - the first module they can actually open.
-const LANDING_PRIORITY = ["/dashboard", "/sites", "/finance", "/complaints", "/work-orders", "/orders", "/quotations", "/invoices", "/purchase-orders", "/expenses", "/vendors", "/users", "/settings"];
+const LANDING_PRIORITY = ["/dashboard", "/sites", "/finance", "/complaints", "/work-orders", "/orders", "/customers", "/quotations", "/invoices", "/purchase-orders", "/expenses", "/vendors", "/users", "/settings"];
 
 function canAccess(permissions: string[], route: string): boolean {
   const required = ROUTE_PERMISSIONS[route];

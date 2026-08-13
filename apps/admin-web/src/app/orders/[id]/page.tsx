@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 
@@ -55,10 +55,12 @@ function mapsUrl(address: string | null, lat: string | null, lng: string | null)
 
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_orders");
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -68,7 +70,21 @@ export default function OrderDetailPage() {
 
   useEffect(load, [load]);
 
-  if (error) return <p className="text-sm text-red-600">{error}</p>;
+  async function deleteOrder() {
+    if (!order) return;
+    if (!window.confirm(`Delete order ${order.orderNumber}? This also removes its site and cannot be undone.`)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await api(`/orders/${id}`, { method: "DELETE" });
+      router.push("/orders");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete order");
+      setDeleting(false);
+    }
+  }
+
+  if (error && !order) return <p className="text-sm text-red-600">{error}</p>;
   if (!order) return <p className="text-sm text-gray-500">Loading...</p>;
 
   const contact = order.customer.contacts[0];
@@ -76,16 +92,30 @@ export default function OrderDetailPage() {
 
   return (
     <div className="space-y-6 max-w-4xl" data-testid="order-detail-page">
-      <div>
-        <div className="flex items-center gap-2">
-          <Link href="/orders" className="text-xs font-medium text-gray-400 hover:text-gray-600">← Orders</Link>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <Link href="/orders" className="text-xs font-medium text-gray-400 hover:text-gray-600">← Orders</Link>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{order.orderNumber}</h1>
+          <p className="text-sm text-gray-500">
+            {order.customer.name} · Placed {new Date(order.orderDate).toLocaleDateString()}
+            {order.salesEngineer && <> · Sales: {order.salesEngineer.name}</>}
+          </p>
         </div>
-        <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{order.orderNumber}</h1>
-        <p className="text-sm text-gray-500">
-          {order.customer.name} · Placed {new Date(order.orderDate).toLocaleDateString()}
-          {order.salesEngineer && <> · Sales: {order.salesEngineer.name}</>}
-        </p>
+        {canManage && (
+          <button
+            type="button"
+            onClick={deleteOrder}
+            disabled={deleting}
+            className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
+          >
+            {deleting ? "Deleting…" : "Delete order"}
+          </button>
+        )}
       </div>
+
+      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <section className="card p-5 space-y-2">
