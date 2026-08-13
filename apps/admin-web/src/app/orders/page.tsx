@@ -12,7 +12,7 @@ interface OrderRow {
   value: string;
   customer: { name: string };
   product: { name: string; model: string };
-  site: { currentStage: { label: string } } | null;
+  site: { companyName: string | null; currentStage: { label: string } } | null;
 }
 
 interface Customer {
@@ -193,6 +193,7 @@ function OrdersPageInner() {
             <thead>
               <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
                 <th className="px-4 py-3">Order #</th>
+                <th className="px-4 py-3">Site name</th>
                 <th className="px-4 py-3">Customer</th>
                 <th className="px-4 py-3">Product</th>
                 <th className="px-4 py-3">Value</th>
@@ -207,6 +208,7 @@ function OrdersPageInner() {
                       {o.orderNumber}
                     </Link>
                   </td>
+                  <td className="px-4 py-3">{o.site?.companyName ?? "-"}</td>
                   <td className="px-4 py-3">{o.customer.name}</td>
                   <td className="px-4 py-3">{o.product.name} ({o.product.model})</td>
                   <td className="px-4 py-3 whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</td>
@@ -214,7 +216,7 @@ function OrdersPageInner() {
                 </tr>
               ))}
               {orders.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No orders yet.</td></tr>
+                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No orders yet.</td></tr>
               )}
             </tbody>
           </table>
@@ -232,7 +234,10 @@ function OrdersPageInner() {
                 <span className="font-mono text-xs font-semibold text-gray-900">{o.orderNumber}</span>
                 <span className="badge badge-accent">{o.site?.currentStage.label ?? "—"}</span>
               </div>
-              <p className="text-sm font-semibold text-gray-900 truncate">{o.customer.name}</p>
+              {o.site?.companyName && (
+                <p className="text-sm font-semibold text-gray-900 truncate">{o.site.companyName}</p>
+              )}
+              <p className="text-xs text-gray-500 truncate">{o.customer.name}</p>
               <p className="text-xs text-gray-500 mb-2 truncate">{o.product.name} ({o.product.model})</p>
               <div className="data-card-row">
                 <span className="label">Value</span>

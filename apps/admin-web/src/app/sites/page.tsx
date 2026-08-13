@@ -7,6 +7,7 @@ import { api } from "@/lib/apiClient";
 interface SiteRow {
   id: string;
   address: string | null;
+  companyName: string | null;
   currentStage: { label: string; phase: string };
   assignedEngineer: { name: string } | null;
   updatedAt: string;
@@ -62,6 +63,7 @@ export default function SitesPage() {
             <thead className="bg-gray-50 text-left text-[0.6875rem] font-semibold uppercase tracking-wider text-gray-500">
               <tr>
                 <th className="px-5 py-3">Order #</th>
+                <th className="px-5 py-3">Site name</th>
                 <th className="px-5 py-3">Customer</th>
                 <th className="px-5 py-3">Stage</th>
                 <th className="px-5 py-3">Engineer</th>
@@ -76,6 +78,7 @@ export default function SitesPage() {
                       {s.order.orderNumber}
                     </Link>
                   </td>
+                  <td className="px-5 py-3">{s.companyName ?? "-"}</td>
                   <td className="px-5 py-3">{s.order.customer.name}</td>
                   <td className="px-5 py-3">{s.currentStage.label}</td>
                   <td className="px-5 py-3">{s.assignedEngineer?.name ?? "Unassigned"}</td>
@@ -85,7 +88,7 @@ export default function SitesPage() {
                 </tr>
               ))}
               {sites.length === 0 && (
-                <tr><td colSpan={5} className="px-5 py-8 text-center text-gray-400">No sites.</td></tr>
+                <tr><td colSpan={6} className="px-5 py-8 text-center text-gray-400">No sites.</td></tr>
               )}
             </tbody>
           </table>
@@ -108,7 +111,8 @@ export default function SitesPage() {
                 <span className="font-mono text-xs font-semibold" style={{ color: "var(--theme-primary)" }}>{s.order.orderNumber}</span>
                 <LastUpdate updatedAt={s.updatedAt} />
               </div>
-              <p className="text-sm font-semibold text-gray-900 truncate">{s.order.customer.name}</p>
+              <p className="text-sm font-semibold text-gray-900 truncate">{s.companyName ?? "Unnamed site"}</p>
+              <p className="text-xs text-gray-500 truncate">{s.order.customer.name}</p>
               <p className="text-xs text-gray-500 mb-2">{s.currentStage.label} · {s.currentStage.phase}</p>
               <div className="data-card-row">
                 <span className="label">Engineer</span>

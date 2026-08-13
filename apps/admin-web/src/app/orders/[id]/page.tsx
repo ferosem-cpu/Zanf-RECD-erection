@@ -9,6 +9,7 @@ import { useAuth } from "@/components/AuthContext";
 interface OtherSite {
   id: string;
   address: string | null;
+  companyName: string | null;
   gpsLat: string | null;
   gpsLng: string | null;
   currentStage: { label: string };
@@ -38,6 +39,7 @@ interface OrderDetail {
   site: {
     id: string;
     address: string | null;
+    companyName: string | null;
     gpsLat: string | null;
     gpsLng: string | null;
     currentStage: { label: string };
@@ -171,6 +173,10 @@ export default function OrderDetailPage() {
           {order.site ? (
             <>
               <div className="data-card-row">
+                <span className="label">Site name</span>
+                <span className="value">{order.site.companyName ?? "Not set"}</span>
+              </div>
+              <div className="data-card-row">
                 <span className="label">Stage</span>
                 <span className="value">{order.site.currentStage.label}</span>
               </div>
@@ -232,6 +238,7 @@ export default function OrderDetailPage() {
                     </Link>
                     <span className="badge badge-accent">{s.currentStage.label}</span>
                   </div>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{s.companyName ?? "Unnamed site"}</p>
                   <p className="text-xs text-gray-500 mb-2 truncate">{s.address ?? "No address on file"}</p>
                   {otherMap && (
                     <a href={otherMap} target="_blank" rel="noreferrer" className="text-xs font-medium" style={{ color: "var(--theme-accent)" }}>

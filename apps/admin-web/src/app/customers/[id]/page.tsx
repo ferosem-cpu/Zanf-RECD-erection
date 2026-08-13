@@ -13,6 +13,7 @@ interface CustomerSite {
   site: {
     id: string;
     address: string | null;
+    companyName: string | null;
     currentStage: { label: string };
     assignedEngineer: { name: string } | null;
     vendor: { name: string } | null;
@@ -132,6 +133,7 @@ export default function CustomerDetailPage() {
                 <p className="text-xs text-gray-500 mb-1">{o.product.name} ({o.product.model})</p>
                 {o.site ? (
                   <>
+                    <p className="text-sm font-semibold text-gray-900 truncate">{o.site.companyName ?? "Unnamed site"}</p>
                     <p className="text-xs text-gray-500 mb-2 truncate">{o.site.address ?? "No site address on file"}</p>
                     <div className="data-card-row">
                       <span className="label">Engineer</span>

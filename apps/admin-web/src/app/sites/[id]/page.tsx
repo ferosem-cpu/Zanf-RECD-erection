@@ -430,7 +430,10 @@ export default function SiteDetailPage() {
   return (
     <div className="space-y-6 max-w-4xl" data-testid="site-detail-page">
       <div>
-        <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>{site.order.orderNumber}</h1>
+        <h1 className="text-xl sm:text-2xl font-semibold" style={{ color: "var(--text-heading)" }}>
+          {site.companyName ?? "Unnamed site"}
+        </h1>
+        <p className="text-sm text-gray-500 font-mono text-xs">{site.order.orderNumber}</p>
         <p className="text-sm text-gray-500">
           {site.order.customer.name} · {site.address ?? "No address on file"}
         </p>
@@ -504,7 +507,7 @@ export default function SiteDetailPage() {
       </section>
 
       <section className="card p-5 space-y-3">
-        <h2 className="text-sm font-semibold">Site details</h2>
+        <h2 className="text-sm font-semibold">Site name</h2>
         <p className="text-xs text-gray-500">
           The end-client / site-owner who actually operates this premises - distinct from{" "}
           {site.order.customer.name}, who we&apos;re contracted with.
@@ -512,7 +515,7 @@ export default function SiteDetailPage() {
         {canEdit ? (
           <form onSubmit={submitSiteDetails} className="space-y-2">
             <input
-              placeholder="End-client / site-owner name (e.g. BPCL)"
+              placeholder="Site name (e.g. BPCL)"
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               value={companyName}
               onChange={(e) => setCompanyName(e.target.value)}
