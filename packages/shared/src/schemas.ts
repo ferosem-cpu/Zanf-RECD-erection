@@ -38,7 +38,8 @@ export const createOrderSchema = z.object({
   productId: z.string(),
   quantity: z.number().int().positive(),
   // Optional: a sales-created order should still set these, but they're nullable on the
-  // model to support bulk-imported operational orders (see bulkImportSitesSchema).
+  // model to support operational orders created without commercial figures yet (e.g. a
+  // site added before pricing is finalized) - filled in later via the order edit flow.
   value: z.number().nonnegative().optional(),
   orderDate: z.string().datetime().optional(),
   promisedDeliveryDate: z.string().datetime().optional(),
@@ -105,30 +106,6 @@ export const upsertRecdDeliverySchema = z.object({
   priority: z.number().int().nullable().optional(),
   expectedDate: z.string().datetime().nullable().optional(),
   actualDate: z.string().datetime().nullable().optional(),
-});
-
-/**
- * One row of a bulk site import (e.g. parsed from an uploaded delivery-tracking spreadsheet).
- * Each row creates one Order + one Site under the given customer, matching the existing
- * one-order-per-site model - see docs/HANDOVER note on bulk site import.
- */
-export const bulkImportSiteRowSchema = z.object({
-  companyName: z.string().optional(), // end-client / site-owner, e.g. "BPCL"
-  address: z.string().optional(),
-  area: z.string().optional(),
-  productId: z.string().optional(),
-  quantity: z.number().int().positive().default(1),
-  deliveryStatus: z.string().optional(),
-  statusNote: z.string().optional(),
-  priority: z.number().int().optional(),
-  contactName: z.string().optional(),
-  contactPhone: z.string().optional(),
-  docsToCarry: z.string().optional(), // free text from the sheet, carried over as a note only
-});
-
-export const bulkImportSitesSchema = z.object({
-  customerId: z.string(),
-  rows: z.array(bulkImportSiteRowSchema).min(1),
 });
 
 export const createComplaintSchema = z.object({

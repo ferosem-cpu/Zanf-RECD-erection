@@ -10,8 +10,6 @@ import {
   updateSiteContactSchema,
   setSiteDocumentRequirementsSchema,
   upsertRecdDeliverySchema,
-  bulkImportSitesSchema,
-  STAGE_KEY,
   PERMISSION_KEY,
   PENDING_ACTION_CATEGORY,
   VENDOR_STATUS,
@@ -39,78 +37,6 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
     orderBy: { updatedAt: "desc" },
   });
   res.json(sites);
-});
-
-/**
- * Bulk-import multiple site addresses under a single customer (e.g. from an uploaded
- * delivery-tracking spreadsheet). Each row creates one Order + Site pair, keeping the
- * existing one-order-per-site model intact rather than restructuring it - see project
- * notes on the delivery-tracking sheet import. Order.value/orderDate are left unset
- * (nullable) since these rows are operational, not commercial; edit them later if needed.
- * Registered before "/:id" so the literal "bulk-import" path isn't swallowed by the
- * param route.
- */
-sitesRouter.post("/bulk-import", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
-  const parsed = bulkImportSitesSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-
-  const customer = await prisma.customer.findUnique({ where: { id: parsed.data.customerId } });
-  if (!customer) return res.status(400).json({ error: "Unknown customer" });
-
-  const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
-
-  // A fallback product so rows that don't name one (the sheet may only have a product
-  // model as free text) don't fail the whole import - can be corrected per-order after.
-  let fallbackProductId: string | undefined;
-
-  const created = [];
-  for (const row of parsed.data.rows) {
-    let productId = row.productId;
-    if (!productId) {
-      if (!fallbackProductId) {
-        const anyProduct = await prisma.product.findFirst({ orderBy: { createdAt: "asc" } });
-        if (!anyProduct) return res.status(400).json({ error: "No products exist yet - create one before bulk-importing sites" });
-        fallbackProductId = anyProduct.id;
-      }
-      productId = fallbackProductId;
-    }
-
-    const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}-${created.length}`;
-
-    const order = await prisma.order.create({
-      data: {
-        orderNumber,
-        customerId: parsed.data.customerId,
-        productId,
-        quantity: row.quantity,
-        salesEngineerId: req.auth!.userId,
-        site: {
-          create: {
-            address: [row.address, row.area].filter(Boolean).join(", ") || undefined,
-            companyName: row.companyName,
-            currentStageId: firstStage.id,
-            contacts:
-              row.contactName || row.contactPhone
-                ? { create: [{ name: row.contactName || "Site contact", phone: row.contactPhone }] }
-                : undefined,
-            recdDelivery: {
-              create: {
-                productId,
-                quantity: row.quantity,
-                deliveryStatus: row.deliveryStatus || undefined,
-                statusNote: row.statusNote || row.docsToCarry,
-                priority: row.priority,
-              },
-            },
-          },
-        },
-      },
-      include: { site: { include: { contacts: true, recdDelivery: true } } },
-    });
-    created.push(order);
-  }
-
-  res.status(201).json({ imported: created.length, orders: created });
 });
 
 sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
