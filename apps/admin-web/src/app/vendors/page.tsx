@@ -22,16 +22,49 @@ function statusBadge(status: string) {
   return "bg-amber-100 text-amber-800";
 }
 
+const emptyForm = { name: "", address: "", contactName: "", contactEmail: "", contactPhone: "" };
+
 export default function VendorsPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approval, setApproval] = useState<{ name: string; email: string; tempPassword?: string; created: boolean } | null>(null);
 
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [form, setForm] = useState(emptyForm);
+
   function load() {
     api<Vendor[]>("/vendors").then(setVendors).catch((e) => setError(e instanceof Error ? e.message : "Failed to load vendors"));
   }
   useEffect(load, []);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setFormError(null);
+    try {
+      const res = await api<{ contactLoginCreated: boolean; contactEmail: string; tempPassword?: string; name: string }>("/vendors", {
+        method: "POST",
+        body: JSON.stringify({
+          name: form.name,
+          address: form.address || undefined,
+          contactName: form.contactName,
+          contactEmail: form.contactEmail,
+          contactPhone: form.contactPhone || undefined,
+        }),
+      });
+      setApproval({ name: res.name, email: res.contactEmail, tempPassword: res.tempPassword, created: res.contactLoginCreated });
+      setOpen(false);
+      setForm(emptyForm);
+      load();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Failed to add vendor");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function approve(v: Vendor) {
     setBusy(v.id);
@@ -62,11 +95,19 @@ export default function VendorsPage() {
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Vendors</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          External erection subcontractors. Review a registration, run due diligence, then approve — approval creates the vendor&apos;s first engineer login.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Vendors</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            External erection subcontractors. Review a registration, run due diligence, then approve — approval creates the vendor&apos;s first engineer login. Or add a known vendor directly below.
+          </p>
+        </div>
+        <button
+          onClick={() => { setForm(emptyForm); setFormError(null); setOpen(true); }}
+          className="btn-primary px-4 py-2 text-sm self-start sm:self-auto whitespace-nowrap"
+        >
+          + Add vendor
+        </button>
       </div>
 
       {error && (
@@ -234,6 +275,34 @@ export default function VendorsPage() {
           ))
         )}
       </div>
+
+      {open && (
+        <div className="modal-backdrop" onClick={() => setOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Add vendor</h3>
+              <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <form onSubmit={submit} className="space-y-3">
+              <input required placeholder="Vendor / company name" className="field w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <textarea placeholder="Address (optional)" rows={2} className="field w-full" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input required placeholder="Contact name" className="field" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
+                <input required type="email" placeholder="Contact email (login)" className="field" value={form.contactEmail} onChange={(e) => setForm({ ...form, contactEmail: e.target.value })} />
+              </div>
+              <input placeholder="Contact phone (optional)" className="field w-full" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
+              <p className="text-[11px] text-gray-400">Added directly by staff, this vendor is approved immediately - no due-diligence review needed. Their contact gets an erection-engineer login right away.</p>
+
+              {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
+
+              <div className="flex justify-end gap-3 pt-1">
+                <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
+                <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">{saving ? "Adding…" : "Add vendor"}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
