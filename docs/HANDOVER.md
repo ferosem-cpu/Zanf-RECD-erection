@@ -139,12 +139,63 @@ strings lose `$`, script files don't.
 - Installs run through the remote/automation shell have repeatedly corrupted
   `node_modules` (turbo/tailwind/next/prettier binaries going missing, even
   under `npm ci`) — if it recurs, have the user run `npm install` directly in
-  their own terminal rather than through automation.
+  their own terminal rather than through automation. Recurred 2026-08-13
+  (`typescript` missing entirely even though `turbo`/`next` were present) —
+  running `npm install` through Desktop Commander fixed it that time, so this
+  isn't an absolute rule, just something to watch for.
+- The local dev Postgres DB needs `npx prisma migrate deploy` run by hand
+  after pulling schema changes someone else made — it doesn't happen
+  automatically, and a stale local DB throws opaque `PrismaClientKnownRequestError:
+  column ... does not exist` on whichever route first touches the missing
+  column (hit via `/dashboard` → `Site.companyName` on 2026-08-13).
+- **Windows Prisma `EPERM` gotcha (see Part A) recurs on every fresh
+  `prisma generate`/`migrate dev` if the previous dev server wasn't fully
+  killed** — confirmed again 2026-08-13, same fix (kill the `node.exe` still
+  holding `query_engine-windows.dll.node`, then retry).
+- **Production's Supabase migration history has drifted from the local
+  Prisma `migrations/` folder.** `add_site_contacts_documents_delivery` is
+  applied on production under a *different* version timestamp
+  (`20260813085200`) than the local migration file's own name
+  (`20260813085114`), and several early production migrations
+  (`zanf_card_system_schema`, `fix_updated_at_search_path`, etc.) have no
+  corresponding local `.sql` file at all — production schema changes have
+  been applied directly via the Supabase MCP's `apply_migration`, not
+  `prisma migrate deploy`. **Don't assume `prisma migrate status` against
+  production would report cleanly** — always diff actual columns
+  (`information_schema.columns`) against the Prisma schema before writing a
+  new migration, rather than trusting the migrations table.
 - No DB-level `NOT NULL` constraint on any `hsnCode` column — enforcement is
   Zod/API-layer only (deliberate; a DB constraint would need a data-backfill
   pass first, since some historical rows may still be null).
+- **The agent operating this repo cannot log into `admin-web` itself** —
+  entering a password into any field is refused outright, even with
+  credentials supplied by the user. Production changes get verified by
+  replicating the app's own Prisma queries as raw SQL via the Supabase MCP
+  (join the same tables the route joins, confirm no dangling FK/null-in-
+  required-field), and by hitting the deployed API directly for auth-gated
+  routes (expect 401, not 404, to confirm a route deployed) — never by
+  loading the real UI as a logged-in user. Local dev DB doesn't have this
+  restriction: the seeded Super Admin (`ferosem@gmail.com` /
+  `changeme123`) is fine to use for local browser verification.
+- Supabase MCP calls against the production project (`apply_migration`,
+  `execute_sql`) get intermittently blocked by the harness's auto-mode
+  safety classifier and require the user to explicitly say "proceed" before
+  a retry succeeds — inconsistent about *which* calls trip it (a large
+  multi-statement data-import query went through untouched right after a
+  single-statement schema migration got blocked), so don't assume a query
+  is safe just because a similar one just went through.
 
-## Current open items (as of 2026-08-12)
+## Current open items (as of 2026-08-13)
+
+- No `DELETE /vendors/:id` — a vendor added by mistake (self-registered or
+  staff-added) can only be **rejected** (status flip), not removed outright.
+- Product catalog now carries real GA-drawing-derived data
+  (`shape`/`dimensions`/`weightKg`, imported 2026-08-13 — see changelog) for
+  30 KVA variants, but `shape` is only a 3-value enum
+  (`cylinder`/`triangle`/`rectangle`); the richer free-text shape
+  descriptions from the source spreadsheet (e.g. "Horizontal cylindrical
+  shell (RAD 2.0)") got stuffed into `ratingSpec` for lack of a better
+  field — flagged to the user as a judgment call, not yet revisited.
 
 - `apps/api/scripts/verify*.ts` — a growing pile of throwaway verification
   scripts from live-testing the agent's write tools. Never consolidated into
@@ -172,6 +223,82 @@ strings lose `$`, script files don't.
 ---
 
 ## Changelog (condensed)
+
+### Customers/Products/Vendors CRUD, real data import, first end-to-end deploy of both apps (2026-08-13)
+Customers and Products had create-only UIs (or no UI at all, for Products)
+before this session; both are now full CRUD with detail pages, and this was
+also the first session where the entire deploy pipeline (git push to
+`master` + the `zan-app-api` manual dance + direct production DB writes) ran
+repeatedly and successfully in one sitting.
+
+1. **Customers**: `PUT`/`DELETE /customers/:id` (delete guarded against
+   existing orders/quotations/invoices/complaints), a `/customers/[id]`
+   detail page listing every order+site for that customer with links into
+   each site's progress page.
+2. **Products**: new page from scratch — list/create/edit/delete, plus a
+   `/products/[id]` detail page. Added `shape` (`cylinder`/`triangle`/
+   `rectangle` enum), `dimensions` (free text — deliberately not split into
+   length/width/height/diameter columns, since the right structured fields
+   differ per shape), and `weightKg` to the `Product` model for future
+   structure/scaffold sizing.
+3. **Stale-modal bug**: the `?edit=<id>` deep-link from a detail page's Edit
+   button re-opened the modal right after saving, because saving reloads the
+   list while the query param is still in the URL, re-triggering the
+   `useEffect` that watches for it. Fixed in both `customers/page.tsx` and
+   `products/page.tsx` with a ref tracking which id has already been
+   auto-opened, so the effect only fires once per id, not on every list
+   refresh.
+4. **Pre-existing build-blocking bug found only when actually deploying**:
+   `orders.ts`'s `new Date(data.orderDate)` failed `tsc` because
+   `orderDate` is optional on `createOrderSchema` (nullable on the model, to
+   support bulk-imported operational orders without commercial figures
+   yet) — `--noEmit` typechecks had been passing because nothing in this
+   session's own changes touched that line, but `vercel build --prod`'s own
+   `tsc -p tsconfig.json` step caught it immediately. Mirrored the existing
+   `promisedDeliveryDate ? new Date(...) : undefined` pattern to fix.
+5. **First full production deploy of this session's branch** — merged
+   `feature/site-import-drive-documents` to `master` (this branch also
+   carried the earlier multi-site-import/Drive-folders work, so that shipped
+   in the same deploy), pushed (`admin-web` auto-deployed), applied the one
+   missing migration to production (`Product.shape`/`dimensions`/
+   `weightKg`) via the Supabase MCP, then ran the full `zan-app-api` manual
+   deploy dance — required fix #4 above along the way. Verified via
+   `GET /health` → 200 and `GET /products` / `GET /customers/:id` → 401 (not
+   404) in production.
+6. **Real product catalog import** — 30 RECD KVA variants imported from
+   `RECD_Full_GA_Extraction.xlsx` (GA-drawing-derived weight/dimensions/
+   shape) directly into the production DB via the Supabase MCP (no app-code
+   change). One of the two prior "Products" rows (`RECD-250`) had a real
+   order attached, so it was **updated in place** rather than deleted, even
+   though the user's instruction was "delete the existing products, they
+   were test" — the delete-guard logic already built for the API would have
+   refused it anyway. The other (`recd`/`triangle`, 0 references) was
+   deleted as genuine junk.
+7. **Real site data import for one customer** — 29 orders+sites imported for
+   "Ethen Power Solutionns Private Limited" from a local
+   `Site and location Ethen.xlsx`, matched to the product catalog by KVA.
+   One row's KVA (810) didn't exist anywhere in the master GA extraction and
+   had dimensions identical to a nearby 910 KVA row — flagged to the user as
+   a likely typo before proceeding; user confirmed it was genuine, so
+   `RECD-810` was created as a new product rather than skipped or coerced to
+   910.
+8. **`Site.companyName` ("Site name") was stored and returned by the API but
+   never rendered anywhere** in the UI except a buried edit field on the
+   site detail page — only surfaced once the Ethen import made it obviously
+   missing. Added it to: Sites list (new column), Site detail (now the page
+   header, order number demoted to a subtitle), Orders list (new column),
+   Order detail's "Installation site" + "other sites" cards, and the
+   Customer detail page's per-order site cards.
+9. **Staff can now add a vendor directly** — previously the only path into
+   the system was public self-registration (`POST /vendor/register`,
+   landing in `pending`) followed by staff approve/reject; there was no way
+   for staff to add a vendor they already know and trust. Added
+   `POST /vendors` (same `manage_vendors` permission already granted to
+   Super Admin/Owner/Management in production — confirmed via direct query
+   before writing any code, since the ask sounded like a permissions gap but
+   wasn't) that creates the vendor pre-approved with an immediate contact
+   login, reusing the same login-creation logic factored out of the
+   `/approve` route.
 
 ### Finance module — built from scratch (2026-07 → 2026-08)
 Zan-APP's Prisma schema originally had **no accounting/invoicing tables at
