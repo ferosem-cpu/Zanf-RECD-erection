@@ -47,11 +47,16 @@ export default function SitesPage() {
 
   return (
     <div className="space-y-4" data-testid="sites-page">
-      <div>
-        <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>
-          Sites
-        </h1>
-        <p className="mt-1 text-sm text-gray-500">{sites.length} active sites</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>
+            Sites
+          </h1>
+          <p className="mt-1 text-sm text-gray-500">{sites.length} active sites</p>
+        </div>
+        <Link href="/sites/import" className="btn-primary px-4 py-2 text-sm whitespace-nowrap">
+          Import sites
+        </Link>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
 

@@ -5,6 +5,13 @@ import {
   uploadSitePhotoSchema,
   assignSiteVendorSchema,
   updateSiteLocationSchema,
+  updateSiteDetailsSchema,
+  createSiteContactSchema,
+  updateSiteContactSchema,
+  setSiteDocumentRequirementsSchema,
+  upsertRecdDeliverySchema,
+  bulkImportSitesSchema,
+  STAGE_KEY,
   PERMISSION_KEY,
   PENDING_ACTION_CATEGORY,
   VENDOR_STATUS,
@@ -13,6 +20,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString, asOptionalString } from "../lib/params";
+import { createDriveFolder, getDriveFolderId } from "../lib/googleDrive";
 
 export const sitesRouter = Router();
 sitesRouter.use(authenticate);
@@ -33,6 +41,78 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
   res.json(sites);
 });
 
+/**
+ * Bulk-import multiple site addresses under a single customer (e.g. from an uploaded
+ * delivery-tracking spreadsheet). Each row creates one Order + Site pair, keeping the
+ * existing one-order-per-site model intact rather than restructuring it - see project
+ * notes on the delivery-tracking sheet import. Order.value/orderDate are left unset
+ * (nullable) since these rows are operational, not commercial; edit them later if needed.
+ * Registered before "/:id" so the literal "bulk-import" path isn't swallowed by the
+ * param route.
+ */
+sitesRouter.post("/bulk-import", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const parsed = bulkImportSitesSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const customer = await prisma.customer.findUnique({ where: { id: parsed.data.customerId } });
+  if (!customer) return res.status(400).json({ error: "Unknown customer" });
+
+  const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
+
+  // A fallback product so rows that don't name one (the sheet may only have a product
+  // model as free text) don't fail the whole import - can be corrected per-order after.
+  let fallbackProductId: string | undefined;
+
+  const created = [];
+  for (const row of parsed.data.rows) {
+    let productId = row.productId;
+    if (!productId) {
+      if (!fallbackProductId) {
+        const anyProduct = await prisma.product.findFirst({ orderBy: { createdAt: "asc" } });
+        if (!anyProduct) return res.status(400).json({ error: "No products exist yet - create one before bulk-importing sites" });
+        fallbackProductId = anyProduct.id;
+      }
+      productId = fallbackProductId;
+    }
+
+    const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}-${created.length}`;
+
+    const order = await prisma.order.create({
+      data: {
+        orderNumber,
+        customerId: parsed.data.customerId,
+        productId,
+        quantity: row.quantity,
+        salesEngineerId: req.auth!.userId,
+        site: {
+          create: {
+            address: [row.address, row.area].filter(Boolean).join(", ") || undefined,
+            companyName: row.companyName,
+            currentStageId: firstStage.id,
+            contacts:
+              row.contactName || row.contactPhone
+                ? { create: [{ name: row.contactName || "Site contact", phone: row.contactPhone }] }
+                : undefined,
+            recdDelivery: {
+              create: {
+                productId,
+                quantity: row.quantity,
+                deliveryStatus: row.deliveryStatus || undefined,
+                statusNote: row.statusNote || row.docsToCarry,
+                priority: row.priority,
+              },
+            },
+          },
+        },
+      },
+      include: { site: { include: { contacts: true, recdDelivery: true } } },
+    });
+    created.push(order);
+  }
+
+  res.status(201).json({ imported: created.length, orders: created });
+});
+
 sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
   const siteId = asString(req.params.id);
 
@@ -49,6 +129,9 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
       },
       photos: { include: { checkpoint: true, uploadedBy: true }, orderBy: { uploadedAt: "asc" } },
       pendingActions: { orderBy: { createdAt: "desc" } },
+      contacts: { orderBy: { createdAt: "asc" } },
+      documentRequirements: { include: { requirementType: true }, orderBy: { requirementType: { sequenceOrder: "asc" } } },
+      recdDelivery: { include: { product: true } },
     },
   });
   if (!detail) return res.status(404).json({ error: "Site not found" });
@@ -225,3 +308,192 @@ sitesRouter.post("/:id/assign-vendor", requirePermission(PERMISSION_KEY.MANAGE_V
   });
   res.json(updated);
 });
+
+/**
+ * Update the site's own identity fields - end-client/site-owner name and address. Distinct
+ * from POST /:id/location, which is field-captured GPS + address from the erection engineer;
+ * this is office-side editing (e.g. after a bulk import) and doesn't touch gpsLat/gpsLng.
+ */
+sitesRouter.patch("/:id", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  const parsed = updateSiteDetailsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const siteId = asString(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+
+  const updated2 = await prisma.site.update({ where: { id: siteId }, data: parsed.data });
+  res.json(updated2);
+});
+
+// ---------------------------------------------------------------------------
+// Site contacts (multiple POCs per site)
+// ---------------------------------------------------------------------------
+
+sitesRouter.post("/:id/contacts", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  const parsed = createSiteContactSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const siteId = asString(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+
+  const contact = await prisma.siteContact.create({ data: { siteId, ...parsed.data } });
+  res.status(201).json(contact);
+});
+
+sitesRouter.patch(
+  "/:id/contacts/:contactId",
+  requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS),
+  async (req: AuthenticatedRequest, res) => {
+    const parsed = updateSiteContactSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    const contact = await prisma.siteContact.findUnique({ where: { id: asString(req.params.contactId) } });
+    if (!contact || contact.siteId !== req.params.id) return res.status(404).json({ error: "Contact not found" });
+
+    const updated = await prisma.siteContact.update({ where: { id: contact.id }, data: parsed.data });
+    res.json(updated);
+  },
+);
+
+sitesRouter.delete(
+  "/:id/contacts/:contactId",
+  requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS),
+  async (req: AuthenticatedRequest, res) => {
+    const contact = await prisma.siteContact.findUnique({ where: { id: asString(req.params.contactId) } });
+    if (!contact || contact.siteId !== req.params.id) return res.status(404).json({ error: "Contact not found" });
+
+    await prisma.siteContact.delete({ where: { id: contact.id } });
+    res.status(204).send();
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Document requirements (police verification, ESIC, insurance, PPE, ...)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bulk-set every document requirement for a site in one call - the admin UI renders all
+ * requirement types as a table with a required yes/no toggle per row and saves the whole
+ * table at once, rather than one request per checkbox.
+ */
+sitesRouter.put(
+  "/:id/document-requirements",
+  requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS),
+  async (req: AuthenticatedRequest, res) => {
+    const parsed = setSiteDocumentRequirementsSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+    const siteId = asString(req.params.id);
+    const site = await prisma.site.findUnique({ where: { id: siteId } });
+    if (!site) return res.status(404).json({ error: "Site not found" });
+
+    await prisma.$transaction(
+      parsed.data.requirements.map((r) =>
+        prisma.siteDocumentRequirement.upsert({
+          where: { siteId_requirementTypeId: { siteId, requirementTypeId: r.requirementTypeId } },
+          update: {
+            required: r.required,
+            status: r.status,
+            documentUrl: r.documentUrl,
+            notes: r.notes,
+          },
+          create: {
+            siteId,
+            requirementTypeId: r.requirementTypeId,
+            required: r.required,
+            status: r.status ?? undefined,
+            documentUrl: r.documentUrl,
+            notes: r.notes,
+          },
+        }),
+      ),
+    );
+
+    const requirements = await prisma.siteDocumentRequirement.findMany({
+      where: { siteId },
+      include: { requirementType: true },
+      orderBy: { requirementType: { sequenceOrder: "asc" } },
+    });
+    res.json(requirements);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// RECD delivery tracking
+// ---------------------------------------------------------------------------
+
+sitesRouter.put("/:id/recd-delivery", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  const parsed = upsertRecdDeliverySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const siteId = asString(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+
+  const data = {
+    productId: parsed.data.productId ?? undefined,
+    quantity: parsed.data.quantity ?? undefined,
+    deliveryStatus: parsed.data.deliveryStatus,
+    statusNote: parsed.data.statusNote ?? undefined,
+    priority: parsed.data.priority ?? undefined,
+    expectedDate: parsed.data.expectedDate ? new Date(parsed.data.expectedDate) : undefined,
+    actualDate: parsed.data.actualDate ? new Date(parsed.data.actualDate) : undefined,
+  };
+
+  const delivery = await prisma.recdDelivery.upsert({
+    where: { siteId },
+    update: data,
+    create: { siteId, ...data },
+    include: { product: true },
+  });
+  res.json(delivery);
+});
+
+// ---------------------------------------------------------------------------
+// Google Drive folders (photographs + drawings)
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates the Photographs and Drawings subfolders for this site under the company Drive
+ * account's parent folder (see lib/googleDrive.ts), named so they're identifiable in Drive
+ * itself, and persists the folder id + webViewLink so the admin UI can link straight to
+ * them. Safe to call once; calling again would create duplicate folders, so the UI only
+ * shows the "create" action while the links are unset.
+ */
+sitesRouter.post(
+  "/:id/drive-folders",
+  requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS),
+  async (req: AuthenticatedRequest, res) => {
+    const siteId = asString(req.params.id);
+    const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: { include: { customer: true } } } });
+    if (!site) return res.status(404).json({ error: "Site not found" });
+
+    let parentFolderId: string;
+    try {
+      parentFolderId = getDriveFolderId();
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : "Drive is not configured" });
+    }
+
+    const label = site.companyName || site.address || site.id;
+    const siteFolder = await createDriveFolder(`${site.order.customer.name} - ${label}`, parentFolderId);
+    const [photosFolder, drawingsFolder] = await Promise.all([
+      createDriveFolder("Photographs", siteFolder.id),
+      createDriveFolder("Drawings", siteFolder.id),
+    ]);
+
+    const updated = await prisma.site.update({
+      where: { id: siteId },
+      data: {
+        photosDriveFolderId: photosFolder.id,
+        photosDriveFolderUrl: photosFolder.webViewLink,
+        drawingsDriveFolderId: drawingsFolder.id,
+        drawingsDriveFolderUrl: drawingsFolder.webViewLink,
+      },
+    });
+    res.status(201).json(updated);
+  },
+);

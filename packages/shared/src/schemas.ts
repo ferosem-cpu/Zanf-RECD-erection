@@ -37,8 +37,10 @@ export const createOrderSchema = z.object({
   customerId: z.string(),
   productId: z.string(),
   quantity: z.number().int().positive(),
-  value: z.number().nonnegative(),
-  orderDate: z.string().datetime(),
+  // Optional: a sales-created order should still set these, but they're nullable on the
+  // model to support bulk-imported operational orders (see bulkImportSitesSchema).
+  value: z.number().nonnegative().optional(),
+  orderDate: z.string().datetime().optional(),
   promisedDeliveryDate: z.string().datetime().optional(),
   plannedExhaustHookupType: z.string().optional(),
 });
@@ -65,6 +67,68 @@ export const updateSiteLocationSchema = z.object({
   address: z.string().optional(),
   gpsLat: z.number().min(-90).max(90).nullable().optional(),
   gpsLng: z.number().min(-180).max(180).nullable().optional(),
+});
+
+/** Site's own identity fields - end-client/site-owner name and address, editable independent of location capture. */
+export const updateSiteDetailsSchema = z.object({
+  companyName: z.string().nullable().optional(),
+  address: z.string().nullable().optional(),
+});
+
+export const createSiteContactSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  phone: z.string().optional(),
+  email: z.string().email().optional(),
+  role: z.string().optional(),
+});
+
+export const updateSiteContactSchema = createSiteContactSchema.partial();
+
+/** Bulk-set all document requirements for a site in one call (the UI presents them as a table). */
+export const setSiteDocumentRequirementsSchema = z.object({
+  requirements: z.array(
+    z.object({
+      requirementTypeId: z.string(),
+      required: z.boolean(),
+      status: z.string().optional(),
+      documentUrl: z.string().url().optional(),
+      notes: z.string().optional(),
+    }),
+  ),
+});
+
+export const upsertRecdDeliverySchema = z.object({
+  productId: z.string().nullable().optional(),
+  quantity: z.number().int().positive().nullable().optional(),
+  deliveryStatus: z.string().optional(),
+  statusNote: z.string().nullable().optional(),
+  priority: z.number().int().nullable().optional(),
+  expectedDate: z.string().datetime().nullable().optional(),
+  actualDate: z.string().datetime().nullable().optional(),
+});
+
+/**
+ * One row of a bulk site import (e.g. parsed from an uploaded delivery-tracking spreadsheet).
+ * Each row creates one Order + one Site under the given customer, matching the existing
+ * one-order-per-site model - see docs/HANDOVER note on bulk site import.
+ */
+export const bulkImportSiteRowSchema = z.object({
+  companyName: z.string().optional(), // end-client / site-owner, e.g. "BPCL"
+  address: z.string().optional(),
+  area: z.string().optional(),
+  productId: z.string().optional(),
+  quantity: z.number().int().positive().default(1),
+  deliveryStatus: z.string().optional(),
+  statusNote: z.string().optional(),
+  priority: z.number().int().optional(),
+  contactName: z.string().optional(),
+  contactPhone: z.string().optional(),
+  docsToCarry: z.string().optional(), // free text from the sheet, carried over as a note only
+});
+
+export const bulkImportSitesSchema = z.object({
+  customerId: z.string(),
+  rows: z.array(bulkImportSiteRowSchema).min(1),
 });
 
 export const createComplaintSchema = z.object({

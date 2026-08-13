@@ -50,3 +50,8 @@ lookupsRouter.get("/payment-methods", async (_req, res) => {
 lookupsRouter.get("/work-order-task-types", async (_req, res) => {
   res.json(Object.values(WORK_ORDER_TASK_TYPE));
 });
+
+lookupsRouter.get("/document-requirement-types", async (_req, res) => {
+  const types = await prisma.documentRequirementType.findMany({ orderBy: { sequenceOrder: "asc" } });
+  res.json(types);
+});

@@ -171,6 +171,7 @@ model Product {
   orders Order[]
   quotationLineItems QuotationLineItem[]
   invoiceLineItems   InvoiceLineItem[]
+  recdDeliveries     RecdDelivery[]
 }
 
 // ---------------------------------------------------------------------------
@@ -185,8 +186,11 @@ model Order {
   productId                String
   product                  Product   @relation(fields: [productId], references: [id])
   quantity                 Int
-  value                    Decimal   @db.Decimal(12, 2)
-  orderDate                DateTime
+  /// Nullable: bulk site-import (e.g. from a delivery-tracking sheet) creates operational
+  /// orders that don't have commercial figures yet - filled in later, or never, if this
+  /// order is never actually invoiced. Sales-created orders still set this at creation.
+  value                    Decimal?   @db.Decimal(12, 2)
+  orderDate                DateTime?
   promisedDeliveryDate     DateTime?
   actualDispatchDate       DateTime?
   /// Set by the sales engineer at order time - "replace_existing_silencer" | "add_after_existing_exhaust"
@@ -210,10 +214,22 @@ model Site {
   order   Order  @relation(fields: [orderId], references: [id])
 
   address           String?
+  /// The end-client / site-owner - the company that actually operates this premises
+  /// (distinct from Order.customer, who we're contracted with; we're a subcontractor
+  /// working across many end-client sites on behalf of one contracting customer).
+  companyName       String?
   gpsLat            Decimal? @db.Decimal(9, 6)
   gpsLng            Decimal? @db.Decimal(9, 6)
   assignedEngineerId String?
   assignedEngineer   User?   @relation("AssignedEngineer", fields: [assignedEngineerId], references: [id])
+
+  /// Google Drive folders for this site's photographs and drawings (company Drive account -
+  /// see lib/googleDrive.ts). Created on demand via POST /sites/:id/drive-folders. The *Url
+  /// fields are Drive's webViewLink, so the admin UI can link straight to the folder.
+  photosDriveFolderId    String?
+  photosDriveFolderUrl   String?
+  drawingsDriveFolderId  String?
+  drawingsDriveFolderUrl String?
 
   /// The external vendor company responsible for erecting this site (null = handled internally).
   vendorId String?
@@ -245,6 +261,80 @@ model Site {
   purchaseOrders  PurchaseOrder[]
   expenses        Expense[]
   workOrders      WorkOrder[]
+  contacts        SiteContact[]
+  documentRequirements SiteDocumentRequirement[]
+  recdDelivery    RecdDelivery?
+}
+
+// ---------------------------------------------------------------------------
+// Site contacts (one site can have several POCs - security desk, site engineer, etc.)
+// ---------------------------------------------------------------------------
+
+model SiteContact {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  name      String
+  phone     String?
+  email     String?
+  /// Free-text role/designation at the site, e.g. "Security head", "Facility manager".
+  role      String?
+  createdAt DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Site document requirements (police verification, ESIC, insurance, PPE, ...)
+// ---------------------------------------------------------------------------
+
+/// Lookup table (data-not-code): the set of document types a site can require is seeded
+/// data, not a code change, so a new requirement type is a DB insert (see seed.ts).
+model DocumentRequirementType {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  label         String
+  sequenceOrder Int
+  createdAt     DateTime @default(now())
+
+  siteRequirements SiteDocumentRequirement[]
+}
+
+model SiteDocumentRequirement {
+  id                String                  @id @default(cuid())
+  siteId            String
+  site              Site                    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  requirementTypeId String
+  requirementType   DocumentRequirementType @relation(fields: [requirementTypeId], references: [id])
+  required          Boolean                 @default(false)
+  /// not_submitted | submitted | verified (free-form string, matches project convention)
+  status            String                  @default("not_submitted")
+  documentUrl       String?
+  notes             String?
+  updatedAt         DateTime                @updatedAt
+  createdAt         DateTime                @default(now())
+
+  @@unique([siteId, requirementTypeId])
+}
+
+// ---------------------------------------------------------------------------
+// RECD delivery tracking (per-site material delivery status)
+// ---------------------------------------------------------------------------
+
+model RecdDelivery {
+  id             String    @id @default(cuid())
+  siteId         String    @unique
+  site           Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  productId      String?
+  product        Product?  @relation(fields: [productId], references: [id])
+  quantity       Int?
+  /// pending | in_transit | delivered (free-form string, matches project convention)
+  deliveryStatus String    @default("pending")
+  statusNote     String?
+  /// Lower number = higher priority, matching the source delivery-tracking sheet.
+  priority       Int?
+  expectedDate   DateTime?
+  actualDate     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 // ---------------------------------------------------------------------------

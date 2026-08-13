@@ -41,3 +41,27 @@ export function getDriveFolderId(): string {
 export function getDriveClient() {
   return google.drive({ version: "v3", auth: getOAuth2Client() });
 }
+
+/**
+ * Creates a folder in Drive (idempotent-ish: caller should only invoke this once per
+ * site/subfolder and persist the returned id - see POST /sites/:id/drive-folders). Returns
+ * the folder id and webViewLink so the admin UI can link straight to it in a new tab.
+ */
+export async function createDriveFolder(
+  name: string,
+  parentFolderId: string,
+): Promise<{ id: string; webViewLink: string }> {
+  const drive = getDriveClient();
+  const res = await drive.files.create({
+    requestBody: {
+      name,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: [parentFolderId],
+    },
+    fields: "id, webViewLink",
+  });
+  if (!res.data.id || !res.data.webViewLink) {
+    throw new Error("Drive did not return an id/webViewLink for the created folder");
+  }
+  return { id: res.data.id, webViewLink: res.data.webViewLink };
+}

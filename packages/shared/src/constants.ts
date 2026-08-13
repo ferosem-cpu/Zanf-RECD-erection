@@ -83,6 +83,31 @@ export const PENDING_ACTION_CATEGORY = {
 export type PendingActionCategory =
   (typeof PENDING_ACTION_CATEGORY)[keyof typeof PENDING_ACTION_CATEGORY];
 
+/** Seeded rows, not exhaustive - see seed.ts. These are the keys application code branches on. */
+export const DOCUMENT_REQUIREMENT_TYPE_KEY = {
+  POLICE_VERIFICATION: "police_verification",
+  ESIC: "esic",
+  INSURANCE: "insurance",
+  PPE_KITS: "ppe_kits",
+} as const;
+export type DocumentRequirementTypeKey =
+  (typeof DOCUMENT_REQUIREMENT_TYPE_KEY)[keyof typeof DOCUMENT_REQUIREMENT_TYPE_KEY];
+
+export const DOCUMENT_REQUIREMENT_STATUS = {
+  NOT_SUBMITTED: "not_submitted",
+  SUBMITTED: "submitted",
+  VERIFIED: "verified",
+} as const;
+export type DocumentRequirementStatus =
+  (typeof DOCUMENT_REQUIREMENT_STATUS)[keyof typeof DOCUMENT_REQUIREMENT_STATUS];
+
+export const RECD_DELIVERY_STATUS = {
+  PENDING: "pending",
+  IN_TRANSIT: "in_transit",
+  DELIVERED: "delivered",
+} as const;
+export type RecdDeliveryStatus = (typeof RECD_DELIVERY_STATUS)[keyof typeof RECD_DELIVERY_STATUS];
+
 export const EXHAUST_HOOKUP_TYPE = {
   REPLACE_EXISTING_SILENCER: "replace_existing_silencer",
   ADD_AFTER_EXISTING_EXHAUST: "add_after_existing_exhaust",
