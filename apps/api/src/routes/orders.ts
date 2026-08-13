@@ -59,7 +59,7 @@ ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (r
       productId: data.productId,
       quantity: data.quantity,
       value: data.value,
-      orderDate: new Date(data.orderDate),
+      orderDate: data.orderDate ? new Date(data.orderDate) : undefined,
       promisedDeliveryDate: data.promisedDeliveryDate ? new Date(data.promisedDeliveryDate) : undefined,
       plannedExhaustHookupType: data.plannedExhaustHookupType,
       salesEngineerId: req.auth!.userId,
