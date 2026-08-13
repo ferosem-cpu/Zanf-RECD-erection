@@ -45,6 +45,15 @@ const liveLinks = [
     ),
   },
   {
+    href: "/products",
+    label: "Products",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M21 7.5l-9-5.25L3 7.5m18 0l-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9" />
+      </svg>
+    ),
+  },
+  {
     href: "/complaints",
     label: "Complaints",
     icon: (
@@ -176,6 +185,7 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/dashboard": ["view_dashboard"],
   "/orders": ["manage_orders"],
   "/customers": ["manage_orders", "manage_quotations", "manage_invoices"],
+  "/products": ["manage_orders"],
   "/sites": ["view_site_status"],
   "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
   "/vendors": ["manage_vendors"],

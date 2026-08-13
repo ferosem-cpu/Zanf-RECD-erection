@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 
@@ -14,13 +16,24 @@ interface Customer {
 }
 
 export default function CustomersPage() {
+  return (
+    <Suspense fallback={null}>
+      <CustomersPageInner />
+    </Suspense>
+  );
+}
+
+function CustomersPageInner() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_orders");
+  const searchParams = useSearchParams();
+  const editCustomerId = searchParams.get("edit");
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Customer | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -30,6 +43,8 @@ export default function CustomersPage() {
     contactPhone: "",
     contactEmail: "",
   });
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   function load() {
     api<Customer[]>("/customers")
@@ -39,28 +54,94 @@ export default function CustomersPage() {
 
   useEffect(load, []);
 
+  // Arriving from a customer detail page's "Edit" link - open that customer's edit modal
+  // directly instead of making the user find and click Edit again from the list. Guarded by
+  // a ref (not just the effect deps) because saving reloads `customers`, which would otherwise
+  // re-trigger this effect while `?edit=` is still in the URL and pop the modal back open
+  // right after it closes.
+  const appliedEditId = useRef<string | null>(null);
+  useEffect(() => {
+    if (editCustomerId && editCustomerId !== appliedEditId.current && customers.length > 0) {
+      const match = customers.find((c) => c.id === editCustomerId);
+      if (match) {
+        appliedEditId.current = editCustomerId;
+        openEdit(match);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editCustomerId, customers]);
+
+  function openCreate() {
+    setEditing(null);
+    setForm({ name: "", address: "", contactName: "", contactPhone: "", contactEmail: "" });
+    setFormError(null);
+    setOpen(true);
+  }
+
+  function openEdit(c: Customer) {
+    const contact = c.contacts[0];
+    setEditing(c);
+    setForm({
+      name: c.name,
+      address: c.address ?? "",
+      contactName: contact?.name ?? "",
+      contactPhone: contact?.phone ?? "",
+      contactEmail: contact?.email ?? "",
+    });
+    setFormError(null);
+    setOpen(true);
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     setFormError(null);
     try {
-      await api("/customers", {
-        method: "POST",
-        body: JSON.stringify({
-          name: form.name,
-          address: form.address || undefined,
-          contactName: form.contactName,
-          contactPhone: form.contactPhone,
-          contactEmail: form.contactEmail || undefined,
-        }),
-      });
+      if (editing) {
+        await api(`/customers/${editing.id}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            name: form.name,
+            address: form.address || undefined,
+            contactName: form.contactName || undefined,
+            contactPhone: form.contactPhone || undefined,
+            contactEmail: form.contactEmail || undefined,
+          }),
+        });
+      } else {
+        await api("/customers", {
+          method: "POST",
+          body: JSON.stringify({
+            name: form.name,
+            address: form.address || undefined,
+            contactName: form.contactName,
+            contactPhone: form.contactPhone,
+            contactEmail: form.contactEmail || undefined,
+          }),
+        });
+      }
       setOpen(false);
+      setEditing(null);
       setForm({ name: "", address: "", contactName: "", contactPhone: "", contactEmail: "" });
       load();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to create customer");
+      setFormError(err instanceof Error ? err.message : "Failed to save customer");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function remove(c: Customer) {
+    if (!confirm(`Delete customer "${c.name}"? This cannot be undone.`)) return;
+    setDeletingId(c.id);
+    setDeleteError(null);
+    try {
+      await api(`/customers/${c.id}`, { method: "DELETE" });
+      load();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete customer");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -74,7 +155,7 @@ export default function CustomersPage() {
         {canManage && (
           <button
             data-testid="customers-new-button"
-            onClick={() => setOpen(true)}
+            onClick={openCreate}
             className="btn-primary px-4 py-2 text-sm self-start sm:self-auto"
           >
             + New customer
@@ -83,6 +164,7 @@ export default function CustomersPage() {
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
+      {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
 
       {/* Desktop / tablet: table */}
       <div className="card overflow-hidden table-desktop">
@@ -93,6 +175,7 @@ export default function CustomersPage() {
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Address</th>
                 <th className="px-4 py-3">Primary contact</th>
+                {canManage && <th className="px-4 py-3 text-right">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -100,7 +183,11 @@ export default function CustomersPage() {
                 const contact = c.contacts[0];
                 return (
                   <tr key={c.id} className="hover:bg-gray-50/60">
-                    <td className="px-4 py-3 font-medium">{c.name}</td>
+                    <td className="px-4 py-3 font-medium">
+                      <Link href={`/customers/${c.id}`} className="hover:underline" style={{ color: "var(--theme-primary)" }}>
+                        {c.name}
+                      </Link>
+                    </td>
                     <td className="px-4 py-3 text-gray-500">{c.address ?? "-"}</td>
                     <td className="px-4 py-3 text-gray-500">
                       {contact ? (
@@ -112,11 +199,28 @@ export default function CustomersPage() {
                         "-"
                       )}
                     </td>
+                    {canManage && (
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => openEdit(c)}
+                          className="text-sm font-medium text-blue-600 hover:text-blue-800 mr-3"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => remove(c)}
+                          disabled={deletingId === c.id}
+                          className="text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                        >
+                          {deletingId === c.id ? "Deleting…" : "Delete"}
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
               {customers.length === 0 && (
-                <tr><td colSpan={3} className="px-4 py-8 text-center text-gray-400">No customers yet.</td></tr>
+                <tr><td colSpan={canManage ? 4 : 3} className="px-4 py-8 text-center text-gray-400">No customers yet.</td></tr>
               )}
             </tbody>
           </table>
@@ -132,12 +236,26 @@ export default function CustomersPage() {
             const contact = c.contacts[0];
             return (
               <div key={c.id} className="data-card">
-                <p className="text-sm font-semibold text-gray-900 truncate">{c.name}</p>
+                <Link href={`/customers/${c.id}`} className="text-sm font-semibold text-gray-900 truncate block hover:underline">
+                  {c.name}
+                </Link>
                 <p className="text-xs text-gray-500 mb-2 truncate">{c.address ?? "No address on file"}</p>
                 {contact && (
                   <div className="data-card-row">
                     <span className="label">Contact</span>
                     <span className="value">{contact.name}{contact.phone && ` · ${contact.phone}`}</span>
+                  </div>
+                )}
+                {canManage && (
+                  <div className="mt-3 flex justify-end gap-4">
+                    <button onClick={() => openEdit(c)} className="text-sm font-medium text-blue-600">Edit</button>
+                    <button
+                      onClick={() => remove(c)}
+                      disabled={deletingId === c.id}
+                      className="text-sm font-medium text-red-600 disabled:opacity-50"
+                    >
+                      {deletingId === c.id ? "Deleting…" : "Delete"}
+                    </button>
                   </div>
                 )}
               </div>
@@ -150,7 +268,7 @@ export default function CustomersPage() {
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
           <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">New customer</h3>
+              <h3 className="text-lg font-semibold">{editing ? "Edit customer" : "New customer"}</h3>
               <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
             <form onSubmit={submit} className="space-y-3">
@@ -167,7 +285,9 @@ export default function CustomersPage() {
 
               <div className="flex justify-end gap-3 pt-1">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">Cancel</button>
-                <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">{saving ? "Creating…" : "Create customer"}</button>
+                <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">
+                  {saving ? (editing ? "Saving…" : "Creating…") : editing ? "Save changes" : "Create customer"}
+                </button>
               </div>
             </form>
           </div>

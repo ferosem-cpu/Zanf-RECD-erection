@@ -166,6 +166,12 @@ model Product {
   /// Drives structure/scaffold sizing later - RECD weight scales proportionately with this.
   capacityKva    Decimal? @db.Decimal(10, 2)
   warrantyMonths Int?
+  /// cylinder | triangle | rectangle (PRODUCT_SHAPE in packages/shared) - drives which
+  /// dimension fields are meaningful on the structure/scaffold sizing UI.
+  shape          String?
+  /// Free-text, e.g. "1200 x 600 x 900 mm" or "Ø800mm x 1500mm H" - format depends on shape.
+  dimensions     String?
+  weightKg       Decimal? @db.Decimal(10, 2)
   createdAt      DateTime @default(now())
 
   orders Order[]

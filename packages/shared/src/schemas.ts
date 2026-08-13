@@ -180,12 +180,36 @@ export const createCustomerSchema = z.object({
   contactEmail: z.string().email().optional(),
 });
 
+export const updateCustomerSchema = z.object({
+  name: z.string().min(1).optional(),
+  address: z.string().optional(),
+  gstin: z.string().optional(),
+  state: z.string().optional(),
+  contactName: z.string().min(1).optional(),
+  contactPhone: z.string().min(6).optional(),
+  contactEmail: z.string().email().optional(),
+});
+
 export const createProductSchema = z.object({
   name: z.string().min(1),
   model: z.string().min(1),
   ratingSpec: z.string().optional(),
   capacityKva: z.number().optional(),
   warrantyMonths: z.number().int().optional(),
+  shape: z.enum(["cylinder", "triangle", "rectangle"]).optional(),
+  dimensions: z.string().optional(),
+  weightKg: z.number().optional(),
+});
+
+export const updateProductSchema = z.object({
+  name: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  ratingSpec: z.string().optional(),
+  capacityKva: z.number().optional(),
+  warrantyMonths: z.number().int().optional(),
+  shape: z.enum(["cylinder", "triangle", "rectangle"]).optional(),
+  dimensions: z.string().optional(),
+  weightKg: z.number().optional(),
 });
 
 export const registerVendorSchema = z.object({

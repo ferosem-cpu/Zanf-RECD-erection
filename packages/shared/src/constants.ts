@@ -135,6 +135,13 @@ export const COMPLAINT_CATEGORY = {
 } as const;
 export type ComplaintCategory = (typeof COMPLAINT_CATEGORY)[keyof typeof COMPLAINT_CATEGORY];
 
+export const PRODUCT_SHAPE = {
+  CYLINDER: "cylinder",
+  TRIANGLE: "triangle",
+  RECTANGLE: "rectangle",
+} as const;
+export type ProductShape = (typeof PRODUCT_SHAPE)[keyof typeof PRODUCT_SHAPE];
+
 export const VENDOR_STATUS = {
   PENDING: "pending",
   APPROVED: "approved",
