@@ -75,32 +75,38 @@ complaintsRouter.get("/assignees", requirePermission(PERMISSION_KEY.MANAGE_COMPL
   res.json(engineers);
 });
 
-complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), async (req: AuthenticatedRequest, res) => {
-  const parsed = createComplaintSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  if (!req.auth!.customerId) return res.status(403).json({ error: "Only customers can raise complaints" });
+/** Object-level authorization: a customer may only raise complaints against their own sites.
+ * Without this a customer could pass any siteId and attach a ticket to another customer's site
+ * (and leak that customer's details back through their own complaint list). Shared by the REST
+ * route and the in-app agent's create_complaint write tool, which re-checks this again at
+ * confirm time even though it already checked at propose time (the site's owning order can't
+ * realistically change in between, but re-verifying server-side is free and this is the one
+ * check standing between a customer and another customer's data). */
+export async function assertOwnSite(siteId: string, customerId: string) {
+  const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: true } });
+  if (!site) throw new Error("Site not found");
+  if (site.order.customerId !== customerId) throw new Error("You can only raise complaints for your own sites");
+  return site;
+}
 
-  // Object-level authorization: a customer may only raise complaints against their own sites.
-  // Without this a customer could pass any siteId and attach a ticket to another customer's site
-  // (and leak that customer's details back through their own complaint list).
-  const targetSite = await prisma.site.findUnique({
-    where: { id: parsed.data.siteId },
-    include: { order: true },
-  });
-  if (!targetSite) return res.status(404).json({ error: "Site not found" });
-  if (targetSite.order.customerId !== req.auth!.customerId) {
-    return res.status(403).json({ error: "You can only raise complaints for your own sites" });
-  }
+/** Creates the complaint and notifies Service Team - shared by the REST route above and the
+ * agent's create_complaint write tool (see agentConversations.ts's executeConfirmedAction) so
+ * an agent-raised ticket behaves identically to one raised through the normal UI. */
+export async function createComplaintRecord(
+  input: { siteId: string; category: string; description: string; severity: string },
+  customerId: string,
+) {
+  await assertOwnSite(input.siteId, customerId);
 
   const ticketNumber = `TCK-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
   const complaint = await prisma.complaint.create({
     data: {
       ticketNumber,
-      customerId: req.auth!.customerId,
-      siteId: parsed.data.siteId,
-      category: parsed.data.category,
-      description: parsed.data.description,
-      severity: parsed.data.severity,
+      customerId,
+      siteId: input.siteId,
+      category: input.category,
+      description: input.description,
+      severity: input.severity,
       status: COMPLAINT_STATUS.OPEN,
     },
   });
@@ -110,7 +116,21 @@ complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), as
     serviceTeamUsers.map((u) => notifySafely({ recipientId: u.id, templateKey: "complaint_raised", data: { ticketNumber } })),
   );
 
-  res.status(201).json(complaint);
+  return complaint;
+}
+
+complaintsRouter.post("/", requirePermission(PERMISSION_KEY.RAISE_COMPLAINT), async (req: AuthenticatedRequest, res) => {
+  const parsed = createComplaintSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  if (!req.auth!.customerId) return res.status(403).json({ error: "Only customers can raise complaints" });
+
+  try {
+    const complaint = await createComplaintRecord(parsed.data, req.auth!.customerId);
+    res.status(201).json(complaint);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to raise complaint";
+    res.status(message === "Site not found" ? 404 : 403).json({ error: message });
+  }
 });
 
 complaintsRouter.patch(

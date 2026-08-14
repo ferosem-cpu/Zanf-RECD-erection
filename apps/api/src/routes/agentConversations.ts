@@ -15,6 +15,7 @@ import { allTools } from "../agent/tools/registry";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
 import { createQuotationRecord } from "./quotations";
+import { createComplaintRecord } from "./complaints";
 import type { UnifiedMessage } from "../agent/providers/types";
 
 export const agentConversationsRouter = Router();
@@ -73,7 +74,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, async
 
   try {
     const result = await runAgentTurn({
-      systemPrompt: buildAgentSystemPrompt(),
+      systemPrompt: buildAgentSystemPrompt(!!req.auth!.customerId),
       history: newHistory,
       tools: allTools,
       auth: { ...req.auth!, conversationId: row.id },
@@ -258,6 +259,18 @@ async function executeConfirmedAction(
         },
       });
       return invoice.id;
+    }
+    case "create_complaint": {
+      const complaint = await createComplaintRecord(
+        {
+          siteId: String(input.siteId),
+          category: String(input.category),
+          description: String(input.description),
+          severity: String(input.severity),
+        },
+        String(input.customerId),
+      );
+      return complaint.id;
     }
     default:
       throw new Error(`Don't know how to execute confirmed action for tool "${toolName}".`);

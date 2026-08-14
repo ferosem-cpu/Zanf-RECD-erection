@@ -6,13 +6,16 @@
  * in agentConversations.ts), which reuses the same logic as the real REST create-route.
  */
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, PAYMENT_METHOD, INVOICE_DOC_TYPE } from "@recd/shared";
+import { PERMISSION_KEY, PAYMENT_METHOD, INVOICE_DOC_TYPE, COMPLAINT_CATEGORY } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { computeDocumentTotals } from "../../services/taxCalc";
+import { assertOwnSite } from "../../routes/complaints";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
 const VALID_INVOICE_DOC_TYPES = Object.values(INVOICE_DOC_TYPE);
+const VALID_COMPLAINT_CATEGORIES = Object.values(COMPLAINT_CATEGORY);
+const VALID_COMPLAINT_SEVERITIES = ["low", "medium", "high", "critical"] as const;
 
 function forbidden(what: string) {
   return { error: `You don't have permission to create ${what}.` };
@@ -571,4 +574,83 @@ const createInvoiceTool: AgentTool = {
   },
 };
 
-export const zanAppWriteTools: AgentTool[] = [createExpenseTool, createPurchaseOrderTool, createQuotationTool, createInvoiceTool];
+const createComplaintTool: AgentTool = {
+  name: "create_complaint",
+  description:
+    "Propose a new complaint ticket against one of the customer's OWN sites (delivery delay, " +
+    "erection/commissioning issue, non-performance). This does NOT raise the ticket " +
+    "immediately - it prepares it and shows the user a confirm card in the chat; only THEY " +
+    "can approve it by clicking Confirm. Only available to customers, about their own sites - " +
+    "look up the siteId with search_orders_and_sites first, never guess it. After calling " +
+    "this, tell the user you've prepared it for their review - never say it has been raised.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      siteId: { type: "string", description: "The Site id from search_orders_and_sites, for one of the customer's own sites." },
+      category: { type: "string", enum: [...VALID_COMPLAINT_CATEGORIES], description: "What kind of issue this is." },
+      description: { type: "string", description: "What's wrong, in the customer's own words." },
+      severity: { type: "string", enum: [...VALID_COMPLAINT_SEVERITIES], description: "How urgent this is." },
+    },
+    required: ["siteId", "category", "description", "severity"],
+  },
+  handler: async (input, auth) => {
+    // customerId comes from the authenticated session (middleware/auth.ts), never from tool
+    // input - a customer can only ever raise a ticket as themselves, never impersonate another.
+    if (!auth.customerId) return { error: "Only customers can raise complaints." };
+    if (!auth.permissions.has(PERMISSION_KEY.RAISE_COMPLAINT)) return forbidden("complaints");
+    if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
+
+    const siteId = String(input.siteId ?? "");
+    const category = String(input.category ?? "");
+    const description = String(input.description ?? "").trim();
+    const severity = String(input.severity ?? "");
+
+    if (!siteId) return { error: "siteId is required - look it up with search_orders_and_sites first." };
+    if (!VALID_COMPLAINT_CATEGORIES.includes(category as (typeof VALID_COMPLAINT_CATEGORIES)[number])) {
+      return { error: `category must be one of: ${VALID_COMPLAINT_CATEGORIES.join(", ")}` };
+    }
+    if (!description) return { error: "description is required." };
+    if (!VALID_COMPLAINT_SEVERITIES.includes(severity as (typeof VALID_COMPLAINT_SEVERITIES)[number])) {
+      return { error: `severity must be one of: ${VALID_COMPLAINT_SEVERITIES.join(", ")}` };
+    }
+
+    let site: Awaited<ReturnType<typeof assertOwnSite>>;
+    try {
+      site = await assertOwnSite(siteId, auth.customerId);
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Could not verify that site." };
+    }
+
+    const preview = {
+      site: site.companyName ?? site.address,
+      category,
+      severity,
+      description,
+    };
+
+    const pending = await prisma.agentPendingAction.create({
+      data: {
+        conversationId: auth.conversationId,
+        toolName: "create_complaint",
+        input: { customerId: auth.customerId, siteId, category, description, severity },
+        preview,
+        createdById: auth.userId,
+      },
+    });
+
+    return {
+      status: "pending_confirmation",
+      actionId: pending.id,
+      preview,
+      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. Do not tell the user it has been raised yet.",
+    };
+  },
+};
+
+export const zanAppWriteTools: AgentTool[] = [
+  createExpenseTool,
+  createPurchaseOrderTool,
+  createQuotationTool,
+  createInvoiceTool,
+  createComplaintTool,
+];

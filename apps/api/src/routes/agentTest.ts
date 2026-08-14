@@ -28,7 +28,7 @@ agentTestRouter.post("/chat-test", authenticate, async (req: AuthenticatedReques
 
   try {
     const result = await runAgentTurn({
-      systemPrompt: buildAgentSystemPrompt(),
+      systemPrompt: buildAgentSystemPrompt(!!req.auth.customerId),
       history: newHistory,
       tools: allTools,
       auth: req.auth,

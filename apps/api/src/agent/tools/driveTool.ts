@@ -1,6 +1,18 @@
-import type { AgentTool } from "./types";
+import type { AgentTool, AgentAuthContext } from "./types";
 import { searchDriveDocuments, listDriveDocuments, getDriveDocumentContent } from "./driveSearch";
 import { ExtractionError } from "../../lib/docExtract";
+
+function forbidden() {
+  return { error: "You don't have permission to access shared company documents." };
+}
+
+/** The shared Drive folder holds internal company material (vendor files, quotes, internal
+ * attachments) with no per-customer partitioning - there's no way to scope it to "documents
+ * about this customer", so customers get no access at all rather than a false sense of scoping.
+ * customerId is only ever set on the Customer role's auth context (see middleware/auth.ts). */
+function isCustomer(auth: AgentAuthContext): boolean {
+  return !!auth.customerId;
+}
 
 export const driveTools: AgentTool[] = [
   {
@@ -16,7 +28,8 @@ export const driveTools: AgentTool[] = [
       },
       required: ["query"],
     },
-    handler: async (input) => {
+    handler: async (input, auth) => {
+      if (isCustomer(auth)) return forbidden();
       const query = String(input.query ?? "");
       return searchDriveDocuments(query);
     },
@@ -27,7 +40,8 @@ export const driveTools: AgentTool[] = [
       "Lists all documents in the company's shared document folder, most recently modified first. " +
       "Use this to browse what's available when the user isn't searching for something specific.",
     inputSchema: { type: "object", properties: {} },
-    handler: async () => {
+    handler: async (_input, auth) => {
+      if (isCustomer(auth)) return forbidden();
       return listDriveDocuments();
     },
   },
@@ -44,7 +58,8 @@ export const driveTools: AgentTool[] = [
       },
       required: ["fileId"],
     },
-    handler: async (input) => {
+    handler: async (input, auth) => {
+      if (isCustomer(auth)) return forbidden();
       const fileId = String(input.fileId ?? "");
       try {
         return await getDriveDocumentContent(fileId);

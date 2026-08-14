@@ -237,25 +237,39 @@ const searchOrdersAndSites: AgentTool = {
     "exists - its address, end-client company name, current SITC stage, assigned engineer, " +
     "and erection vendor. Use this for any 'how many/which sites are in <place>' question - " +
     "there's no separate stock/inventory-by-location feature, so this order/site list is the " +
-    "closest thing to it.",
+    "closest thing to it. When called by a customer, this is automatically scoped to only " +
+    "their own orders/sites - they can search within their own records but never see anyone " +
+    "else's, and searching for another company's name simply returns no results.",
   inputSchema: {
     type: "object",
     properties: { query: { type: "string", description: "Order number, customer name, site company name, or site address/location (partial match)." } },
   },
   handler: async (input, auth) => {
-    if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
     const query = input.query ? String(input.query) : undefined;
+    const searchClauses: Prisma.OrderWhereInput = query
+      ? {
+          OR: [
+            { orderNumber: { contains: query, mode: "insensitive" } },
+            { customer: { name: { contains: query, mode: "insensitive" } } },
+            { site: { is: { address: { contains: query, mode: "insensitive" } } } },
+            { site: { is: { companyName: { contains: query, mode: "insensitive" } } } },
+          ],
+        }
+      : {};
+
+    let where: Prisma.OrderWhereInput;
+    if (auth.customerId) {
+      // A customer's own id comes from their authenticated session (middleware/auth.ts), never
+      // from tool input, so this scoping can't be bypassed by anything the model or user types.
+      if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("your sites");
+      where = { AND: [{ customerId: auth.customerId }, searchClauses] };
+    } else {
+      if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
+      where = searchClauses;
+    }
+
     const orders = await prisma.order.findMany({
-      where: query
-        ? {
-            OR: [
-              { orderNumber: { contains: query, mode: "insensitive" } },
-              { customer: { name: { contains: query, mode: "insensitive" } } },
-              { site: { is: { address: { contains: query, mode: "insensitive" } } } },
-              { site: { is: { companyName: { contains: query, mode: "insensitive" } } } },
-            ],
-          }
-        : undefined,
+      where,
       include: {
         customer: { select: { name: true } },
         product: { select: { name: true, model: true } },

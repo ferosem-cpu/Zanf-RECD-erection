@@ -253,10 +253,70 @@ strings lose `$`, script files don't.
   widened from `drive.readonly` to `drive.file`) — scoped, never started.
 - Editing/updating existing records via the agent (as opposed to creating new
   ones) — never scoped or started.
+- **Customer role now has real, safely-scoped agent tools** (own site status,
+  raise-complaint — see changelog) but **the Settings → Agent Visibility
+  toggle for Customer is still off** — this is intentional, a deliberate
+  decision point for the user, not an oversight. Also still owed: an actual
+  logged-in-as-customer click-through before trusting this in production (see
+  changelog entry for what was and wasn't verified).
+- The mic button (Web Speech API) only renders where the browser implements
+  `SpeechRecognition`/`webkitSpeechRecognition` — solid on Chrome/Edge,
+  absent on Firefox and inconsistent on Safari/iOS. If customer traffic skews
+  iPhone-heavy, this silently degrades to keyboard-only for a lot of users;
+  worth revisiting with a server-side transcription fallback (e.g. Whisper via
+  the already-configured LLM provider plumbing) if that turns out to matter.
 
 ---
 
 ## Changelog (condensed)
+
+### Customer-facing agent tools, Drive-tool lockdown, and a mic button (2026-08-14)
+Follow-up to the same-day location-search/markdown fixes below, prompted by the user asking
+what would actually happen if the Super Admin turned on agent chat visibility for the Customer
+role. Investigation found the agent's tool-permission model was staff-only by construction: the
+3 Drive tools (`search_documents`/`list_documents`/`get_document_content`) had **no permission
+check at all** (didn't even receive `auth` in their handler signature), while every zanApp
+read/write tool gated on a `manage_*` permission the Customer role never has - so a customer
+would've gotten the entire shared company Drive folder exposed, but zero ability to see even
+their own order/site status, despite already holding `VIEW_SITE_STATUS` and `RAISE_COMPLAINT`.
+Fixed as four pieces, all still gated behind the existing Settings → Agent Visibility toggle
+(unchanged, still opt-in per role, still defaults to nobody):
+
+1. **Drive tools now refuse any customer outright** (`driveTool.ts`) - checked via
+   `auth.customerId` being set, the same signal `middleware/auth.ts` only ever populates for the
+   Customer role. No per-customer partitioning exists for the shared Drive folder, so "no access"
+   rather than a false sense of scoping.
+2. **`search_orders_and_sites` now branches on `auth.customerId`** (`zanAppReadTools.ts`): a
+   customer gets `VIEW_SITE_STATUS`-gated results forced to `where: { customerId: auth.customerId,
+   ...their search }` - they can search within their own orders/sites (SITC stage, dispatch
+   dates, assigned engineer, vendor) but a query for another company's name just returns nothing.
+   Staff behavior (`MANAGE_ORDERS`, unscoped) is unchanged.
+3. **New `create_complaint` write tool**, confirm-gated like the other four. Extracted the REST
+   `POST /complaints` route's ownership check and creation+notify logic into two exported
+   functions in `routes/complaints.ts` (`assertOwnSite`, `createComplaintRecord`) so the route,
+   the tool's propose-time validation, and the confirm-time dispatch in
+   `agentConversations.ts`'s `executeConfirmedAction` all share one implementation rather than
+   three. `customerId` is always taken from `auth.customerId` (never from model/tool input) and
+   re-verified against the site's owning order at both propose and confirm time - a customer can
+   never attach a ticket to another customer's site by any input the model could construct.
+4. **System prompt is now role-aware** (`buildAgentSystemPrompt(isCustomer: boolean)`) - a
+   customer's turn gets a prompt describing only their two available tools and explicitly
+   forbidding any implication that unreachable data (other customers, financials, documents)
+   doesn't exist; staff keeps the original prompt. Both call sites (`agentConversations.ts`,
+   `agentTest.ts`) updated.
+5. **Mic button added to the chat input** (`AgentChatBubble.tsx`), Web Speech API
+   (`SpeechRecognition`/`webkitSpeechRecognition`), client-side only, transcribes into the same
+   `input` state typing already uses - no backend change, no new dependency. Feature-detected on
+   mount and simply doesn't render where unsupported (Firefox, most Safari/iOS) rather than
+   showing a dead button. Chat's empty-state copy is now role-aware too (customer wording
+   mentions site status/complaints, not document search).
+
+Verified via `tsc --noEmit` (both `apps/api` and `apps/admin-web`), each app's own production
+`tsc -p tsconfig.json` build step, and a full `next build` (all 23 routes compiled, no type/lint
+errors) - **not yet exercised against a live logged-in customer session**, since the agent
+visibility toggle for Customer is still off in both local seed data and production (see Current
+open items). Before relying on this, a real click-through as a seeded customer user is still
+owed.
 
 ### In-app agent location-search bug, and the chat bubble rendering raw markdown (2026-08-14)
 Two bugs reported back-to-back by the user actually using the shipped

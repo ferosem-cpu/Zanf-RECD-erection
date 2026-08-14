@@ -3,8 +3,41 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { ROLE_KEY } from "@recd/shared";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+
+/**
+ * Minimal typing for the Web Speech API's SpeechRecognition - not in TypeScript's default DOM
+ * lib (still not a W3C standard, only ever shipped under a webkit-prefixed global), so this
+ * declares just the surface the mic button actually uses rather than pulling in a third-party
+ * types package for a handful of members.
+ */
+interface SpeechRecognitionResultLike {
+  [index: number]: { transcript: string };
+}
+interface SpeechRecognitionEventLike extends Event {
+  results: { [index: number]: SpeechRecognitionResultLike; length: number };
+}
+interface SpeechRecognitionLike extends EventTarget {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start(): void;
+  stop(): void;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+/** Chrome/Edge only expose this under the webkit-prefixed name; Firefox and most Safari
+ * versions don't implement it at all - callers must treat a null return as "no mic button". */
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as { SpeechRecognition?: SpeechRecognitionCtor; webkitSpeechRecognition?: SpeechRecognitionCtor };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
 
 /**
  * Compact markdown rendering for the assistant's replies (tables, bold, lists) - sized for
@@ -87,7 +120,49 @@ export default function AgentChatBubble() {
   const [error, setError] = useState<string | null>(null);
   const [resolvingActionId, setResolvingActionId] = useState<string | null>(null);
 
+  const [micSupported, setMicSupported] = useState(false);
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isCustomer = user?.role.key === ROLE_KEY.CUSTOMER;
+
+  // Feature-detected client-side only (no server-side equivalent - purely a browser API),
+  // so the mic button simply doesn't render on browsers that don't implement it.
+  useEffect(() => {
+    setMicSupported(!!getSpeechRecognitionCtor());
+  }, []);
+
+  // Stop any in-flight recognition if the component unmounts mid-listen (e.g. user navigates
+  // away with the panel open) rather than leaving the mic silently listening in the background.
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop();
+    };
+  }, []);
+
+  function toggleMic() {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const Ctor = getSpeechRecognitionCtor();
+    if (!Ctor) return;
+    const recognition = new Ctor();
+    recognition.lang = "en-IN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.onresult = (event) => {
+      let transcript = "";
+      for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0].transcript;
+      setInput((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+    };
+    recognition.onerror = () => setListening(false);
+    recognition.onend = () => setListening(false);
+    recognitionRef.current = recognition;
+    recognition.start();
+    setListening(true);
+  }
 
   // Visibility: current user's role must be in the Super-Admin-configured allowlist.
   useEffect(() => {
@@ -256,7 +331,11 @@ export default function AgentChatBubble() {
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
             {visibleMessages.length === 0 && !sending && (
-              <p className="text-xs text-gray-400">Ask me anything - I can search shared documents for you.</p>
+              <p className="text-xs text-gray-400">
+                {isCustomer
+                  ? "Ask me about the status of your sites, or raise a complaint."
+                  : "Ask me anything - I can search shared documents for you."}
+              </p>
             )}
             {visibleMessages.map((m, i) => {
               const action = parsePendingAction(m);
@@ -332,7 +411,7 @@ export default function AgentChatBubble() {
           <div className="border-t border-gray-100 p-3 flex gap-2">
             <input
               className="field flex-1 text-sm"
-              placeholder="Type a message…"
+              placeholder={listening ? "Listening…" : "Type a message…"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -343,6 +422,20 @@ export default function AgentChatBubble() {
               }}
               disabled={sending}
             />
+            {micSupported && (
+              <button
+                type="button"
+                onClick={toggleMic}
+                disabled={sending}
+                className={`px-3 py-2 rounded-lg text-sm border disabled:opacity-50 ${
+                  listening ? "bg-red-500 border-red-500 text-white animate-pulse" : "border-gray-300 text-gray-500 hover:text-gray-700"
+                }`}
+                aria-label={listening ? "Stop voice input" : "Speak instead of typing"}
+                title={listening ? "Stop voice input" : "Speak instead of typing"}
+              >
+                🎤
+              </button>
+            )}
             <button className="btn-primary px-3 py-2 text-sm" onClick={send} disabled={sending || !input.trim()}>
               Send
             </button>
