@@ -1,4 +1,7 @@
 import { NOTIFICATION_CHANNEL, type NotificationChannel } from "@recd/shared";
+import { prisma } from "../../lib/prisma";
+import { sendEmail } from "../../lib/email";
+import { renderEmail } from "./emailTemplates";
 
 export interface NotificationProvider {
   readonly channel: NotificationChannel;
@@ -14,16 +17,18 @@ export class InAppProvider implements NotificationProvider {
   }
 }
 
-/**
- * Email: real in Phase 1. No provider account wired up yet in this scaffold -
- * swap the body of this method for your transactional email provider
- * (Resend/SendGrid/SES) and it becomes live with no change to any caller.
- */
+/** Email: real - sends via SMTP (see lib/email.ts) using zanf.org's Zoho Mail account. */
 export class EmailProvider implements NotificationProvider {
   readonly channel = NOTIFICATION_CHANNEL.EMAIL;
   async send(args: { recipientId: string; templateKey: string; data: Record<string, unknown> }) {
-    console.log(`[email] -> user ${args.recipientId} :: ${args.templateKey}`, args.data);
-    return true;
+    const user = await prisma.user.findUnique({ where: { id: args.recipientId }, select: { email: true } });
+    if (!user?.email) {
+      console.error(`[email] no email on file for user ${args.recipientId} - cannot send ${args.templateKey}`);
+      return false;
+    }
+
+    const { subject, text, html } = renderEmail(args.templateKey, args.data);
+    return sendEmail({ to: user.email, subject, text, html });
   }
 }
 
