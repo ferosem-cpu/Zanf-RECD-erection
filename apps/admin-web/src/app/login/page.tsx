@@ -75,15 +75,6 @@ export default function LoginPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Customer Login State
-  const [orderNumber, setOrderNumber] = useState("ORD-2026-0001");
-  const [phone, setPhone] = useState("+919900011122");
-  const [otpCode, setOtpCode] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpMessage, setOtpMessage] = useState<string | null>(null);
-  const [customerError, setCustomerError] = useState<string | null>(null);
-  const [customerLoading, setCustomerLoading] = useState(false);
-
   // Vendor Registration State
   const [vendor, setVendor] = useState({ name: "", contactName: "", contactEmail: "", contactPhone: "", address: "" });
   const [vendorError, setVendorError] = useState<string | null>(null);
@@ -91,10 +82,7 @@ export default function LoginPage() {
   const [vendorDone, setVendorDone] = useState(false);
   const [vendorTabMode, setVendorTabMode] = useState<"register" | "signin">("register");
 
-  // Customer tab: choose between the original Order ID + phone flow and email + OTP.
-  const [customerLoginMode, setCustomerLoginMode] = useState<"orderPhone" | "email">("orderPhone");
-
-  // Email + OTP sign-in - shared by the Customer tab's "email" mode and the Vendor tab's
+  // Email + OTP sign-in - shared by the Customer tab and the Vendor tab's
   // "Sign in" mode. Same backend endpoints (/auth/email-otp/request|verify) work for both:
   // any active customer contact, or any approved vendor's engineer.
   const [emailOtpAddress, setEmailOtpAddress] = useState("");
@@ -106,7 +94,6 @@ export default function LoginPage() {
 
   function clearErrors() {
     setStaffError(null);
-    setCustomerError(null);
     setVendorError(null);
     setEmailOtpError(null);
   }
@@ -125,43 +112,6 @@ export default function LoginPage() {
       setStaffError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setStaffLoading(false);
-    }
-  }
-
-  async function handleCustomerRequestOtp(e: React.FormEvent) {
-    e.preventDefault();
-    setCustomerLoading(true);
-    setCustomerError(null);
-    setOtpMessage(null);
-    try {
-      const result = await api<{ ok: boolean; message: string; devCode?: string }>("/auth/customer/register", {
-        method: "POST",
-        body: JSON.stringify({ orderNumber, phone }),
-      });
-      setOtpSent(true);
-      // In production the code only arrives by email; in dev the API echoes it back so we can test.
-      setOtpMessage(result.devCode ?? null);
-    } catch (err) {
-      setCustomerError(err instanceof Error ? err.message : "Failed to send OTP");
-    } finally {
-      setCustomerLoading(false);
-    }
-  }
-
-  async function handleCustomerVerifyOtp(e: React.FormEvent) {
-    e.preventDefault();
-    setCustomerLoading(true);
-    setCustomerError(null);
-    try {
-      const result = await api<{ token: string; user: { name: string; orderNumber: string } }>("/auth/customer/verify", {
-        method: "POST",
-        body: JSON.stringify({ orderNumber, phone, code: otpCode }),
-      });
-      await login(result.token, result.user.orderNumber);
-    } catch (err) {
-      setCustomerError(err instanceof Error ? err.message : "OTP verification failed");
-    } finally {
-      setCustomerLoading(false);
     }
   }
 
@@ -235,7 +185,7 @@ export default function LoginPage() {
 
   const tabs: { key: Tab; label: string }[] = [
     { key: "staff", label: "Staff Login" },
-    { key: "customer", label: "Track Order" },
+    { key: "customer", label: "Customer" },
     { key: "vendor", label: "Vendor" },
   ];
 
@@ -303,78 +253,10 @@ export default function LoginPage() {
           </form>
         )}
 
-        {/* Customer Portal OTP Tab */}
+        {/* Customer Tab - Email + OTP only for now */}
         {activeTab === "customer" && (
           <div className="space-y-4">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => { setCustomerLoginMode("orderPhone"); resetEmailOtp(); clearErrors(); }}
-                className={`flex-1 rounded-lg py-1.5 text-xs font-semibold border transition-colors ${
-                  customerLoginMode === "orderPhone"
-                    ? "border-[var(--theme-accent)] bg-[var(--theme-accent-light)] text-[var(--theme-primary)]"
-                    : "border-gray-200 text-gray-400 hover:text-gray-600"
-                }`}
-              >
-                Order ID + Phone
-              </button>
-              <button
-                type="button"
-                onClick={() => { setCustomerLoginMode("email"); resetEmailOtp(); clearErrors(); }}
-                className={`flex-1 rounded-lg py-1.5 text-xs font-semibold border transition-colors ${
-                  customerLoginMode === "email"
-                    ? "border-[var(--theme-accent)] bg-[var(--theme-accent-light)] text-[var(--theme-primary)]"
-                    : "border-gray-200 text-gray-400 hover:text-gray-600"
-                }`}
-              >
-                Email + OTP
-              </button>
-            </div>
-
-            {customerLoginMode === "orderPhone" ? (
-              !otpSent ? (
-                <form onSubmit={handleCustomerRequestOtp} className="space-y-4">
-                  <div>
-                    <label className={labelCls}>Order ID</label>
-                    <input type="text" required placeholder="e.g. ORD-2026-0001" className={inputCls} value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Phone Number</label>
-                    <input type="tel" required placeholder="e.g. +919900011122" className={inputCls} value={phone} onChange={(e) => setPhone(e.target.value)} />
-                  </div>
-                  {customerError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{customerError}</div>}
-                  <button type="submit" disabled={customerLoading} className="btn-primary w-full py-2.5 text-sm font-semibold disabled:opacity-50">
-                    {customerLoading ? "Sending OTP..." : "Get One-Time Password"}
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleCustomerVerifyOtp} className="space-y-4">
-                  {otpMessage ? (
-                    <div className="rounded-lg bg-amber-50 border border-amber-100 p-3 text-sm text-amber-800">
-                      <p className="font-medium">Dev mode - OTP (delivered by email in production):</p>
-                      <p className="mt-1 font-mono font-bold text-base tracking-wider">{otpMessage}</p>
-                    </div>
-                  ) : (
-                    <div className="rounded-lg bg-emerald-50 border border-emerald-100 p-3 text-sm text-emerald-800">
-                      A 6-digit code has been sent to the email registered for this order.
-                    </div>
-                  )}
-                  <div>
-                    <label className={labelCls}>Enter 6-digit OTP</label>
-                    <input type="text" required maxLength={6} placeholder="123456" className={`${inputCls} font-mono tracking-widest text-center`} value={otpCode} onChange={(e) => setOtpCode(e.target.value)} />
-                  </div>
-                  {customerError && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-600">{customerError}</div>}
-                  <div className="flex gap-2">
-                    <button type="button" onClick={() => { setOtpSent(false); setOtpCode(""); }} className="flex-1 rounded-xl border border-gray-300 px-3 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors">
-                      Back
-                    </button>
-                    <button type="submit" disabled={customerLoading} className="flex-[2] btn-primary py-2.5 text-sm font-semibold disabled:opacity-50">
-                      {customerLoading ? "Verifying..." : "Verify & Track Order"}
-                    </button>
-                  </div>
-                </form>
-              )
-            ) : !emailOtpSent ? (
+            {!emailOtpSent ? (
               <form onSubmit={handleEmailOtpRequest} className="space-y-4">
                 <div>
                   <label className={labelCls}>Email</label>
