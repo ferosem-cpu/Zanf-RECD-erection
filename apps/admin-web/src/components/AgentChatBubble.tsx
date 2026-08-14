@@ -1,8 +1,38 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+
+/**
+ * Compact markdown rendering for the assistant's replies (tables, bold, lists) - sized for
+ * the ~300px-wide chat bubble, not the full-page prose the default browser table/list styles
+ * assume. User messages stay plain text; only the assistant writes markdown.
+ *
+ * Each renderer destructures `node` out before spreading the rest - react-markdown passes the
+ * mdast AST node as a prop to custom components, and spreading it straight onto a DOM element
+ * leaks it as a literal node="[object Object]" attribute.
+ */
+const markdownComponents: Components = {
+  p: ({ node, ...props }) => <p className="mb-1.5 last:mb-0" {...props} />,
+  ul: ({ node, ...props }) => <ul className="mb-1.5 ml-4 list-disc space-y-0.5" {...props} />,
+  ol: ({ node, ...props }) => <ol className="mb-1.5 ml-4 list-decimal space-y-0.5" {...props} />,
+  li: ({ node, ...props }) => <li {...props} />,
+  strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
+  a: ({ node, ...props }) => <a className="underline text-blue-600" target="_blank" rel="noreferrer" {...props} />,
+  code: ({ node, ...props }) => <code className="rounded bg-gray-200 px-1 py-0.5 font-mono text-[11px]" {...props} />,
+  table: ({ node, ...props }) => (
+    <div className="mb-1.5 -mx-1 overflow-x-auto">
+      <table className="border-collapse text-[11px]" {...props} />
+    </div>
+  ),
+  th: ({ node, ...props }) => (
+    <th className="border border-gray-300 bg-gray-50 px-1.5 py-1 text-left font-semibold whitespace-nowrap" {...props} />
+  ),
+  td: ({ node, ...props }) => <td className="border border-gray-300 px-1.5 py-1 align-top" {...props} />,
+};
 
 interface ConversationSummary {
   id: string;
@@ -276,11 +306,17 @@ export default function AgentChatBubble() {
               return (
                 <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div
-                    className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
-                      m.role === "user" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-800"
+                    className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
+                      m.role === "user" ? "bg-gray-900 text-white whitespace-pre-wrap" : "bg-gray-100 text-gray-800"
                     }`}
                   >
-                    {m.content}
+                    {m.role === "assistant" ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        {m.content}
+                      </ReactMarkdown>
+                    ) : (
+                      m.content
+                    )}
                   </div>
                 </div>
               );
