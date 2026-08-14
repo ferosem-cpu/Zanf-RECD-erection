@@ -184,9 +184,43 @@ strings lose `$`, script files don't.
   multi-statement data-import query went through untouched right after a
   single-statement schema migration got blocked), so don't assume a query
   is safe just because a similar one just went through.
+- **This dev machine has `NODE_ENV=production` set globally** (in the
+  Windows user's own environment, not any project `.env` — confirmed via
+  `$env:NODE_ENV` in a fresh PowerShell), which is also why `next dev` warns
+  about a "non-standard NODE_ENV value". Side effect worth knowing: any
+  route that does `NODE_ENV === "production" ? undefined : devValue` (the
+  OTP endpoints' `devCode` echo) behaves exactly like real production even
+  when running locally — don't mistake a missing `devCode` in a local
+  response for the request having failed; check `NotificationLog` or server
+  logs instead.
+- **`npm install <package-name>` (with an explicit package argument) reliably
+  crashes with `TypeError: Cannot read properties of null (reading
+  'location')` in this workspace** (npm 11.13.0, arborist tree-diff bug -
+  appears tied to how it diffs the `@recd/shared` workspace symlink after
+  it's been manually patched for a Vercel deploy, per the dance above).
+  **Workaround: hand-edit the `dependencies`/`devDependencies` entry into
+  the target workspace's `package.json` yourself, then run bare `npm
+  install` (no package argument)** — that command path doesn't hit the bug.
+  Confirmed via the nodemailer install on 2026-08-14. If a bare `npm
+  install` still fails on the `prisma generate` postinstall's `EPERM` lock,
+  re-run with `--ignore-scripts` and then manually run `npm run build
+  --workspace=packages/shared` + `npx prisma generate` (from `apps/api`) to
+  finish the two postinstall steps it skipped.
 
-## Current open items (as of 2026-08-13)
+## Current open items (as of 2026-08-14)
 
+- 9 of the 12 notification `templateKey`s (`complaint_raised`,
+  `invoice_issued`, `payment_received`, `work_order_assigned`, etc.) now
+  send real emails but with generic auto-rendered key/value copy, not
+  bespoke templates — only `otp_code`, `site_stage_updated`, and
+  `vendor_assigned_site` (the three anyone's actually asked to have read
+  well) got real copy. See `emailTemplates.ts`.
+- Customer login's "Order ID + phone" flow was removed from the login page
+  UI (2026-08-14, "for now" per the user) but `/auth/customer/register` and
+  `/auth/customer/verify` are untouched on the backend - dead code from the
+  UI's perspective, not actually dead. Revive by re-adding the toggle in
+  `login/page.tsx` if it comes back; don't delete the backend routes without
+  checking nothing else depends on them first.
 - No `DELETE /vendors/:id` — a vendor added by mistake (self-registered or
   staff-added) can only be **rejected** (status flip), not removed outright.
 - Product catalog now carries real GA-drawing-derived data
@@ -223,6 +257,40 @@ strings lose `$`, script files don't.
 ---
 
 ## Changelog (condensed)
+
+### Real email delivery, two new notifications, customer login simplified (2026-08-14)
+Continuation of 2026-08-13's session. The email+OTP sign-in flow for
+customers/vendors was already fully built (routes, eligibility logic, full
+UI) - discovered while testing it that `EmailProvider.send()` was a stub
+that only `console.log`'d, so **no email had ever actually been sent by
+this app**, for OTP or any other notification, despite the README claiming
+otherwise.
+
+1. **Real SMTP wired up** — `lib/email.ts` (`nodemailer`), sending as
+   `info@zanf.org` via Zoho Mail (`smtp.zoho.in`). `emailTemplates.ts`
+   renders bespoke copy for `otp_code`; everything else falls through to a
+   generic key/value rendering so nothing silently fails to send. Hit the
+   `npm install <pkg>` arborist bug installing `nodemailer` (see gotcha
+   above) - worked around by hand-editing `package.json` + bare `npm
+   install`.
+2. **Verified end-to-end against the real Zoho account** - not just "no
+   errors in the log": confirmed `NotificationLog` rows with
+   `channel: "email"` and `status: "sent"`, and for the OTP flow, completed
+   a full `/auth/email-otp/request` → `/auth/email-otp/verify` round trip
+   through the real route and got back a valid session token. Then set the
+   same SMTP credentials as production env vars on `zan-app-api` via `vercel
+   env add ... production` (piped stdin, non-interactive) and ran the full
+   manual deploy dance.
+3. **Two new/completed notifications**, both requested directly:
+   customer-on-stage-change (`site_stage_updated` already existed and
+   already targeted the right recipient - it just needed real send, plus
+   better copy than the generic fallback) and vendor-on-assignment
+   (`vendor_assigned_site`, new - `POST /sites/:id/assign-vendor` never
+   notified anyone before this; now emails every member of a *newly*
+   assigned vendor, not on a no-op re-save or a clear-to-unassigned).
+4. **Login page simplified** - "Track Order" tab renamed to "Customer";
+   the Order ID + phone flow was removed from the UI (Email + OTP only,
+   "for now" per the user) - backend routes left untouched, see open items.
 
 ### Customers/Products/Vendors CRUD, real data import, first end-to-end deploy of both apps (2026-08-13)
 Customers and Products had create-only UIs (or no UI at all, for Products)
