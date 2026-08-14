@@ -230,19 +230,31 @@ const searchExpenses: AgentTool = {
 const searchOrdersAndSites: AgentTool = {
   name: "search_orders_and_sites",
   description:
-    "Search sales orders (and their site's SITC progress) by order number or customer name. " +
+    "Search sales orders (and their site's SITC progress) by order number, customer name, " +
+    "site/end-client company name (e.g. 'BPCL', 'VRL'), or site address/location (e.g. " +
+    "'Belgaum', 'Bangalore') - matches any of these, not just order number or customer. " +
     "Returns id, orderNumber, customer, product, order value, dispatch dates, and - if a site " +
-    "exists - its current SITC stage, assigned engineer, and erection vendor.",
+    "exists - its address, end-client company name, current SITC stage, assigned engineer, " +
+    "and erection vendor. Use this for any 'how many/which sites are in <place>' question - " +
+    "there's no separate stock/inventory-by-location feature, so this order/site list is the " +
+    "closest thing to it.",
   inputSchema: {
     type: "object",
-    properties: { query: { type: "string", description: "Order number or customer name (partial match)." } },
+    properties: { query: { type: "string", description: "Order number, customer name, site company name, or site address/location (partial match)." } },
   },
   handler: async (input, auth) => {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
     const query = input.query ? String(input.query) : undefined;
     const orders = await prisma.order.findMany({
       where: query
-        ? { OR: [{ orderNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }] }
+        ? {
+            OR: [
+              { orderNumber: { contains: query, mode: "insensitive" } },
+              { customer: { name: { contains: query, mode: "insensitive" } } },
+              { site: { is: { address: { contains: query, mode: "insensitive" } } } },
+              { site: { is: { companyName: { contains: query, mode: "insensitive" } } } },
+            ],
+          }
         : undefined,
       include: {
         customer: { select: { name: true } },
@@ -258,6 +270,8 @@ const searchOrdersAndSites: AgentTool = {
       orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
       site: o.site
         ? {
+            address: o.site.address,
+            companyName: o.site.companyName,
             currentStage: o.site.currentStage.label,
             assignedEngineer: o.site.assignedEngineer?.name ?? null,
             vendor: o.site.vendor?.name ?? null,
