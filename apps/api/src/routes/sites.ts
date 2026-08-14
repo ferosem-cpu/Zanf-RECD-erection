@@ -215,7 +215,7 @@ sitesRouter.post("/:id/assign-vendor", requirePermission(PERMISSION_KEY.MANAGE_V
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   const siteId = asString(req.params.id);
-  const site = await prisma.site.findUnique({ where: { id: siteId } });
+  const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: { include: { customer: true } } } });
   if (!site) return res.status(404).json({ error: "Site not found" });
 
   if (parsed.data.vendorId) {
@@ -232,6 +232,26 @@ sitesRouter.post("/:id/assign-vendor", requirePermission(PERMISSION_KEY.MANAGE_V
     data,
     include: { vendor: true, assignedEngineer: true },
   });
+
+  // Notify the vendor's engineers a new site landed in their queue - a newly-assigned vendor
+  // (as opposed to a no-op re-save or a clear-to-unassigned) is the only case worth emailing.
+  if (parsed.data.vendorId && parsed.data.vendorId !== site.vendorId) {
+    const vendorMembers = await prisma.user.findMany({ where: { vendorId: parsed.data.vendorId } });
+    await Promise.all(
+      vendorMembers.map((member) =>
+        sendNotification({
+          recipientId: member.id,
+          templateKey: "vendor_assigned_site",
+          data: {
+            orderNumber: site.order.orderNumber,
+            customerName: site.order.customer.name,
+            address: site.address,
+          },
+        }),
+      ),
+    );
+  }
+
   res.json(updated);
 });
 
