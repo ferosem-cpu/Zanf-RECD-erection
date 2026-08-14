@@ -258,6 +258,46 @@ strings lose `$`, script files don't.
 
 ## Changelog (condensed)
 
+### In-app agent location-search bug, and the chat bubble rendering raw markdown (2026-08-14)
+Two bugs reported back-to-back by the user actually using the shipped
+features from earlier the same day.
+
+1. **Agent falsely claimed a location "doesn't exist"** — asked "how many
+   RECD are available in Belgaum", it replied that Belgaum "does not exist
+   in the system", despite several Belgaum sites existing (imported
+   2026-08-13 for Ethen Power Solutionns). Root cause:
+   `search_orders_and_sites` (the only tool that could plausibly answer a
+   location question) only ever matched `orderNumber` and `customer.name` -
+   never `site.address` or `site.companyName`, and didn't even return
+   address in its results. Fixed by extending the query's `OR` to match
+   both site fields and returning them. Also tightened the system prompt:
+   a zero-result search must be reported as "no matching records", not
+   escalated to "X doesn't exist" (a search can't prove absence), and the
+   agent can't claim to have "searched every module" unless it actually
+   called a tool for each one that turn.
+2. **Retested in the same chat thread → still showed the same wrong
+   answer.** Not a regression - conversation history persists per thread
+   (`AgentConversation.messages` JSON blob), and the model was reusing its
+   own prior (pre-fix) tool-call/result from earlier in that same thread
+   instead of re-invoking the tool. Confirmed the actual fix was correct by
+   querying production directly (4 real Belgaum orders/sites exist) and
+   verifying locally with an equivalent query. **Lesson: when verifying an
+   agent-behavior fix, use a new conversation thread ("+ New") - the old
+   thread's history can outweigh a corrected tool for the model.**
+3. **Chat bubble showed raw markdown as literal text** - the agent already
+   replies with real markdown (tables, bold, lists per its system prompt),
+   but `AgentChatBubble.tsx` rendered `m.content` in a
+   `whitespace-pre-wrap` div with no parsing, so users saw literal
+   `| ORD-2026-9041 | **Platino RECD** | 1 |` pipe/asterisk text. Added
+   `react-markdown` + `remark-gfm` with compact custom component styling
+   sized for the ~300px chat panel (not full-page prose). Hit the
+   react-markdown v9 "node" prop gotcha along the way: custom components
+   receive the mdast AST node as a prop, and naively spreading `{...props}`
+   onto the real DOM element leaks a literal `node="[object Object]"`
+   attribute - **always destructure `node` out first** in any custom
+   react-markdown component. Verified against a live local LLM response:
+   real `<table>`/`<thead>`/`<tbody>`, no leaked attribute.
+
 ### Real email delivery, two new notifications, customer login simplified (2026-08-14)
 Continuation of 2026-08-13's session. The email+OTP sign-in flow for
 customers/vendors was already fully built (routes, eligibility logic, full
