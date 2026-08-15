@@ -76,15 +76,27 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
         where: { id },
         include: { category: true, site: { include: { order: { select: { orderNumber: true } } } } },
       });
-    case "order":
-      if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
-      return prisma.order.findUnique({
+    case "order": {
+      // A customer can look up one of their OWN orders (e.g. to resolve its siteId before
+      // calling create_complaint) with just VIEW_SITE_STATUS - staff still needs MANAGE_ORDERS,
+      // unscoped. Object-level check happens after the fetch since we need the row's
+      // customerId to compare against auth.customerId (which comes from the session, never
+      // from tool input).
+      if (auth.customerId) {
+        if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("orders");
+      } else if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) {
+        return forbidden("orders");
+      }
+      const order = await prisma.order.findUnique({
         where: { id },
         include: {
           customer: true, product: true, salesEngineer: { select: { name: true } },
           site: { include: { currentStage: true, assignedEngineer: { select: { name: true } }, vendor: true } },
         },
       });
+      if (auth.customerId && order && order.customerId !== auth.customerId) return forbidden("orders");
+      return order;
+    }
     case "work_order":
       if (
         !auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS) &&

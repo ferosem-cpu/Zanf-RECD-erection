@@ -143,7 +143,12 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   }
 
   if (user.role.key === "customer") {
-    return isCustomerPortal ? <div className="min-h-screen bg-gray-50">{children}</div> : null;
+    return isCustomerPortal ? (
+      <div className="min-h-screen bg-gray-50">
+        {children}
+        <AgentChatBubble />
+      </div>
+    ) : null;
   }
 
   // Staff with no accessible module at all (e.g. Finance, or a brand-new role with no
