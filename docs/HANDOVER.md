@@ -64,6 +64,17 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
+> **Session boundary (2026-08-15):** working tree clean, `master` at
+> `81c85e9`, fully pushed to `origin`. Both `admin-web` and `zan-app-api`
+> are deployed and verified live at that commit — nothing in progress,
+> nothing uncommitted, no pending deploy. The one open decision waiting on
+> the user (not a code gap): flip on **Settings → Agent Visibility → 
+> Customer** in production whenever they want the customer-facing chat
+> assistant (built + verified 2026-08-15, see changelog) to actually go
+> live for real customers. Start a new session by reading this file top to
+> bottom before touching anything - "Current open items" and the top of
+> "Changelog" are the fastest way back up to speed.
+
 ## Quick facts
 
 | | |
