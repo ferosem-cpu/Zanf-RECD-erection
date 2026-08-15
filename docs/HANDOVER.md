@@ -206,9 +206,21 @@ strings lose `$`, script files don't.
   re-run with `--ignore-scripts` and then manually run `npm run build
   --workspace=packages/shared` + `npx prisma generate` (from `apps/api`) to
   finish the two postinstall steps it skipped.
+- **Work done from the mobile app lands as a pushed-but-unmerged branch
+  named `claude/<slug>`, not directly on `master`.** Found 2026-08-15 when
+  the user said "I did this yesterday on my phone" for a feature that
+  wasn't on `master` at all — `git fetch origin && git branch -a` surfaced
+  `origin/claude/customer-agent-scoping-voice` sitting there un-merged.
+  **Always check for these before assuming a feature doesn't exist or
+  starting to rebuild it from scratch.**
 
-## Current open items (as of 2026-08-14)
+## Current open items (as of 2026-08-15)
 
+- **Customer-facing agent chat (own orders/sites + raise-complaint) is code-
+  complete, deployed, and verified live as a real customer** (2026-08-15 -
+  see changelog) but **the Settings → Agent Visibility toggle for Customer
+  is still off in production** — deliberately left for the user to flip on
+  when ready, same as it's been since the feature was first built.
 - 9 of the 12 notification `templateKey`s (`complaint_raised`,
   `invoice_issued`, `payment_received`, `work_order_assigned`, etc.) now
   send real emails but with generic auto-rendered key/value copy, not
@@ -253,12 +265,10 @@ strings lose `$`, script files don't.
   widened from `drive.readonly` to `drive.file`) — scoped, never started.
 - Editing/updating existing records via the agent (as opposed to creating new
   ones) — never scoped or started.
-- **Customer role now has real, safely-scoped agent tools** (own site status,
-  raise-complaint — see changelog) but **the Settings → Agent Visibility
-  toggle for Customer is still off** — this is intentional, a deliberate
-  decision point for the user, not an oversight. Also still owed: an actual
-  logged-in-as-customer click-through before trusting this in production (see
-  changelog entry for what was and wasn't verified).
+- ~~Customer role now has real, safely-scoped agent tools... still owed: an
+  actual logged-in-as-customer click-through~~ **Done 2026-08-15** — see the
+  "Current open items" entry above and the changelog for what a real
+  logged-in-customer test session found and fixed.
 - The mic button (Web Speech API) only renders where the browser implements
   `SpeechRecognition`/`webkitSpeechRecognition` — solid on Chrome/Edge,
   absent on Firefox and inconsistent on Safari/iOS. If customer traffic skews
@@ -269,6 +279,54 @@ strings lose `$`, script files don't.
 ---
 
 ## Changelog (condensed)
+
+### Merged the mobile-built customer-agent branch, live-tested it as a real customer, found and fixed two bugs (2026-08-15)
+User asked "how about chat access to customers" and, on hearing the tradeoffs, said they'd
+already built this "yesterday, via my mobile app" and to go check GitHub/Vercel rather than
+rebuild it. `git fetch && git branch -a` surfaced `origin/claude/customer-agent-scoping-voice` -
+a single commit, based directly on the previous session's last commit, implementing exactly
+this (see 2026-08-14's own changelog entry below for what it contained). Reviewed the diff in
+full before merging given it's customer-facing data scoping - the security pattern was correct
+throughout (customerId always read from `auth.customerId`, which only ever comes from the
+verified session, never from tool input or anything the model could construct) - then merged
+it (clean fast-forward) and actually did what its own commit message admitted wasn't done yet:
+**logged in as a real seeded customer and used it.**
+
+That live test found two real bugs the tsc/build-only verification couldn't catch:
+
+1. **The chat bubble was never mounted for customers at all.** `AuthGuard.tsx` only renders
+   `<AgentChatBubble />` in the staff sidebar layout branch; the customer-portal branch
+   returned `children` with no bubble. A customer would never see the chat icon regardless of
+   the Settings visibility toggle. Fixed by rendering it alongside `children` in the customer
+   branch too.
+2. **`create_complaint`'s documented siteId-lookup fallback was unusable.** Its own tool
+   description says "look up the siteId with search_orders_and_sites first" - but that tool
+   never returns `site.id` in its results (only address/companyName/stage/engineer/vendor), so
+   the system prompt also pointed customers at `get_document_detail` as a fallback - which
+   required `MANAGE_ORDERS` unconditionally for `docType: "order"`, a permission no customer
+   has, with no customer-scoped branch at all. A customer literally could not resolve a siteId
+   through either documented path. Fixed by adding the same `auth.customerId`-scoped pattern
+   already used in `search_orders_and_sites`: customers get `VIEW_SITE_STATUS`-gated access to
+   their OWN order (object-level check against the fetched row's `customerId`, done after the
+   fetch since the row's own customerId is what's being checked against), staff keeps unscoped
+   `MANAGE_ORDERS` access.
+
+After both fixes, verified the complete flow end-to-end as the real customer: chat bubble
+renders with customer-specific empty-state copy, `search_orders_and_sites` returns only their
+own 4 orders (querying a real other customer's name by *name* returns nothing), Drive tools
+refuse them outright, and `create_complaint` works fully - resolved a real siteId via
+`get_document_detail`, produced a confirm card, confirming it created an actual `Complaint` row
+correctly scoped to that customer and site (verified directly against the DB, not just the UI
+saying "confirmed"). Also directly attempted to force a complaint onto **another real
+customer's** siteId by calling the API directly with a crafted payload (bypassing the chat UI
+entirely, in case a user tried to manipulate the agent into cross-customer access) - correctly
+rejected with "You can only raise complaints for your own sites", zero rows created, confirmed
+via direct DB query.
+
+Deployed both apps (`admin-web` auto-deploy + the full `zan-app-api` manual dance) and verified
+`/health` live. **The Settings → Agent Visibility toggle for Customer is still off in
+production** - deliberately left for the user to enable when ready, exactly as the original
+branch intended; only the code readiness changed today, not the go-live decision.
 
 ### Customer-facing agent tools, Drive-tool lockdown, and a mic button (2026-08-14)
 Follow-up to the same-day location-search/markdown fixes below, prompted by the user asking
