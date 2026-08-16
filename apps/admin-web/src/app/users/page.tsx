@@ -85,7 +85,10 @@ export default function UsersPage() {
 
   function load() {
     api<UserRow[]>("/users").then(setUsers).catch(() => {});
-    api<RoleOption[]>("/meta/roles").then(setRoles).catch(() => {});
+    // "customer" is deliberately excluded - customer logins must be created as a contact on a
+    // Customer record (which sets User.customerId), not through this generic staff-add-user
+    // form, which has no way to link a customerId and would leave the login unable to sign in.
+    api<RoleOption[]>("/meta/roles").then((rs) => setRoles(rs.filter((r) => r.key !== "customer"))).catch(() => {});
     api<VendorOption[]>("/vendors").then(setVendors).catch(() => {});
   }
 
