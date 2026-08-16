@@ -64,16 +64,17 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-15):** working tree clean, `master` at
-> `81c85e9`, fully pushed to `origin`. Both `admin-web` and `zan-app-api`
-> are deployed and verified live at that commit — nothing in progress,
-> nothing uncommitted, no pending deploy. The one open decision waiting on
-> the user (not a code gap): flip on **Settings → Agent Visibility → 
-> Customer** in production whenever they want the customer-facing chat
-> assistant (built + verified 2026-08-15, see changelog) to actually go
-> live for real customers. Start a new session by reading this file top to
-> bottom before touching anything - "Current open items" and the top of
-> "Changelog" are the fastest way back up to speed.
+> **Session boundary (2026-08-16):** working tree clean, `master` at
+> `b10fbf6`, fully pushed to `origin`. `admin-web` auto-deploys from this
+> push (git-connected); `zan-app-api` untouched, no manual deploy dance
+> needed this session — see the Reports changelog entry below. The one
+> open decision still waiting on the user (not a code gap): flip on
+> **Settings → Agent Visibility → Customer** in production whenever they
+> want the customer-facing chat assistant (built + verified 2026-08-15,
+> see changelog) to actually go live for real customers. Start a new
+> session by reading this file top to bottom before touching anything -
+> "Current open items" and the top of "Changelog" are the fastest way
+> back up to speed.
 
 ## Quick facts
 
@@ -225,8 +226,12 @@ strings lose `$`, script files don't.
   **Always check for these before assuming a feature doesn't exist or
   starting to rebuild it from scratch.**
 
-## Current open items (as of 2026-08-15)
+## Current open items (as of 2026-08-16)
 
+- **New Reports section (2026-08-16, see changelog) has never been click-tested as a logged-in
+  user** — only `tsc`/`next build`/curl-200 verified, per the standing "agent can't log into
+  admin-web" restriction below. Owed: a real run through each of the 4 reports' filters, Print,
+  and Export CSV buttons.
 - **Customer-facing agent chat (own orders/sites + raise-complaint) is code-
   complete, deployed, and verified live as a real customer** (2026-08-15 -
   see changelog) but **the Settings → Agent Visibility toggle for Customer
@@ -290,6 +295,51 @@ strings lose `$`, script files don't.
 ---
 
 ## Changelog (condensed)
+
+### Reports section: SITC status, finance, customer history, vendor performance (2026-08-16)
+User asked for a way to generate and print reports. Four report types under a new **Reports**
+nav item (`/reports`, promoted from the disabled "Coming Soon" `phase2Links` placeholder in
+`Nav.tsx` to a real permission-gated link — the icon was already sitting there unused):
+
+1. **Sites / SITC status** (`/reports/sitc`) — every order+site with its current stage,
+   filterable by order-date range, customer, vendor, phase.
+2. **Finance summary** (`/reports/finance`) — receivables/payables aging, GST summary (with its
+   own date-range filter), revenue vs. expenses.
+3. **Customer / order history** (`/reports/customer-history`) — pick a customer, see every
+   order, site, invoice and complaint on record for them.
+4. **Vendor performance** (`/reports/vendor-performance`) — pick a vendor, see every site
+   assigned to them, a stage-breakdown KPI row, and complaints raised on their sites.
+
+**Deliberately shipped with zero new backend routes.** Every report composes data client-side
+from endpoints that already existed: `GET /sites`, `/customers`, `/customers/:id`,
+`/invoices?customerId=`, `/complaints` (filtered client-side — the route itself only scopes by
+the *caller's* `auth.customerId`, not an arbitrary query param, so a customer-history report
+filters the full staff-visible list down to the one selected customer instead), `/vendors`, and
+the finance module's existing `/finance/summary` + `/finance/reports/*` aggregation endpoints
+(already fully built — this report is mostly composition, not new aggregation logic). This means
+the whole feature shipped via plain `git push` (admin-web is git-connected) — no
+`zan-app-api` manual deploy dance.
+
+Each report has a **Print** button (`window.print()`, same browser-print pattern as the existing
+quotation/invoice/PO print pages — doubles as "download PDF" via the browser's own print dialog,
+deliberately not server-side Playwright/puppeteer rendering, which would sit on Vercel's
+serverless runtime and risk the exact class of native-binding startup crash the `pdf-parse`
+dynamic-import fix (see the in-app agent section below) was built to avoid) and an **Export CSV**
+button (new `lib/csvExport.ts` — a small dependency-free Blob-download helper, no new npm
+package, so none of the `npm install <pkg>` arborist-bug workaround was needed). A shared
+`components/reports/ReportChrome.tsx` provides a print-only letterhead header (company
+name/logo, report title, active filters, generated timestamp — hidden on screen via `hidden
+print:flex`, since the on-screen page already has its own heading and filter controls which are
+themselves `print:hidden`) and the Print/Export toolbar, reused by all four report pages.
+
+Verified via `tsc --noEmit`, a full `next build` (all 33 routes compiled, the 5 new ones among
+them, no errors), and `next start` + `curl` against all four new routes (200 OK) — **not
+exercised as a logged-in user** (see the standing "agent cannot log into admin-web" gotcha
+below); a real click-through of each report's filters/print/CSV-export is still owed.
+
+Also worth knowing for next time: this was a **fresh clone with no `node_modules`** — first
+`npm install` of the session (bare, no package argument) succeeded cleanly in ~60s including the
+`packages/shared` postinstall build, no `EPERM`/arborist issues this time.
 
 ### Merged the mobile-built customer-agent branch, live-tested it as a real customer, found and fixed two bugs (2026-08-15)
 User asked "how about chat access to customers" and, on hearing the tradeoffs, said they'd
