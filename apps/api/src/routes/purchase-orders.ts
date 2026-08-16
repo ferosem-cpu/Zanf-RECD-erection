@@ -75,40 +75,64 @@ purchaseOrdersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_O
   res.json(pos);
 });
 
+/** Exported so the in-app agent's create_purchase_order write tool (see agentConversations.ts's
+ * confirm route) can reuse the exact same create logic rather than duplicating it - mirrors the
+ * createQuotationRecord pattern in routes/quotations.ts. Also fixes a subtle asymmetry the
+ * duplicated version had: previously the agent's confirm handler generated the PO number and
+ * created the row in two separate transactions; this runs both inside the one transaction the
+ * caller wraps it in, same as quotations already did. */
+export async function createPurchaseOrderRecord(
+  tx: Prisma.TransactionClient,
+  input: {
+    supplierId: string;
+    lineItems: { description: string; hsnCode?: string | null; quantity: number; unitPrice: number; taxRatePct: number }[];
+    orderDate?: string | null;
+    expectedDate?: string | null;
+    orderId?: string | null;
+    siteId?: string | null;
+    notes?: string | null;
+    terms?: string | null;
+  },
+  createdById: string,
+  poNumber: string,
+  companyState?: string | null,
+) {
+  const totals = computeDocumentTotals(
+    input.lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
+    companyState,
+    undefined,
+  );
+  return tx.purchaseOrder.create({
+    data: {
+      poNumber,
+      supplierId: input.supplierId,
+      status: PO_STATUS.DRAFT,
+      orderDate: input.orderDate ? new Date(input.orderDate) : new Date(),
+      expectedDate: input.expectedDate ? new Date(input.expectedDate) : null,
+      orderId: input.orderId ?? undefined,
+      siteId: input.siteId ?? undefined,
+      subtotal: totals.subtotal,
+      cgstAmount: totals.cgstAmount,
+      sgstAmount: totals.sgstAmount,
+      igstAmount: totals.igstAmount,
+      total: totals.total,
+      notes: input.notes ?? undefined,
+      terms: input.terms ?? undefined,
+      createdById,
+      lineItems: { create: input.lineItems.map(mapPoLine) },
+    },
+    include: { lineItems: true },
+  });
+}
+
 purchaseOrdersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (req: AuthenticatedRequest, res) => {
   const parsed = purchaseOrderCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
 
   const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
-  const totals = computeDocumentTotals(
-    data.lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
-    company?.state,
-    undefined,
-  );
-
   const poNumber = await prisma.$transaction((tx) => nextDocumentNumber(tx, FINANCE_DOC_TYPE.PURCHASE_ORDER));
-  const po = await prisma.purchaseOrder.create({
-    data: {
-      poNumber,
-      supplierId: data.supplierId,
-      status: PO_STATUS.DRAFT,
-      orderDate: data.orderDate ? new Date(data.orderDate) : new Date(),
-      expectedDate: data.expectedDate ? new Date(data.expectedDate) : null,
-      orderId: data.orderId,
-      siteId: data.siteId,
-      subtotal: totals.subtotal,
-      cgstAmount: totals.cgstAmount,
-      sgstAmount: totals.sgstAmount,
-      igstAmount: totals.igstAmount,
-      total: totals.total,
-      notes: data.notes,
-      terms: data.terms,
-      createdById: req.auth!.userId,
-      lineItems: { create: data.lineItems.map(mapPoLine) },
-    },
-    include: { lineItems: true },
-  });
+  const po = await prisma.$transaction((tx) => createPurchaseOrderRecord(tx, data, req.auth!.userId, poNumber, company?.state));
   res.status(201).json(po);
 });
 

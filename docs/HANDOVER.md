@@ -64,20 +64,26 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-16, later):** working tree clean, `master` at
-> `31d2955`, fully pushed to `origin`. `admin-web` auto-deployed (git-
-> connected, picked up everything through this commit). **`zan-app-api`
-> has an undeployed fix sitting on `master`** - the customer-role Users-page
-> guard (see changelog) - because this was a cloud/web session with no path
-> to run the manual deploy dance (see "Tooling note" below, updated this
-> session with why). Waiting on the user to run it from a machine/session
-> that actually has Vercel + Desktop Commander access. Also still open: flip
-> on **Settings → Agent Visibility → Customer** in production whenever the
-> user wants the customer-facing chat assistant (built + verified
-> 2026-08-15, see changelog) to actually go live for real customers. Start
-> a new session by reading this file top to bottom before touching anything
-> - "Current open items" and the top of "Changelog" are the fastest way
-> back up to speed.
+> **Session boundary (2026-08-16, later still):** working tree clean, `master`
+> pushed to `origin` with one more commit on top of `31d2955` (the
+> `create_purchase_order` code-reuse fix, see changelog). This was again a
+> cloud/web session - **re-confirmed independently this session** (not just
+> trusting the prior note) that `api.vercel.com` is still blocked at this
+> environment's network-policy level (`curl "$HTTPS_PROXY/__agentproxy/status"`
+> then a direct `CONNECT` attempt both consistent with the prior finding) and
+> no Desktop Commander MCP or reachable sibling session exists to hand the
+> deploy off to (`list_agents` empty). **Both `zan-app-api` deploys are still
+> pending** - the customer-role Users-page guard from `31d2955` AND this
+> session's PO-tool fix - stacked on top of each other now, both needing the
+> one manual deploy dance run together. Also still open: flip on
+> **Settings → Agent Visibility → Customer** in production (customer chat is
+> code-complete and live-verified, see 2026-08-15 changelog, but going live
+> is a deliberate user decision, not a code gate), and the Reports section
+> still hasn't been click-tested as a logged-in user (same "agent can't log
+> into admin-web" restriction blocks that from any session, not just cloud
+> ones). Start a new session by reading this file top to bottom before
+> touching anything - "Current open items" and the top of "Changelog" are the
+> fastest way back up to speed.
 
 ## Quick facts
 
@@ -256,12 +262,15 @@ same session:
 
 ## Current open items (as of 2026-08-16)
 
-- **`zan-app-api` deploy pending for the customer-role Users-page guard fix** (commit `31d2955`,
-  see changelog) — code is on `master`, but this was a cloud/web session with no way to run the
-  manual deploy dance (see "Tooling note" above). The server-side half of the fix (rejecting
-  `roleKey: customer` in `POST/PUT /users`) isn't live yet; the admin-web half (dropdown removed)
-  already is. Run the deploy dance from a session with real Desktop Commander/Vercel access, then
-  verify with a request to `POST /users` with `roleKey: "customer"` → expect 400, not 201.
+- **`zan-app-api` has TWO deploys pending, stacked on `master`** — both from cloud/web sessions
+  with no way to run the manual deploy dance (see "Tooling note" above, re-confirmed still true
+  2026-08-16): (1) the customer-role Users-page guard (commit `31d2955` — rejecting
+  `roleKey: "customer"` in `POST/PUT /users`; the admin-web half, dropdown removal, is already
+  live), and (2) the `create_purchase_order` agent-tool code-reuse fix (this session, see
+  changelog — behavior-neutral, so nothing is broken by it not being deployed yet, just not
+  benefiting from the fix). Run the deploy dance once from a session with real Desktop
+  Commander/Vercel access to pick up both at once, then verify: `POST /users` with
+  `roleKey: "customer"` → expect 400, not 201.
 - **New Reports section (2026-08-16, see changelog) has never been click-tested as a logged-in
   user** — only `tsc`/`next build`/curl-200 verified, per the standing "agent can't log into
   admin-web" restriction below. Owed: a real run through each of the 4 reports' filters, Print,
@@ -300,9 +309,9 @@ same session:
   validation (§ "HSN/SAC made mandatory" below), but the *agent* will still
   confidently invent a code if the user doesn't supply one and gets a
   rejection rather than a silent bad value — acceptable but worth knowing.
-- Minor code-reuse inconsistency: `create_purchase_order`'s confirm handler
-  duplicates line-item construction inline, while `create_quotation` reuses
-  the real route's exported helper directly. Cosmetic.
+- ~~Minor code-reuse inconsistency: `create_purchase_order`'s confirm handler
+  duplicates line-item construction inline...~~ **Fixed 2026-08-16** — see
+  changelog.
 - No edit-history/audit-log for quotations or POs (invoices have
   `InvoiceEditLog`) — acceptable today since quotation/PO editing is
   draft-only, but worth knowing the asymmetry exists.
@@ -329,6 +338,33 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### create_purchase_order code-reuse fix, and re-confirming the cloud-session deploy blockers (2026-08-16, later)
+Picked up from the "Current open items" backlog (no new user report this time) - the one
+flagged as `create_purchase_order`'s confirm handler duplicating line-item construction inline
+instead of reusing a shared helper, the way `create_quotation` already did via
+`createQuotationRecord`.
+
+Extracted `createPurchaseOrderRecord(tx, input, createdById, poNumber, companyState)` in
+`routes/purchase-orders.ts`, exported the same way `createQuotationRecord` is, and pointed both
+the real `POST /purchase-orders` route and the agent's `executeConfirmedAction` dispatch
+(`agentConversations.ts`) at it. Beyond deduplication, this fixes a small real asymmetry: the
+duplicated agent-side version generated the PO number and created the row in two separate
+`prisma.$transaction` calls, while `create_quotation`'s confirm handler already wrapped both
+steps in one transaction together - now purchase orders do too, closing a (very unlikely, since
+`nextDocumentNumber` and the create were adjacent statements with nothing to fail in between) gap
+where a number could theoretically be allocated without a matching PO ever being created.
+Behavior-neutral otherwise - same fields, same tax calc, same DRAFT status. `tsc --noEmit` and
+the API's production `tsc -p tsconfig.json` both clean.
+
+Also re-verified, independently and from scratch rather than trusting the prior session's
+note, that this session (cloud/web, same as the last one) genuinely cannot run the
+`zan-app-api` manual deploy dance: `curl "$HTTPS_PROXY/__agentproxy/status"` followed by a
+direct connection attempt to `api.vercel.com` both confirm the network-policy block is still in
+place, and `list_agents` found no Desktop Commander or sibling session to hand the deploy off to.
+**This now stacks two undeployed `zan-app-api` fixes on `master`** (this one + the customer-role
+Users-guard from the prior session) - see "Current open items" for both and the one verification
+step to run after deploying.
 
 ### Customer email-OTP silently never sending: root cause + guard against recurrence (2026-08-16)
 User reported requesting an email OTP for `zanfpowersystems@gmail.com` and never receiving it -

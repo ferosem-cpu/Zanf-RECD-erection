@@ -6,7 +6,7 @@
  */
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
-import { PO_STATUS, FINANCE_DOC_TYPE, INVOICE_STATUS } from "@recd/shared";
+import { FINANCE_DOC_TYPE, INVOICE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
@@ -15,6 +15,7 @@ import { allTools } from "../agent/tools/registry";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
 import { createQuotationRecord } from "./quotations";
+import { createPurchaseOrderRecord } from "./purchase-orders";
 import { createComplaintRecord } from "./complaints";
 import type { UnifiedMessage } from "../agent/providers/types";
 
@@ -128,45 +129,23 @@ async function executeConfirmedAction(
         unitPrice: number;
         taxRatePct: number;
       }
-      const lineItems = (input.lineItems as PendingPoLine[]) ?? [];
       const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
-      // Recomputed fresh at confirm time (not trusted from the stored preview) - same
-      // intra-state-only tax treatment as routes/purchase-orders.ts (no placeOfSupply passed).
-      const totals = computeDocumentTotals(
-        lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
-        company?.state,
-        undefined,
-      );
       const po = await prisma.$transaction(async (tx) => {
         const poNumber = await nextDocumentNumber(tx, FINANCE_DOC_TYPE.PURCHASE_ORDER);
-        return tx.purchaseOrder.create({
-          data: {
-            poNumber,
+        return createPurchaseOrderRecord(
+          tx,
+          {
             supplierId: String(input.supplierId),
-            status: PO_STATUS.DRAFT,
-            orderDate: new Date(String(input.orderDate)),
-            expectedDate: input.expectedDate ? new Date(String(input.expectedDate)) : null,
-            notes: input.notes ? String(input.notes) : null,
-            terms: input.terms ? String(input.terms) : null,
-            subtotal: totals.subtotal,
-            cgstAmount: totals.cgstAmount,
-            sgstAmount: totals.sgstAmount,
-            igstAmount: totals.igstAmount,
-            total: totals.total,
-            createdById: userId,
-            lineItems: {
-              create: lineItems.map((l) => ({
-                description: l.description,
-                hsnCode: l.hsnCode ?? null,
-                quantity: new Prisma.Decimal(String(l.quantity)),
-                unitPrice: new Prisma.Decimal(String(l.unitPrice)),
-                taxRatePct: new Prisma.Decimal(String(l.taxRatePct)),
-                lineTotal: new Prisma.Decimal(String(l.quantity * l.unitPrice)).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP),
-                sortOrder: 0,
-              })),
-            },
+            lineItems: (input.lineItems as PendingPoLine[]) ?? [],
+            orderDate: input.orderDate ? String(input.orderDate) : undefined,
+            expectedDate: input.expectedDate ? String(input.expectedDate) : undefined,
+            notes: (input.notes as string | null) ?? undefined,
+            terms: (input.terms as string | null) ?? undefined,
           },
-        });
+          userId,
+          poNumber,
+          company?.state,
+        );
       });
       return po.id;
     }
