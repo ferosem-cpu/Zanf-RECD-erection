@@ -124,6 +124,8 @@ export default function AgentChatBubble() {
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const isCustomer = user?.role.key === ROLE_KEY.CUSTOMER;
 
@@ -245,6 +247,30 @@ export default function AgentChatBubble() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSending(false);
+    }
+  }
+
+  /** Copies a response's raw markdown text. Falls back to the old execCommand path for
+   * non-secure contexts / browsers without the async Clipboard API. */
+  async function copyMessage(text: string, index: number) {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex((cur) => (cur === index ? null : cur)), 1500);
+    } catch {
+      // Clipboard permission denied/unsupported - no-op, the button just won't show "Copied".
     }
   }
 
@@ -384,17 +410,32 @@ export default function AgentChatBubble() {
               }
               return (
                 <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
-                  <div
-                    className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
-                      m.role === "user" ? "bg-gray-900 text-white whitespace-pre-wrap" : "bg-gray-100 text-gray-800"
-                    }`}
-                  >
-                    {m.role === "assistant" ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                        {m.content}
-                      </ReactMarkdown>
-                    ) : (
-                      m.content
+                  <div className="max-w-[85%]">
+                    <div
+                      className={`rounded-2xl px-3 py-2 text-sm ${
+                        m.role === "user" ? "bg-gray-900 text-white whitespace-pre-wrap" : "bg-gray-100 text-gray-800"
+                      }`}
+                    >
+                      {m.role === "assistant" ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                          {m.content}
+                        </ReactMarkdown>
+                      ) : (
+                        m.content
+                      )}
+                    </div>
+                    {m.role === "assistant" && m.content && (
+                      <button
+                        onClick={() => copyMessage(m.content!, i)}
+                        className="mt-1 flex items-center gap-1 pl-1 text-[11px] text-gray-400 hover:text-gray-600"
+                        title="Copy response"
+                      >
+                        {copiedIndex === i ? (
+                          <>✓ Copied</>
+                        ) : (
+                          <>⧉ Copy</>
+                        )}
+                      </button>
                     )}
                   </div>
                 </div>
