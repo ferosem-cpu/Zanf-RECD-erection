@@ -64,16 +64,19 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-16):** working tree clean, `master` at
-> `b10fbf6`, fully pushed to `origin`. `admin-web` auto-deploys from this
-> push (git-connected); `zan-app-api` untouched, no manual deploy dance
-> needed this session — see the Reports changelog entry below. The one
-> open decision still waiting on the user (not a code gap): flip on
-> **Settings → Agent Visibility → Customer** in production whenever they
-> want the customer-facing chat assistant (built + verified 2026-08-15,
-> see changelog) to actually go live for real customers. Start a new
-> session by reading this file top to bottom before touching anything -
-> "Current open items" and the top of "Changelog" are the fastest way
+> **Session boundary (2026-08-16, later):** working tree clean, `master` at
+> `31d2955`, fully pushed to `origin`. `admin-web` auto-deployed (git-
+> connected, picked up everything through this commit). **`zan-app-api`
+> has an undeployed fix sitting on `master`** - the customer-role Users-page
+> guard (see changelog) - because this was a cloud/web session with no path
+> to run the manual deploy dance (see "Tooling note" below, updated this
+> session with why). Waiting on the user to run it from a machine/session
+> that actually has Vercel + Desktop Commander access. Also still open: flip
+> on **Settings → Agent Visibility → Customer** in production whenever the
+> user wants the customer-facing chat assistant (built + verified
+> 2026-08-15, see changelog) to actually go live for real customers. Start
+> a new session by reading this file top to bottom before touching anything
+> - "Current open items" and the top of "Changelog" are the fastest way
 > back up to speed.
 
 ## Quick facts
@@ -134,6 +137,31 @@ One transport quirk hits repeatedly: any command string containing a literal
 reaching PowerShell. **Workaround: write the script as a `.ps1`/`.js` file via
 `write_file` first, then execute it with `-File`** — inline `-Command "..."`
 strings lose `$`, script files don't.
+
+**A cloud/web session (Claude Code on the web, no Desktop Commander attached)
+cannot run the `zan-app-api` deploy dance at all - confirmed 2026-08-16, not
+just "inconvenient."** Two independent, unrelated blockers, both hit in the
+same session:
+- No Desktop Commander MCP tool is attached in a cloud session, and no other
+  reachable local/remote session existed to hand it off to (`list_agents`
+  came back empty) - there's no way to reach the user's own machine at all.
+- Even *with* a valid Vercel token supplied directly by the user, the
+  `vercel` CLI's own API calls fail: this sandbox's network egress proxy
+  outright blocks `api.vercel.com` at the gateway (`curl
+  "$HTTPS_PROXY/__agentproxy/status"` showed repeated `gateway answered 403
+  to CONNECT ... host: api.vercel.com:443`). Same story for `*.vercel.app`
+  deployment URLs and even the production `app.zanf.org` domain via
+  `WebFetch` (`EGRESS_BLOCKED`). This is a network *policy* restriction on
+  the environment, not an auth problem - no token fixes it. The connected
+  Vercel MCP tool (`mcp__Vercel__*`) is a separate path that does reach
+  Vercel's API, but it's authenticated as a *different* account/team that
+  doesn't have this project (`get_project` on both `zan-app-api`'s known
+  project ID and the `zan-app` slug 404'd under it).
+- **Bottom line: a cloud session can prepare and push the code fix to
+  `master`, but the actual `zan-app-api` deploy needs a session with real
+  Desktop Commander access to the user's machine (or the environment's
+  network policy opened up to `api.vercel.com`).** Say so plainly rather
+  than attempting the deploy dance from a cloud session - it will not work.
 
 ## Known gotchas (still live)
 
@@ -228,6 +256,12 @@ strings lose `$`, script files don't.
 
 ## Current open items (as of 2026-08-16)
 
+- **`zan-app-api` deploy pending for the customer-role Users-page guard fix** (commit `31d2955`,
+  see changelog) — code is on `master`, but this was a cloud/web session with no way to run the
+  manual deploy dance (see "Tooling note" above). The server-side half of the fix (rejecting
+  `roleKey: customer` in `POST/PUT /users`) isn't live yet; the admin-web half (dropdown removed)
+  already is. Run the deploy dance from a session with real Desktop Commander/Vercel access, then
+  verify with a request to `POST /users` with `roleKey: "customer"` → expect 400, not 201.
 - **New Reports section (2026-08-16, see changelog) has never been click-tested as a logged-in
   user** — only `tsc`/`next build`/curl-200 verified, per the standing "agent can't log into
   admin-web" restriction below. Owed: a real run through each of the 4 reports' filters, Print,
@@ -295,6 +329,38 @@ strings lose `$`, script files don't.
 ---
 
 ## Changelog (condensed)
+
+### Customer email-OTP silently never sending: root cause + guard against recurrence (2026-08-16)
+User reported requesting an email OTP for `zanfpowersystems@gmail.com` and never receiving it -
+no error either. Root cause: that email existed as a `User` row (`name: "Zan-F Test"`, role
+`customer`, created 2026-08-15) with `customerId` = **null**. The email-OTP eligibility check
+(`findEmailOtpEligibleUser` in `auth.ts`) requires `customerId` to be set for a customer-role
+account; when it's null the request falls through to the deliberately-generic "if that email is
+registered, an OTP has been sent" response *without* ever creating an `OtpCode` row or calling
+`sendNotification` - by design, to avoid leaking which emails are registered, but the side effect
+is a silent dead end for exactly this kind of broken account.
+
+How it happened: the Users page's generic "Add user" form lets staff pick *any* role from
+`/meta/roles`, including "Customer" - but `POST /users` (`users.ts`) never touches
+`User.customerId`, only real customer contacts created via the Customers page
+(`POST /customers` or a contact added to an existing customer) get that field set. Picking
+"Customer" from the Users page has always silently produced a login that can never work.
+
+Fixed two ways, both needed since the UI guard alone doesn't stop a direct API call:
+1. `apps/api/src/routes/users.ts` - `POST /users` and `PUT /users/:id` now reject
+   `roleKey: "customer"` outright, pointing at the Customers page instead.
+2. `apps/admin-web/src/app/users/page.tsx` - "Customer" filtered out of the role dropdown
+   (both Add and Edit) at the point roles are fetched, so it can't be picked from the UI at all.
+
+Verified no other table referenced the broken row (`OtpCode`, `NotificationLog`,
+`AgentConversation`, `PendingAction`, `Complaint`, `WorkOrder`, `Site`, `Vendor` all zero rows
+against it) before deleting it directly via the Supabase MCP - not part of the code diff, a
+one-off prod data cleanup. `tsc --noEmit` and full builds clean for both apps.
+
+**This was a cloud/web session, so only the `admin-web` half (commit `31d2955`, dropdown
+removal) is actually live** - the `zan-app-api` half needs the manual deploy dance, which this
+session had no way to run (see the "Tooling note" section above, expanded this session with why).
+See "Current open items" above for the exact verification step once it's deployed.
 
 ### Copy button on assistant chat responses (2026-08-16)
 Small follow-up in the same session as the Reports section below. Added a "Copy" control
