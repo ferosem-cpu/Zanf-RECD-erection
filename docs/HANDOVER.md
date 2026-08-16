@@ -296,6 +296,12 @@ strings lose `$`, script files don't.
 
 ## Changelog (condensed)
 
+### Copy button on assistant chat responses (2026-08-16)
+Small follow-up in the same session as the Reports section below. Added a "Copy" control
+under every assistant message in `AgentChatBubble.tsx` (async Clipboard API, `execCommand`
+fallback for non-secure contexts, brief "Copied" confirmation) — copies the response's raw
+markdown text. Admin-web only; `tsc --noEmit` + full `next build` both clean.
+
 ### Reports section: SITC status, finance, customer history, vendor performance (2026-08-16)
 User asked for a way to generate and print reports. Four report types under a new **Reports**
 nav item (`/reports`, promoted from the disabled "Coming Soon" `phase2Links` placeholder in
