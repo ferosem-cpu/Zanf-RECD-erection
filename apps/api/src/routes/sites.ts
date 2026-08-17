@@ -10,9 +10,11 @@ import {
   updateSiteContactSchema,
   setSiteDocumentRequirementsSchema,
   upsertRecdDeliverySchema,
+  cloneOrderForSiteSchema,
   PERMISSION_KEY,
   PENDING_ACTION_CATEGORY,
   VENDOR_STATUS,
+  STAGE_KEY,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -45,7 +47,7 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
   const detail = await prisma.site.findUnique({
     where: { id: siteId },
     include: {
-      order: { include: { customer: true, product: true } },
+      order: { include: { customer: true, product: true, lineItems: { include: { product: true }, orderBy: { createdAt: "asc" } } } },
       currentStage: true,
       assignedEngineer: true,
       vendor: true,
@@ -68,6 +70,43 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
     return res.status(403).json({ error: "Forbidden" });
   }
   res.json(detail);
+});
+
+/** Creates a sibling Order+Site for another RECD delivered to this same physical location -
+ *  same address/companyName/vendor as this site, reset to the first stage, but its own
+ *  orderNumber so it's tracked (and later invoiced/dispatched) independently. The alternative
+ *  to POST /orders/:id/line-items, which instead adds the unit to this same order/site. */
+sitesRouter.post("/:id/clone-order", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const parsed = cloneOrderForSiteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const siteId = asString(req.params.id);
+  const site = await prisma.site.findUnique({ where: { id: siteId }, include: { order: true } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+
+  const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
+  const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+  const newOrder = await prisma.order.create({
+    data: {
+      orderNumber,
+      customerId: site.order.customerId,
+      productId: parsed.data.productId,
+      quantity: parsed.data.quantity,
+      salesEngineerId: req.auth!.userId,
+      site: {
+        create: {
+          address: site.address,
+          companyName: site.companyName,
+          vendorId: site.vendorId,
+          currentStageId: firstStage.id,
+        },
+      },
+    },
+    include: { site: true, product: true },
+  });
+
+  res.status(201).json(newOrder);
 });
 
 sitesRouter.post(

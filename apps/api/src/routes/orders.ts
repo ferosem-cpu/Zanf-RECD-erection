@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createOrderSchema, PERMISSION_KEY, STAGE_KEY } from "@recd/shared";
+import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, STAGE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
@@ -26,6 +26,7 @@ ordersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async 
       product: true,
       salesEngineer: { select: { id: true, name: true } },
       site: { include: { currentStage: true, assignedEngineer: true, vendor: true } },
+      lineItems: { include: { product: true }, orderBy: { createdAt: "asc" } },
     },
   });
   if (!order) return res.status(404).json({ error: "Order not found" });
@@ -69,6 +70,38 @@ ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (r
   });
 
   res.status(201).json(order);
+});
+
+/** Adds another RECD unit to an existing order (same order/site, e.g. a 500kva + a 380kva
+ *  delivered together) - the alternative to POST /sites/:id/clone-order, which instead
+ *  creates a fully separate order+site for the second unit. */
+ordersRouter.post("/:id/line-items", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const parsed = addOrderLineItemSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+
+  const orderId = asString(req.params.id);
+  const order = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!order) return res.status(404).json({ error: "Order not found" });
+  if (req.auth!.customerId && order.customerId !== req.auth!.customerId) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const lineItem = await prisma.orderLineItem.create({
+    data: { orderId, productId: parsed.data.productId, quantity: parsed.data.quantity },
+    include: { product: true },
+  });
+
+  res.status(201).json(lineItem);
+});
+
+ordersRouter.delete("/:id/line-items/:lineItemId", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const orderId = asString(req.params.id);
+  const lineItemId = asString(req.params.lineItemId);
+  const lineItem = await prisma.orderLineItem.findUnique({ where: { id: lineItemId } });
+  if (!lineItem || lineItem.orderId !== orderId) return res.status(404).json({ error: "Line item not found" });
+
+  await prisma.orderLineItem.delete({ where: { id: lineItemId } });
+  res.status(204).end();
 });
 
 /**

@@ -185,6 +185,7 @@ model Product {
   quotationLineItems QuotationLineItem[]
   invoiceLineItems   InvoiceLineItem[]
   recdDeliveries     RecdDelivery[]
+  orderLineItems     OrderLineItem[]
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +220,26 @@ model Order {
   invoices Invoice[]
   purchaseOrders PurchaseOrder[]
   quotations Quotation[]
+  /// Additional RECD units delivered under this same order/site (e.g. a site takes a 500kva
+  /// and a 380kva together) - the order's own productId/quantity above remains "unit 1",
+  /// these are units 2+. A physically separate delivery/site instead gets its own sibling
+  /// Order+Site row (see Site's own doc comment).
+  lineItems OrderLineItem[]
+}
+
+/// A second (or third...) RECD product added to an existing order/site, for when multiple
+/// units are delivered to one physical location together. The alternative - a fully separate
+/// Order+Site pair sharing the same address - is used when the units are commercially/
+/// logistically distinct (different dispatch, different invoice, etc). Both paths are exposed
+/// in the "Add another unit" UI on the site detail page; this is the "same order" one.
+model OrderLineItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int
+  createdAt DateTime @default(now())
 }
 
 model Site {

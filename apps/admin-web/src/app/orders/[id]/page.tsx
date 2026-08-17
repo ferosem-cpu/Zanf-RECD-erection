@@ -35,6 +35,7 @@ interface OrderDetail {
     contacts: { name: string; phone: string | null; email: string | null }[];
   };
   product: { name: string; model: string; ratingSpec: string | null; capacityKva: string | null };
+  lineItems: Array<{ id: string; quantity: number; product: { name: string; model: string } }>;
   salesEngineer: { name: string } | null;
   site: {
     id: string;
@@ -144,6 +145,16 @@ export default function OrderDetailPage() {
             <span className="label">Order value</span>
             <span className="value font-semibold">₹{Number(order.value).toLocaleString("en-IN")}</span>
           </div>
+          {order.lineItems.length > 0 && (
+            <div className="pt-2 border-t border-gray-100 space-y-1">
+              <p className="text-xs text-gray-500">Additional units on this order</p>
+              {order.lineItems.map((li) => (
+                <p key={li.id} className="text-sm text-gray-700">
+                  {li.product.name} ({li.product.model}) · Qty {li.quantity}
+                </p>
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="card p-5 space-y-2">

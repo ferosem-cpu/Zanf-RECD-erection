@@ -46,6 +46,22 @@ export const createOrderSchema = z.object({
   plannedExhaustHookupType: z.string().optional(),
 });
 
+/** Adds another RECD product to an existing order/site (same order, multiple units). */
+export const addOrderLineItemSchema = z.object({
+  productId: z.string(),
+  quantity: z.number().int().positive(),
+});
+
+/**
+ * Creates a sibling Order+Site for another RECD delivered to the same physical location -
+ * same address/companyName/vendor as the source site, reset to the first stage, but its
+ * own orderNumber so it's tracked (and, later, invoiced/dispatched) independently.
+ */
+export const cloneOrderForSiteSchema = z.object({
+  productId: z.string(),
+  quantity: z.number().int().positive(),
+});
+
 export const createStageEventSchema = z.object({
   stageDefinitionId: z.string(),
   statusOptionId: z.string(),

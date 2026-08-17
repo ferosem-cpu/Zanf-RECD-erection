@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 
@@ -54,7 +54,15 @@ interface SiteDetail {
   photosDriveFolderUrl: string | null;
   drawingsDriveFolderId: string | null;
   drawingsDriveFolderUrl: string | null;
-  order: { orderNumber: string; plannedExhaustHookupType: string | null; customer: { name: string } };
+  order: {
+    id: string;
+    orderNumber: string;
+    plannedExhaustHookupType: string | null;
+    customer: { name: string };
+    quantity: number;
+    product: { id: string; name: string; model: string };
+    lineItems: Array<{ id: string; quantity: number; product: { id: string; name: string; model: string } }>;
+  };
   currentStage: { id: string; label: string; phase: string };
   assignedEngineer: { name: string } | null;
   vendor: { id: string; name: string } | null;
@@ -101,9 +109,11 @@ function fileToDataUrl(file: File): Promise<string> {
 
 export default function SiteDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { hasPermission } = useAuth();
   const canEdit = hasPermission("change_site_status");
   const canAssignVendor = hasPermission("manage_vendors");
+  const canManageOrders = hasPermission("manage_orders");
 
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<Lookup[]>([]);
@@ -160,6 +170,13 @@ export default function SiteDetailPage() {
   const [deliveryPriority, setDeliveryPriority] = useState("");
   const [deliveryNote, setDeliveryNote] = useState("");
   const [savingDelivery, setSavingDelivery] = useState(false);
+
+  // Add another unit (either onto this order, or as a fully separate order)
+  const [unitProductId, setUnitProductId] = useState("");
+  const [unitQuantity, setUnitQuantity] = useState("1");
+  const [unitMode, setUnitMode] = useState<"same_order" | "separate_order">("same_order");
+  const [addingUnit, setAddingUnit] = useState(false);
+  const [removingLineItemId, setRemovingLineItemId] = useState<string | null>(null);
 
   // Drive folders
   const [creatingDriveFolders, setCreatingDriveFolders] = useState(false);
@@ -410,6 +427,51 @@ export default function SiteDetailPage() {
     }
   }
 
+  async function addUnit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!site || !unitProductId) return;
+    setAddingUnit(true);
+    setError(null);
+    try {
+      const quantity = parseInt(unitQuantity, 10) || 1;
+      if (unitMode === "same_order") {
+        await api(`/orders/${site.order.id}/line-items`, {
+          method: "POST",
+          body: JSON.stringify({ productId: unitProductId, quantity }),
+        });
+        setUnitProductId("");
+        setUnitQuantity("1");
+        flash("Unit added to this order.");
+        await load();
+      } else {
+        const newOrder = await api<{ orderNumber: string; site: { id: string } }>(`/sites/${id}/clone-order`, {
+          method: "POST",
+          body: JSON.stringify({ productId: unitProductId, quantity }),
+        });
+        router.push(`/sites/${newOrder.site.id}`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add unit");
+    } finally {
+      setAddingUnit(false);
+    }
+  }
+
+  async function removeLineItem(lineItemId: string) {
+    if (!site) return;
+    setRemovingLineItemId(lineItemId);
+    setError(null);
+    try {
+      await api(`/orders/${site.order.id}/line-items/${lineItemId}`, { method: "DELETE" });
+      flash("Unit removed.");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove unit");
+    } finally {
+      setRemovingLineItemId(null);
+    }
+  }
+
   async function createDriveFolders() {
     setCreatingDriveFolders(true);
     setError(null);
@@ -638,6 +700,80 @@ export default function SiteDetailPage() {
                 {savingRequirements ? "Saving…" : "Save document requirements"}
               </button>
             )}
+          </form>
+        )}
+      </section>
+
+      <section className="card p-5 space-y-3">
+        <h2 className="text-sm font-semibold">RECD units</h2>
+        <p className="text-xs text-gray-500">
+          Every unit destined for this site. Add another one that ships under this same order
+          (e.g. two different capacities delivered together), or as a fully separate order if
+          it&apos;s commercially/logistically distinct - a separate site record with its own
+          order number, sharing this site&apos;s address.
+        </p>
+        <ul className="space-y-2">
+          <li className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
+            <div>
+              <span className="font-medium">{site.order.product.name} ({site.order.product.model})</span>
+              <span className="text-gray-500"> · Qty {site.order.quantity}</span>
+            </div>
+            <span className="text-xs text-gray-400">Primary unit</span>
+          </li>
+          {site.order.lineItems.map((li) => (
+            <li key={li.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm">
+              <div>
+                <span className="font-medium">{li.product.name} ({li.product.model})</span>
+                <span className="text-gray-500"> · Qty {li.quantity}</span>
+              </div>
+              {canManageOrders && (
+                <button
+                  type="button"
+                  onClick={() => removeLineItem(li.id)}
+                  disabled={removingLineItemId === li.id}
+                  className="text-xs text-red-600 hover:underline disabled:opacity-50"
+                >
+                  {removingLineItemId === li.id ? "Removing…" : "Remove"}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+        {canManageOrders && (
+          <form onSubmit={addUnit} className="space-y-2 pt-2 border-t border-gray-100">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <select
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={unitProductId}
+                onChange={(e) => setUnitProductId(e.target.value)}
+              >
+                <option value="">Product</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={1}
+                placeholder="Quantity"
+                className="rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                value={unitQuantity}
+                onChange={(e) => setUnitQuantity(e.target.value)}
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 text-sm">
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={unitMode === "same_order"} onChange={() => setUnitMode("same_order")} />
+                Add to this order (ships together)
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="radio" checked={unitMode === "separate_order"} onChange={() => setUnitMode("separate_order")} />
+                Create as a separate order
+              </label>
+            </div>
+            <button type="submit" disabled={addingUnit || !unitProductId} className="btn-primary px-4 py-2 text-sm disabled:opacity-50">
+              {addingUnit ? "Adding…" : "+ Add another unit"}
+            </button>
           </form>
         )}
       </section>

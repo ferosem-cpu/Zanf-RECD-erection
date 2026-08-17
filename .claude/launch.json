@@ -2,17 +2,17 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "api",
+      "name": "zan-api",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--workspace=apps/api"],
-      "port": 4001,
+      "port": 4011,
       "autoPort": false
     },
     {
-      "name": "admin-web",
+      "name": "zan-admin-web",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--workspace=apps/admin-web"],
-      "port": 6001,
+      "runtimeArgs": ["run", "start", "--workspace=apps/admin-web"],
+      "port": 6011,
       "autoPort": false
     }
   ]
