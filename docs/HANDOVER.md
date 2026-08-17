@@ -339,6 +339,28 @@ same session:
 
 ## Changelog (condensed)
 
+### Every delete action in admin-web falsely reported failure (2026-08-16, later still)
+**Report:** user deleted a stale test order (`ORD-2026-4991` - manually created outside the
+real Ethen Power Solutions import batch, identified by comparing its `createdAt`/site/value
+shape against the other 29 real imported rows) and got `Failed to execute 'json' on
+'Response': Unexpected end of JSON input`. Checked production directly: **the order was
+actually gone** - the delete had succeeded, the error was a lie.
+
+Root cause: `DELETE /orders/:id` (and 7 other delete routes across the API - expenses,
+customers, products, quotations, agent providers, agent conversations, site contacts) all
+correctly respond `204 No Content` with an empty body. `apiClient.ts`'s shared `api()` helper
+unconditionally called `res.json()` on any `res.ok` response, which throws on an empty body
+even though the request itself succeeded - so **every delete button in the app** has been
+reporting failure on success, not just this one. Fixed by reading the response as text first
+and only `JSON.parse`-ing it if non-empty; no caller reads a DELETE call's resolved value, so
+returning `undefined` for the empty case doesn't change any behavior. Frontend-only, `tsc
+--noEmit` and full `next build` clean, ships via the normal `admin-web` git-push auto-deploy -
+no `zan-app-api` deploy needed.
+
+**Not yet verified live** (same "agent can't log into admin-web" restriction) - worth a real
+click-through of a delete button post-deploy to confirm the success case now resolves cleanly
+instead of throwing.
+
 ### create_purchase_order code-reuse fix, and re-confirming the cloud-session deploy blockers (2026-08-16, later)
 Picked up from the "Current open items" backlog (no new user report this time) - the one
 flagged as `create_purchase_order`'s confirm handler duplicating line-item construction inline
