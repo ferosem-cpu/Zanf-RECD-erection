@@ -84,7 +84,11 @@ sync with Platino's own repo).
 > again. This cloud session still can't run the deploy dance itself (same
 > unchanged blockers: no Desktop Commander, `api.vercel.com` network-
 > blocked) - all of the above was done by the user on their own machine,
-> talked through step by step. Still open: flip on
+> talked through step by step. Also this session: verified a user-uploaded
+> delivery-status spreadsheet against production (read-only, no changes) -
+> found `RecdDelivery` is almost entirely unpopulated for Ethen's sites (see
+> changelog and Current open items), waiting on the user before importing
+> anything. Still open: flip on
 > **Settings → Agent Visibility → Customer** in production (customer chat is
 > code-complete and live-verified, deliberately left for the user to enable),
 > and the Reports section still hasn't been click-tested as a logged-in user
@@ -309,8 +313,23 @@ same session:
   **Always check for these before assuming a feature doesn't exist or
   starting to rebuild it from scratch.**
 
-## Current open items (as of 2026-08-17)
+## Current open items (as of 2026-08-17, later)
 
+- **`RecdDelivery` (the delivery-status-per-site table) is almost entirely unpopulated for
+  Ethen's 29 sites** — found while verifying a user-uploaded `Material_Delivery_Status_
+  version_1.xlsx` against production (see changelog). Only 2 of ~24 delivery-status line
+  items in that sheet have any `RecdDelivery` row at all (INTERGLOBE AVIATION/Devanahalli,
+  VRL/Peenya), and even those two have gaps - VRL/Peenya's `productId` is null, and neither
+  captured an actual/expected date despite the source sheet giving one. Every other site
+  (Bostik, all of BPCL's, the other 7 VRL sites, Mahindra, Wipro, Kaynes) has real Order/Site
+  data but zero delivery-status record. User was offered an import of the missing rows,
+  matching sheet rows to sites the same way the verification did - not yet done, waiting on
+  the user.
+- **One address name doesn't match between the sheet and the DB, unconfirmed**: the sheet's
+  "BPCL, DEVANAGONTI, Bangalore" has no literal match in production - the closest candidate is
+  BPCL's "Hosakote, Bangalore" site (which does have the same 2-product shape - RECD-250 +
+  RECD-750 - the sheet's Devanagonti group implies). Asked the user to confirm whether these
+  are the same place before assuming so and importing against it.
 - ~~`zan-app-api` deploy pending for vendor archive~~ **Deployed and confirmed working
   2026-08-17** — the user ran the deploy dance themselves and successfully archived a real
   vendor through the live UI. Took two attempts because of two gotchas worth knowing for next
@@ -421,6 +440,44 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Verified a user-uploaded delivery-status spreadsheet against production; found the delivery-tracking table is mostly empty (2026-08-17, later)
+User uploaded `Material_Delivery_Status_version_1.xlsx` (Product/Qty/Customer Name/Location/
+area/Delivery Status/expected-or-actual date, one row per RECD unit) and asked whether it had
+been "updated correctly" and imported with contact details, specifically flagging "Bostik 2
+recd" to check. Read it with `pandas` (neither `pandas` nor `markitdown` were actually
+preinstalled in this session despite the xlsx skill's own notes - had to `pip install` first).
+
+Cross-checked every row against production via the Supabase MCP:
+- **Sheet has blank-cell row grouping** (a named customer/location row followed by unlabeled
+  rows for additional products at the same site) - confirmed this convention by matching the
+  first group (BPCL/Zadshahapur: RECD-200/250/400 across 3 rows) against 3 real DB orders at
+  that exact address before trusting the pattern for the rest of the sheet.
+- **Bostik: correct as-is, not a bug.** DB has exactly one Bostik order (RECD-500 qty 1,
+  Bommasandra), matching the sheet's one explicit Bostik row exactly (product, qty,
+  "Delivered", 2026-08-12 all agree). The row directly below it that might read as a second
+  Bostik item (RECD-380, blank customer) actually belongs to Mahindra Aerostructures/Narsapur
+  in the DB (which genuinely has two separate RECD-380 orders) - reported this distinction
+  back to the user rather than assuming which group a blank row belongs to.
+- **The real finding: `RecdDelivery` (see schema - literally built "to match the source
+  delivery-tracking sheet") is almost empty.** Of ~24 delivery-status line items in the sheet,
+  only 2 have any row in it at all (INTERGLOBE AVIATION/Devanahalli, VRL/Peenya) - every other
+  site's Order/Site data exists correctly, but its Delivered/In-Transit status and dates were
+  never brought into the system. Even the 2 that exist have gaps: VRL/Peenya's `productId` is
+  null (should be RECD-750), and neither captured an actual/expected date despite the sheet
+  giving one.
+- **One unconfirmed address mismatch**: sheet's "BPCL, DEVANAGONTI, Bangalore" doesn't
+  literally match anything in production; closest candidate is BPCL's "Hosakote, Bangalore"
+  site (same 2-product shape the Devanagonti group implies - RECD-250 + RECD-750). Flagged to
+  the user rather than assumed.
+- **Contact details**: the sheet itself has zero contact-detail columns (no name/email/phone
+  fields anywhere), so nothing about contacts could have come from it - clarified this rather
+  than reporting a false pass/fail. Checked separately: Ethen Power Solutions' own contact
+  *is* on file (Vivian Johnson D'souza, real email/phone), just unrelated to this file.
+
+Read-only investigation, no code or data changes - see "Current open items" for the two things
+this surfaced that are still open (the missing `RecdDelivery` rows, and the Devanagonti/
+Hosakote address question), both waiting on the user.
 
 ### Vendor archive: deactivate without losing history, with optional site reassignment (2026-08-17)
 User hit the "No `DELETE /vendors/:id`" open item directly while testing (tried to remove a
