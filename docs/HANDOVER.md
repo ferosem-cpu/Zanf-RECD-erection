@@ -313,8 +313,12 @@ same session:
   **Always check for these before assuming a feature doesn't exist or
   starting to rebuild it from scratch.**
 
-## Current open items (as of 2026-08-17, later)
+## Current open items (as of 2026-08-17, latest)
 
+- **`zan-app-api` deploy pending: agent tools' `OrderLineItem` fix (2026-08-17, latest)** - the
+  chat agent still undercounts RECDs at any site whose extra units were added as an
+  `OrderLineItem` (vs. a separate order) until this is deployed. See changelog for the root cause
+  and fix; no code work left, just the manual deploy dance from the user's own machine.
 - **`RecdDelivery` (the delivery-status-per-site table) is almost entirely unpopulated for
   Ethen's 29 sites** — found while verifying a user-uploaded `Material_Delivery_Status_
   version_1.xlsx` against production (see changelog). Only 2 of ~24 delivery-status line
@@ -440,6 +444,33 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Agent chat undercounted RECDs at a site after the multi-RECD-per-site feature shipped (2026-08-17, latest)
+User reported the chat agent answering "1 RECD unit" for BPCL's Desur site when there should have
+been more, after consolidating duplicate sites into one order carrying extra `OrderLineItem` rows
+(the "add another RECD unit → same order" path from the immediately-preceding commit, `d7b7381`,
+same day). Confirmed directly against production: `ORD-2026-6001` (Zadshahapur, Desur, BPCL) has
+its top-level product (RECD-200 qty 1) **plus two `OrderLineItem` rows** (RECD-250, RECD-400) - 3
+RECDs total, correctly stored, exactly what the user expected. The data was right; the agent just
+never looked at it.
+
+Root cause: `d7b7381` added the `OrderLineItem` table as one of two ways to put multiple RECDs on
+a site, but never touched the two agent tools that answer "how many RECDs at X" - both
+`search_orders_and_sites` and `get_document_detail`'s `docType: "order"` case
+(`zanAppReadTools.ts` / `zanAppDetailTool.ts`) only ever queried the order's single top-level
+`product`/`quantity` fields, with no `lineItems` in their Prisma `include` at all. Any RECD added
+via a line item was silently invisible to the agent, even though it shows correctly in the real
+admin-web site-detail page.
+
+Fixed both tools to `include: { lineItems: { include: { product: true } } }` and return them
+(`additionalLineItems` in `search_orders_and_sites`'s result shape); updated the tool's own
+description to explicitly tell the model to add the base quantity plus every line item's quantity
+together when answering a "how many" question, rather than relying on the model to infer that from
+an unfamiliar field. `tsc --noEmit` clean. **Backend-only change, needs the full `zan-app-api`
+manual deploy dance before it takes effect** - not yet deployed, this cloud session has the same
+standing blockers (no Desktop Commander, `api.vercel.com` network-blocked) as every prior cloud
+session. Until deployed, the chat agent will keep undercounting any site whose extra RECDs were
+added as line items rather than as a separate order.
 
 ### Verified a user-uploaded delivery-status spreadsheet against production; found the delivery-tracking table is mostly empty (2026-08-17, later)
 User uploaded `Material_Delivery_Status_version_1.xlsx` (Product/Qty/Customer Name/Location/
