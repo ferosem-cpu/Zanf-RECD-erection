@@ -64,19 +64,27 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-17):** working tree clean, `master` pushed to
-> `origin`. Since the last note: the user ran the `zan-app-api` deploy dance
-> themselves (customer-role guard + PO-tool cleanup both confirmed live), a
-> real bug was found and fixed (`apiClient.ts` throwing on 204 responses -
-> every delete button in the app was falsely reporting failure even on
-> success), and this session built **vendor archiving** (deactivate a vendor
+> **Session boundary (2026-08-17, later):** working tree clean, `master`
+> pushed to `origin`. This session: the user ran the `zan-app-api` deploy
+> dance twice more - once for the customer-role guard + PO-tool cleanup
+> (confirmed live), and again for **vendor archiving** (deactivate a vendor
 > without losing its history - see changelog for why this was chosen over a
-> hard delete or a shared "History Vendor" placeholder). **`zan-app-api` has
-> a new pending deploy again** - the archive route + migration (migration
-> already applied to production directly) - this cloud session still can't
-> run the deploy dance itself (same unchanged blockers: no Desktop Commander,
-> `api.vercel.com` network-blocked). The `admin-web` half of every change
-> above ships automatically on push. Still open: flip on
+> hard delete or a shared "History Vendor" placeholder), plus a real bug fix
+> (`apiClient.ts` throwing on 204 responses - every delete button was
+> falsely reporting failure even on success). **The vendor-archive deploy
+> hit real friction the first time round** (wrong-directory `vercel build`
+> silently left a stale `.vercel\output` for `deploy --prebuilt` to pick up,
+> then `notepad patch.ps1` saved to the wrong folder) - **both root-caused
+> and fixed on the second attempt, confirmed working by the user archiving a
+> real vendor through the live UI.** Both gotchas are now baked directly
+> into "The `zan-app-api` manual deploy dance" steps below (delete stale
+> output before rebuilding, verify a new route landed in the build output,
+> don't trust "401 not 404" alone for a brand-new route, confirm
+> `patch.ps1` actually saved where expected) so they shouldn't cost time
+> again. This cloud session still can't run the deploy dance itself (same
+> unchanged blockers: no Desktop Commander, `api.vercel.com` network-
+> blocked) - all of the above was done by the user on their own machine,
+> talked through step by step. Still open: flip on
 > **Settings → Agent Visibility → Customer** in production (customer chat is
 > code-complete and live-verified, deliberately left for the user to enable),
 > and the Reports section still hasn't been click-tested as a logged-in user
@@ -109,13 +117,36 @@ Platino clone, built entirely in this project) and, more recently, an
 `zan-app-api` is deliberately not git-connected, so every backend change
 needs this sequence from `apps/api`:
 
+0. **Every step below must run from `apps/api` specifically** - not the repo
+   root, not any other folder. Confirmed 2026-08-17: running `vercel build`
+   from the root fails loudly ("No Project Settings found locally"), but
+   running `vercel deploy --prebuilt` from the wrong folder can *silently*
+   pick up a stale leftover `.vercel/output` from an earlier build instead
+   of erroring - no warning, it just deploys the wrong code. If a shell
+   session wanders (e.g. after `cd..`, or after opening Notepad, whose Save
+   dialog uses its own last-remembered folder, not the shell's cwd), `cd
+   apps\api` explicitly before every `vercel` command rather than assuming
+   you're still there.
 1. Stop any local `zan-api` dev server first (Windows Prisma `EPERM` gotcha).
 2. `npx vercel pull --yes --environment production`
-3. `npx vercel build --prod` — **takes 15–20 minutes**, almost entirely spent
+3. **Delete any leftover build output before rebuilding** -
+   `Remove-Item -Recurse -Force .vercel\output, dist -ErrorAction SilentlyContinue`
+   (from `apps/api`). Skipping this is exactly how the stale-deploy bug in
+   step 0 happens - a failed or wrong-directory build attempt can leave an
+   old `.vercel\output` sitting there for the *next* `deploy --prebuilt` to
+   pick up without complaint.
+4. `npx vercel build --prod` — **takes 15–20 minutes**, almost entirely spent
    in Vercel's `@vercel/nft` file-tracing step, not in `tsc` (which alone
    takes ~15s). CPU/memory climb steadily the whole time — that's normal, not
-   hung; confirm via `Get-Process`/`Get-CimInstance` polling if unsure.
-4. **Patch `@recd/shared`** into all 5 spots the npm-workspaces symlink
+   hung; confirm via `Get-Process`/`Get-CimInstance` polling if unsure. Worth
+   piping to a log (`... 2>&1 | Tee-Object -FilePath build.log`) so you can
+   `Select-String -Path build.log -Pattern "error" -SimpleMatch` afterward
+   instead of assuming a long build that finished must have succeeded.
+5. **If this deploy adds/changes a route, verify it's actually in *this*
+   build's output before deploying** - don't rely on step 8's "401 not 404"
+   check alone for a *new* route (see why below):
+   `Select-String -Path ".vercel\output\functions\api\index.func\apps\api\dist\routes\<file>.js" -Pattern "<distinctive string from the new code>"`.
+6. **Patch `@recd/shared`** into all 5 spots the npm-workspaces symlink
    doesn't survive Vercel's Windows-symlink-unaware function tracer — this
    step is required after every fresh build, since each build's own install
    step wipes it:
@@ -124,10 +155,28 @@ needs this sequence from `apps/api`:
    - `.vercel/output/functions/api/index.func/apps/api/node_modules/@recd/shared`
    - `.vercel/output/functions/index.func/node_modules/@recd/shared`
    - `.vercel/output/functions/index.func/apps/api/node_modules/@recd/shared`
-5. `npx vercel deploy --prebuilt --prod` from `apps/api`.
-6. Verify: `GET /health` → 200, and a route that requires auth (e.g.
+   Write this as a `.ps1` file via an editor and run it with `-File` rather
+   than pasting inline (multi-line pastes into a live PowerShell prompt have
+   corrupted before) - and if using `notepad <name>.ps1` to create it,
+   confirm with `Test-Path <name>.ps1` that it actually saved where you
+   expect (Notepad's Save dialog remembers its own last folder, not the
+   shell's cwd - confirmed 2026-08-17, cost a stray `cd` back to the repo
+   root that then broke the next step).
+7. `npx vercel deploy --prebuilt --prod` from `apps/api`.
+8. Verify: `GET /health` → 200, and a route that requires auth (e.g.
    `GET /agent/providers` or `DELETE /quotations/<fake-id>`) → 401, not 404 —
-   404 means the deploy didn't actually pick up the change.
+   404 means the deploy didn't actually pick up the change. **This check
+   alone does NOT prove a brand-new route exists**, only that the deployed
+   function responds at all: router-level `.use(authenticate)` middleware
+   (e.g. in `vendors.ts`) runs for *every* request under that path prefix
+   regardless of whether any specific route ultimately matches, so an
+   unauthenticated request to a nonexistent new route can still return a
+   convincing `401` instead of `404`. To actually confirm a new route is
+   live, either test it with a **valid token and a real record id** (a
+   genuine 404 from inside the route's own `if (!thing) return
+   res.status(404)` always has a JSON `{error: "..."}` body; a route that
+   was never registered falls through to Express's bare fallback 404, which
+   doesn't) or trust step 5's build-output check instead.
 
 `admin-web` needs none of this — it's git-connected, so `git push` to
 `master` is enough.
@@ -262,12 +311,35 @@ same session:
 
 ## Current open items (as of 2026-08-17)
 
-- **`zan-app-api` deploy pending for vendor archive** (this session, see changelog) — the
-  `POST /vendors/:id/archive` route, the migration (`archivedById`/`archivedAt` columns,
-  already applied directly to production via the Supabase MCP), and `packages/shared`'s new
-  `VENDOR_STATUS.ARCHIVED`/`archiveVendorSchema` are all on `master` but not yet live on
-  `zan-app-api`. The `admin-web` half (Archive button, modal, badge) auto-deploys normally.
-  Verify after deploying: `POST /vendors/<fake-id>/archive` → 401 (not 404).
+- ~~`zan-app-api` deploy pending for vendor archive~~ **Deployed and confirmed working
+  2026-08-17** — the user ran the deploy dance themselves and successfully archived a real
+  vendor through the live UI. Took two attempts because of two gotchas worth knowing for next
+  time (not code bugs, pure operator/tooling friction):
+  1. **The first deploy attempt silently redeployed stale output.** `vercel build --prod` was
+     accidentally run from the repo root (`D:\Projects\Zan-APP`) instead of `apps\api` -
+     failed immediately with "No Project Settings found locally" there, but a *prior* leftover
+     `apps\api\.vercel\output` from an earlier build still existed, so the subsequent `vercel
+     deploy --prebuilt --prod` (run correctly from `apps\api`) silently deployed *that* stale
+     build instead of erroring - it had no way to know the output was out of date. Symptom:
+     `POST /vendors/<realId>/archive` with a valid token returned a plain 404 (no `.error`
+     JSON body - Express's own fallback, not a route handler), while unauthenticated requests
+     to the same path still returned a convincing-looking `401 "Missing bearer token"` -
+     **because `vendorsRouter.use(authenticate)` runs for every `/vendors/*` request
+     regardless of whether any route ultimately matches**, so a 401 there proves nothing about
+     whether a specific route exists. **Lesson: always delete `.vercel\output` (and `dist`)
+     immediately before a fresh `vercel build --prod`, and verify the route landed in the
+     compiled output** (`Select-String -Path ".vercel\output\functions\api\index.func\apps\api\dist\routes\<file>.js" -Pattern "<new route path>"`)
+     **before deploying** - don't trust "401 not 404" alone as proof a specific new route is live.
+  2. **`notepad patch.ps1` doesn't save where you think.** Launched from `apps\api`, Notepad's
+     Save dialog still used its own last-remembered folder (the repo root), not the shell's
+     cwd - `patch.ps1` ended up saved one level up. Harmless in this case only because the
+     script's own paths are all absolute, so running it from the wrong folder still patched
+     the right files - but the resulting `cd..`/`cd..` navigation left the shell sitting in
+     the repo root, where the next `vercel deploy --prebuilt` command failed since it looks
+     for `.vercel\output` relative to the *current* directory. **Lesson: after `notepad
+     patch.ps1`, confirm the file actually landed where expected (`Test-Path patch.ps1`)
+     before running it, and always `cd` back to `apps\api` explicitly right before
+     `vercel deploy` rather than assuming the shell is still there.**
 - ~~`zan-app-api` has TWO deploys pending...~~ **Deployed 2026-08-16** — the user ran the
   manual deploy dance themselves. Both the customer-role Users-page guard (`31d2955`) and the
   `create_purchase_order` code-reuse fix are live in production. Confirmed indirectly via a
