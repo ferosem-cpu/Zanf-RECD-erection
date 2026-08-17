@@ -233,11 +233,15 @@ const searchOrdersAndSites: AgentTool = {
     "Search sales orders (and their site's SITC progress) by order number, customer name, " +
     "site/end-client company name (e.g. 'BPCL', 'VRL'), or site address/location (e.g. " +
     "'Belgaum', 'Bangalore') - matches any of these, not just order number or customer. " +
-    "Returns id, orderNumber, customer, product, order value, dispatch dates, and - if a site " +
-    "exists - its address, end-client company name, current SITC stage, assigned engineer, " +
-    "and erection vendor. Use this for any 'how many/which sites are in <place>' question - " +
-    "there's no separate stock/inventory-by-location feature, so this order/site list is the " +
-    "closest thing to it. When called by a customer, this is automatically scoped to only " +
+    "Returns id, orderNumber, customer, product, quantity, additionalLineItems (extra products " +
+    "on the same order, if any - an order can carry more than one RECD/product), order value, " +
+    "dispatch dates, and - if a site exists - its address, end-client company name, current " +
+    "SITC stage, assigned engineer, and erection vendor. When answering 'how many RECDs/units " +
+    "at <site>', always add the base quantity to every additionalLineItems quantity - a single " +
+    "site can have multiple RECDs on one order. Use this for any 'how many/which sites are in " +
+    "<place>' question - there's no separate stock/inventory-by-location feature, so this " +
+    "order/site list is the closest thing to it. When called by a customer, this is " +
+    "automatically scoped to only " +
     "their own orders/sites - they can search within their own records but never see anyone " +
     "else's, and searching for another company's name simply returns no results.",
   inputSchema: {
@@ -273,6 +277,7 @@ const searchOrdersAndSites: AgentTool = {
       include: {
         customer: { select: { name: true } },
         product: { select: { name: true, model: true } },
+        lineItems: { include: { product: { select: { name: true, model: true } } } },
         site: { include: { currentStage: true, assignedEngineer: { select: { name: true } }, vendor: { select: { name: true } } } },
       },
       orderBy: { createdAt: "desc" },
@@ -280,7 +285,11 @@ const searchOrdersAndSites: AgentTool = {
     });
     return orders.map((o) => ({
       id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
-      product: `${o.product.name} (${o.product.model})`, quantity: o.quantity, value: num(o.value),
+      product: `${o.product.name} (${o.product.model})`, quantity: o.quantity,
+      additionalLineItems: o.lineItems.map((li) => ({
+        product: `${li.product.name} (${li.product.model})`, quantity: li.quantity,
+      })),
+      value: num(o.value),
       orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
       site: o.site
         ? {

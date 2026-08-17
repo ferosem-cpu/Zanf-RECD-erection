@@ -91,6 +91,7 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
         where: { id },
         include: {
           customer: true, product: true, salesEngineer: { select: { name: true } },
+          lineItems: { include: { product: true } },
           site: { include: { currentStage: true, assignedEngineer: { select: { name: true } }, vendor: true } },
         },
       });
