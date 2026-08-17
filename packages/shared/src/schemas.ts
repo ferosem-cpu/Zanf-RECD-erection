@@ -221,6 +221,13 @@ export const registerVendorSchema = z.object({
   address: z.string().optional(),
 });
 
+/** Optional: move this vendor's currently-assigned sites to another approved vendor before
+ * archiving, so ongoing erection work doesn't stall. Omit to leave sites pointed at the
+ * archived vendor (fine for work that's already finished). */
+export const archiveVendorSchema = z.object({
+  reassignSitesToVendorId: z.string().optional(),
+});
+
 /** Assign (or clear) the external vendor responsible for a site, and optionally its engineer. */
 export const assignSiteVendorSchema = z.object({
   vendorId: z.string().nullable(),

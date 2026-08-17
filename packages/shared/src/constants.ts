@@ -146,6 +146,11 @@ export const VENDOR_STATUS = {
   PENDING: "pending",
   APPROVED: "approved",
   REJECTED: "rejected",
+  /** Was approved and doing real work, now deactivated (e.g. malpractice) - unlike REJECTED
+   * (never accepted), an archived vendor's history (sites, complaints, work orders) stays
+   * fully intact and attributed to it; it just drops out of every active selection (new site
+   * assignment, new engineer login, OTP eligibility). */
+  ARCHIVED: "archived",
 } as const;
 export type VendorStatus = (typeof VENDOR_STATUS)[keyof typeof VENDOR_STATUS];
 

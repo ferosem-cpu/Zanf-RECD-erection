@@ -12,6 +12,7 @@ interface Vendor {
   contactPhone: string | null;
   address: string | null;
   approvedAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
   _count: { members: number; sites: number };
 }
@@ -19,6 +20,7 @@ interface Vendor {
 function statusBadge(status: string) {
   if (status === "approved") return "bg-green-100 text-green-800";
   if (status === "rejected") return "bg-red-100 text-red-800";
+  if (status === "archived") return "bg-gray-200 text-gray-600";
   return "bg-amber-100 text-amber-800";
 }
 
@@ -34,6 +36,12 @@ export default function VendorsPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
+
+  const [archiveTarget, setArchiveTarget] = useState<Vendor | null>(null);
+  const [archiveReassignTo, setArchiveReassignTo] = useState("");
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveResult, setArchiveResult] = useState<{ name: string; reassignedCount: number; reassignedToName: string | null } | null>(null);
 
   function load() {
     api<Vendor[]>("/vendors").then(setVendors).catch((e) => setError(e instanceof Error ? e.message : "Failed to load vendors"));
@@ -93,6 +101,32 @@ export default function VendorsPage() {
     }
   }
 
+  function openArchive(v: Vendor) {
+    setArchiveTarget(v);
+    setArchiveReassignTo("");
+    setArchiveError(null);
+  }
+
+  async function confirmArchive() {
+    if (!archiveTarget) return;
+    setArchiveBusy(true);
+    setArchiveError(null);
+    try {
+      const res = await api<{ sitesReassignedTo: string | null; sitesReassignedCount: number }>(
+        `/vendors/${archiveTarget.id}/archive`,
+        { method: "POST", body: JSON.stringify({ reassignSitesToVendorId: archiveReassignTo || undefined }) },
+      );
+      const reassignedToName = res.sitesReassignedTo ? vendors.find((v) => v.id === res.sitesReassignedTo)?.name ?? null : null;
+      setArchiveResult({ name: archiveTarget.name, reassignedCount: res.sitesReassignedCount, reassignedToName });
+      setArchiveTarget(null);
+      load();
+    } catch (e) {
+      setArchiveError(e instanceof Error ? e.message : "Failed to archive vendor");
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -128,6 +162,16 @@ export default function VendorsPage() {
             <p className="mt-1">A user with that email already exists, so no new login was created.</p>
           )}
           <button onClick={() => setApproval(null)} className="mt-2 text-xs text-green-700 underline">Dismiss</button>
+        </div>
+      )}
+
+      {archiveResult && (
+        <div className="rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700">
+          <p><strong>{archiveResult.name}</strong> archived — its history (sites, complaints, work orders) is untouched, and it no longer appears in any active selection.</p>
+          {archiveResult.reassignedCount > 0 && (
+            <p className="mt-1">{archiveResult.reassignedCount} site(s) reassigned to <strong>{archiveResult.reassignedToName ?? "the selected vendor"}</strong>.</p>
+          )}
+          <button onClick={() => setArchiveResult(null)} className="mt-2 text-xs text-gray-500 underline">Dismiss</button>
         </div>
       )}
 
@@ -188,8 +232,19 @@ export default function VendorsPage() {
                         >
                           Reconsider
                         </button>
+                      ) : v.status === "archived" ? (
+                        <span className="text-xs text-gray-400">Archived {v.archivedAt ? new Date(v.archivedAt).toLocaleDateString() : ""}</span>
                       ) : (
-                        <span className="text-xs text-gray-400">Approved {v.approvedAt ? new Date(v.approvedAt).toLocaleDateString() : ""}</span>
+                        <>
+                          <span className="text-xs text-gray-400">Approved {v.approvedAt ? new Date(v.approvedAt).toLocaleDateString() : ""}</span>
+                          <button
+                            onClick={() => openArchive(v)}
+                            disabled={busy === v.id}
+                            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            Archive
+                          </button>
+                        </>
                       )}
                     </div>
                   </td>
@@ -267,8 +322,19 @@ export default function VendorsPage() {
                   >
                     Reconsider
                   </button>
+                ) : v.status === "archived" ? (
+                  <span className="text-xs text-gray-400">Archived {v.archivedAt ? new Date(v.archivedAt).toLocaleDateString() : ""}</span>
                 ) : (
-                  <span className="text-xs text-gray-400">Approved {v.approvedAt ? new Date(v.approvedAt).toLocaleDateString() : ""}</span>
+                  <>
+                    <span className="text-xs text-gray-400">Approved {v.approvedAt ? new Date(v.approvedAt).toLocaleDateString() : ""}</span>
+                    <button
+                      onClick={() => openArchive(v)}
+                      disabled={busy === v.id}
+                      className="rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Archive
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -300,6 +366,67 @@ export default function VendorsPage() {
                 <button type="submit" disabled={saving} className="btn-primary px-4 py-2 text-sm">{saving ? "Adding…" : "Add vendor"}</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {archiveTarget && (
+        <div className="modal-backdrop" onClick={() => !archiveBusy && setArchiveTarget(null)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Archive {archiveTarget.name}</h3>
+              <button onClick={() => setArchiveTarget(null)} className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+            <div className="space-y-3 text-sm">
+              <p className="text-gray-600">
+                This removes {archiveTarget.name} from every active selection (new site assignments, new engineer
+                logins) and signs out its {archiveTarget._count.members} engineer login(s). Nothing is deleted — every
+                site, complaint, and work order it was ever tied to stays exactly as it is, still attributed to this
+                vendor.
+              </p>
+              {archiveTarget._count.sites > 0 && (
+                <>
+                  <p className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    {archiveTarget.name} currently has {archiveTarget._count.sites} site(s) assigned. If any are still
+                    in progress, move them to another approved vendor now so the work doesn&apos;t stall.
+                  </p>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Reassign its sites to (optional)</label>
+                    <select
+                      className="field w-full"
+                      value={archiveReassignTo}
+                      onChange={(e) => setArchiveReassignTo(e.target.value)}
+                    >
+                      <option value="">Leave sites as-is</option>
+                      {vendors.filter((v) => v.status === "approved" && v.id !== archiveTarget.id).map((v) => (
+                        <option key={v.id} value={v.id}>{v.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {archiveError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{archiveError}</p>}
+
+              <div className="flex justify-end gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setArchiveTarget(null)}
+                  disabled={archiveBusy}
+                  className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmArchive}
+                  disabled={archiveBusy}
+                  className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {archiveBusy ? "Archiving…" : "Archive vendor"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

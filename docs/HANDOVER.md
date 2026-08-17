@@ -64,30 +64,26 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-16, later still):** working tree clean, `master`
-> pushed to `origin`, three commits on top of `31d2955` - the
-> `create_purchase_order` code-reuse fix, the `apiClient.ts` 204-response fix
-> (see changelog for both), and this note. **The user ran the `zan-app-api`
-> manual deploy dance themselves this session** (from their own machine, hit
-> and worked past a paste-into-live-PowerShell-prompt issue on the patch
-> script) - **both previously-pending backend fixes (the customer-role
-> Users-page guard from `31d2955`, and the PO-tool cleanup) are now live in
-> production.** Confirmed indirectly: queried the `zan-app` DB directly and
-> found exactly one `customer`-role `User` row, correctly linked via
-> `customerId` - consistent with the guard working - though this cloud
-> session still can't `curl` `zan-app-api.vercel.app` directly (network
-> policy block, unchanged) to re-verify the `POST /users` 400 response
-> live. The `apiClient.ts` fix is frontend-only and ships via the normal
-> `admin-web` git-push auto-deploy, not the manual dance. Still open: flip
-> on **Settings → Agent Visibility → Customer** in production (customer chat
-> is code-complete and live-verified, see 2026-08-15 changelog, but going
-> live is a deliberate user decision, not a code gate), and the Reports
-> section still hasn't been click-tested as a logged-in user (same "agent
-> can't log into admin-web" restriction blocks that from any session, not
-> just cloud
-> ones). Start a new session by reading this file top to bottom before
-> touching anything - "Current open items" and the top of "Changelog" are the
-> fastest way back up to speed.
+> **Session boundary (2026-08-17):** working tree clean, `master` pushed to
+> `origin`. Since the last note: the user ran the `zan-app-api` deploy dance
+> themselves (customer-role guard + PO-tool cleanup both confirmed live), a
+> real bug was found and fixed (`apiClient.ts` throwing on 204 responses -
+> every delete button in the app was falsely reporting failure even on
+> success), and this session built **vendor archiving** (deactivate a vendor
+> without losing its history - see changelog for why this was chosen over a
+> hard delete or a shared "History Vendor" placeholder). **`zan-app-api` has
+> a new pending deploy again** - the archive route + migration (migration
+> already applied to production directly) - this cloud session still can't
+> run the deploy dance itself (same unchanged blockers: no Desktop Commander,
+> `api.vercel.com` network-blocked). The `admin-web` half of every change
+> above ships automatically on push. Still open: flip on
+> **Settings → Agent Visibility → Customer** in production (customer chat is
+> code-complete and live-verified, deliberately left for the user to enable),
+> and the Reports section still hasn't been click-tested as a logged-in user
+> (same "agent can't log into admin-web" restriction blocks that from any
+> session, not just cloud ones). Start a new session by reading this file top
+> to bottom before touching anything - "Current open items" and the top of
+> "Changelog" are the fastest way back up to speed.
 
 ## Quick facts
 
@@ -264,8 +260,14 @@ same session:
   **Always check for these before assuming a feature doesn't exist or
   starting to rebuild it from scratch.**
 
-## Current open items (as of 2026-08-16)
+## Current open items (as of 2026-08-17)
 
+- **`zan-app-api` deploy pending for vendor archive** (this session, see changelog) — the
+  `POST /vendors/:id/archive` route, the migration (`archivedById`/`archivedAt` columns,
+  already applied directly to production via the Supabase MCP), and `packages/shared`'s new
+  `VENDOR_STATUS.ARCHIVED`/`archiveVendorSchema` are all on `master` but not yet live on
+  `zan-app-api`. The `admin-web` half (Archive button, modal, badge) auto-deploys normally.
+  Verify after deploying: `POST /vendors/<fake-id>/archive` → 401 (not 404).
 - ~~`zan-app-api` has TWO deploys pending...~~ **Deployed 2026-08-16** — the user ran the
   manual deploy dance themselves. Both the customer-role Users-page guard (`31d2955`) and the
   `create_purchase_order` code-reuse fix are live in production. Confirmed indirectly via a
@@ -298,8 +300,11 @@ same session:
   UI's perspective, not actually dead. Revive by re-adding the toggle in
   `login/page.tsx` if it comes back; don't delete the backend routes without
   checking nothing else depends on them first.
-- No `DELETE /vendors/:id` — a vendor added by mistake (self-registered or
-  staff-added) can only be **rejected** (status flip), not removed outright.
+- ~~No `DELETE /vendors/:id`...~~ **Addressed 2026-08-17 via archive, not
+  delete** — see changelog. A vendor can now be pulled out of active use while
+  keeping every site/complaint/work-order it was ever tied to intact. Still
+  no hard delete, and there's deliberately no one-click "un-archive" in the
+  UI yet (see changelog for why) — pending `zan-app-api` deploy.
 - Product catalog now carries real GA-drawing-derived data
   (`shape`/`dimensions`/`weightKg`, imported 2026-08-13 — see changelog) for
   30 KVA variants, but `shape` is only a 3-value enum
@@ -344,6 +349,57 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Vendor archive: deactivate without losing history, with optional site reassignment (2026-08-17)
+User hit the "No `DELETE /vendors/:id`" open item directly while testing (tried to remove a
+test vendor, couldn't). Asked for a real delete, but on hearing the tradeoff - a shared
+placeholder "History Vendor" would merge every removed vendor's track record into one bucket,
+losing exactly the "was this specific vendor good or bad" signal the user's actual reason
+(catching malpractice after the fact) depends on - chose **archiving instead of deleting**:
+the vendor row and everything it was ever tied to stays fully intact and correctly attributed,
+it just drops out of active use.
+
+1. **New `VENDOR_STATUS.ARCHIVED`** alongside pending/approved/rejected. `Vendor` gets
+   `archivedById`/`archivedAt` (mirrors the existing `approvedById`/`approvedAt` pair) via a
+   migration - applied directly to production via the Supabase MCP, matching how prior
+   sessions have handled schema drift on this project (see the standing gotcha on production's
+   migration history vs local files).
+2. **`POST /vendors/:id/archive`** (`vendors.ts`), optional body `{ reassignSitesToVendorId }`.
+   Guards: target (if given) must be a different, currently-approved vendor. In one
+   transaction: optionally bulk-moves the vendor's `Site.vendorId` rows to the target so
+   in-progress erection work doesn't stall, deactivates (`isActive: false`) every one of the
+   vendor's member logins, then flips the vendor to `archived`.
+3. **Every "active" vendor selection already excludes non-approved vendors by construction**
+   (`status === "approved"` filters in the site-vendor-assignment dropdown, the
+   erection-engineer-add dropdown, and email-OTP eligibility in `auth.ts`) - archived vendors
+   fall out of all of these for free, no new filtering needed anywhere.
+4. **Found a real pre-existing gap while designing the login-lockout side effect**: the plain
+   `POST /login` (password) route only ever checks `user.isActive`, never `vendor.status` -
+   unlike OTP, which does check `vendor.status === "approved"`. So a *rejected* vendor's
+   engineer has apparently always been able to keep logging in with their password. Archiving
+   closes this for archived vendors specifically by deactivating their logins outright
+   (`isActive: false`), which both login paths already respect - but the same gap still exists
+   for `rejected` vendors today, untouched by this change. Flagged here rather than fixed,
+   since fixing `reject` wasn't asked for and changes existing behavior for whoever's
+   currently relying on it (if anyone).
+5. **Deliberately no one-click "un-archive" in the UI.** Calling the existing `/approve` route
+   on an archived vendor *would* flip it back to `approved` (its guard only blocks re-approving
+   an *already*-approved vendor), but `createVendorContactLogin` only creates a login for an
+   email that doesn't already exist - it won't reactivate the `isActive: false` row this
+   archive flow just created. Exposing "Reinstate" as a button would silently produce a
+   vendor that looks active but whose engineer still can't log in. Left unbuilt rather than
+   shipping that trap; reactivating a mistakenly-archived vendor today means manually flipping
+   its status via the API/DB and separately reactivating its member `User` row(s).
+6. Frontend: `vendors/page.tsx` gets an **Archive** button (approved vendors only) opening a
+   confirmation modal - shows the vendor's current site count, warns if any exist, offers a
+   dropdown of other approved vendors to reassign them to (or leave as-is), and a result banner
+   afterward showing how many sites moved and where. Gray badge added for the archived state.
+
+Verified: `tsc --noEmit` and each app's own production `tsc -p tsconfig.json` clean, full
+`next build` clean (34 routes), migration applied and confirmed live via a direct column query
+against production. **Not yet exercised as a logged-in user** (standing restriction) and
+**`zan-app-api` deploy still pending** (see Current open items) - the route itself isn't live
+yet, only prepared and migrated.
 
 ### Every delete action in admin-web falsely reported failure (2026-08-16, later still)
 **Report:** user deleted a stale test order (`ORD-2026-4991` - manually created outside the

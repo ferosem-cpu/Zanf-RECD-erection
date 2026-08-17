@@ -88,6 +88,7 @@ model User {
   createdBy            User?              @relation("CreatedBy", fields: [createdById], references: [id])
   otpCodes             OtpCode[]
   vendorsApproved      Vendor[]           @relation("VendorApprover")
+  vendorsArchived      Vendor[]           @relation("VendorArchiver")
   quotationsCreated    Quotation[]        @relation("QuotationCreator")
   invoicesCreated      Invoice[]          @relation("InvoiceCreator")
   paymentsReceived     PaymentReceived[]  @relation("PaymentReceivedRecorder")
@@ -142,7 +143,7 @@ model Customer {
 model Vendor {
   id           String    @id @default(cuid())
   name         String
-  /// "pending" | "approved" | "rejected" - see VENDOR_STATUS in packages/shared.
+  /// "pending" | "approved" | "rejected" | "archived" - see VENDOR_STATUS in packages/shared.
   status       String    @default("pending")
   contactName  String
   contactEmail String    @unique
@@ -151,6 +152,12 @@ model Vendor {
   approvedById String?
   approvedBy   User?     @relation("VendorApprover", fields: [approvedById], references: [id])
   approvedAt   DateTime?
+  /// Set when a Super Admin/Management archives this vendor (see routes/vendors.ts's
+  /// /:id/archive) - the vendor row and all its history (sites, complaints, work orders) stay
+  /// intact, this just records who pulled it out of active use and when.
+  archivedById String?
+  archivedBy   User?     @relation("VendorArchiver", fields: [archivedById], references: [id])
+  archivedAt   DateTime?
   createdAt    DateTime  @default(now())
 
   members User[] @relation("VendorMembers")
