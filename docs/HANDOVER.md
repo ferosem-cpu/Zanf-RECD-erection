@@ -65,22 +65,26 @@ and deployments going forward. Cloned 2026-07-19 from
 sync with Platino's own repo).
 
 > **Session boundary (2026-08-16, later still):** working tree clean, `master`
-> pushed to `origin` with one more commit on top of `31d2955` (the
-> `create_purchase_order` code-reuse fix, see changelog). This was again a
-> cloud/web session - **re-confirmed independently this session** (not just
-> trusting the prior note) that `api.vercel.com` is still blocked at this
-> environment's network-policy level (`curl "$HTTPS_PROXY/__agentproxy/status"`
-> then a direct `CONNECT` attempt both consistent with the prior finding) and
-> no Desktop Commander MCP or reachable sibling session exists to hand the
-> deploy off to (`list_agents` empty). **Both `zan-app-api` deploys are still
-> pending** - the customer-role Users-page guard from `31d2955` AND this
-> session's PO-tool fix - stacked on top of each other now, both needing the
-> one manual deploy dance run together. Also still open: flip on
-> **Settings → Agent Visibility → Customer** in production (customer chat is
-> code-complete and live-verified, see 2026-08-15 changelog, but going live
-> is a deliberate user decision, not a code gate), and the Reports section
-> still hasn't been click-tested as a logged-in user (same "agent can't log
-> into admin-web" restriction blocks that from any session, not just cloud
+> pushed to `origin`, three commits on top of `31d2955` - the
+> `create_purchase_order` code-reuse fix, the `apiClient.ts` 204-response fix
+> (see changelog for both), and this note. **The user ran the `zan-app-api`
+> manual deploy dance themselves this session** (from their own machine, hit
+> and worked past a paste-into-live-PowerShell-prompt issue on the patch
+> script) - **both previously-pending backend fixes (the customer-role
+> Users-page guard from `31d2955`, and the PO-tool cleanup) are now live in
+> production.** Confirmed indirectly: queried the `zan-app` DB directly and
+> found exactly one `customer`-role `User` row, correctly linked via
+> `customerId` - consistent with the guard working - though this cloud
+> session still can't `curl` `zan-app-api.vercel.app` directly (network
+> policy block, unchanged) to re-verify the `POST /users` 400 response
+> live. The `apiClient.ts` fix is frontend-only and ships via the normal
+> `admin-web` git-push auto-deploy, not the manual dance. Still open: flip
+> on **Settings → Agent Visibility → Customer** in production (customer chat
+> is code-complete and live-verified, see 2026-08-15 changelog, but going
+> live is a deliberate user decision, not a code gate), and the Reports
+> section still hasn't been click-tested as a logged-in user (same "agent
+> can't log into admin-web" restriction blocks that from any session, not
+> just cloud
 > ones). Start a new session by reading this file top to bottom before
 > touching anything - "Current open items" and the top of "Changelog" are the
 > fastest way back up to speed.
@@ -262,15 +266,17 @@ same session:
 
 ## Current open items (as of 2026-08-16)
 
-- **`zan-app-api` has TWO deploys pending, stacked on `master`** — both from cloud/web sessions
-  with no way to run the manual deploy dance (see "Tooling note" above, re-confirmed still true
-  2026-08-16): (1) the customer-role Users-page guard (commit `31d2955` — rejecting
-  `roleKey: "customer"` in `POST/PUT /users`; the admin-web half, dropdown removal, is already
-  live), and (2) the `create_purchase_order` agent-tool code-reuse fix (this session, see
-  changelog — behavior-neutral, so nothing is broken by it not being deployed yet, just not
-  benefiting from the fix). Run the deploy dance once from a session with real Desktop
-  Commander/Vercel access to pick up both at once, then verify: `POST /users` with
-  `roleKey: "customer"` → expect 400, not 201.
+- ~~`zan-app-api` has TWO deploys pending...~~ **Deployed 2026-08-16** — the user ran the
+  manual deploy dance themselves. Both the customer-role Users-page guard (`31d2955`) and the
+  `create_purchase_order` code-reuse fix are live in production. Confirmed indirectly via a
+  direct DB query (one `customer`-role `User` row, correctly linked); a live `POST /users`
+  `roleKey: "customer"` → 400 check is still owed since no session so far has had both
+  production credentials and unblocked network access to `zan-app-api.vercel.app` at the same
+  time.
+- **`apiClient.ts` fix for the false-failure-on-delete bug (2026-08-16, see changelog) is
+  pushed but not yet click-tested live** — frontend-only, ships via the normal `admin-web`
+  auto-deploy, no manual dance needed. Owed: confirm a delete action (e.g. deleting a test
+  order) resolves cleanly in the browser instead of throwing, now that the fix is live.
 - **New Reports section (2026-08-16, see changelog) has never been click-tested as a logged-in
   user** — only `tsc`/`next build`/curl-200 verified, per the standing "agent can't log into
   admin-web" restriction below. Owed: a real run through each of the 4 reports' filters, Print,
