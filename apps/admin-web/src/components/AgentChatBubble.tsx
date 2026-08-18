@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ROLE_KEY } from "@recd/shared";
@@ -54,7 +55,6 @@ const markdownComponents: Components = {
   ol: ({ node, ...props }) => <ol className="mb-1.5 ml-4 list-decimal space-y-0.5" {...props} />,
   li: ({ node, ...props }) => <li {...props} />,
   strong: ({ node, ...props }) => <strong className="font-semibold" {...props} />,
-  a: ({ node, ...props }) => <a className="underline text-blue-600" target="_blank" rel="noreferrer" {...props} />,
   code: ({ node, ...props }) => <code className="rounded bg-gray-200 px-1 py-0.5 font-mono text-[11px]" {...props} />,
   table: ({ node, ...props }) => (
     <div className="mb-1.5 -mx-1 overflow-x-auto">
@@ -106,10 +106,12 @@ function labelizeKey(key: string): string {
 
 export default function AgentChatBubble() {
   const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
 
   const [visible, setVisible] = useState(false);
   const [checkedVisibility, setCheckedVisibility] = useState(false);
   const [open, setOpen] = useState(false);
+  const [maximized, setMaximized] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -295,6 +297,36 @@ export default function AgentChatBubble() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
+  // Links to a page within this app (e.g. /orders/{id}) navigate client-side and close the
+  // panel so the user actually sees the page; anything else (shared-document links, etc.)
+  // behaves like a normal external link, opened in a new tab.
+  const markdownComponentsWithLinks: Components = {
+    ...markdownComponents,
+    a: ({ node, href, children, ...props }) => {
+      if (href && href.startsWith("/")) {
+        return (
+          <a
+            {...props}
+            href={href}
+            className="underline text-blue-600"
+            onClick={(e) => {
+              e.preventDefault();
+              setOpen(false);
+              router.push(href);
+            }}
+          >
+            {children}
+          </a>
+        );
+      }
+      return (
+        <a {...props} href={href} className="underline text-blue-600" target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      );
+    },
+  };
+
   if (!checkedVisibility || !visible) return null;
 
   // Render user turns, assistant turns that said something, and any tool-result that's a
@@ -318,7 +350,13 @@ export default function AgentChatBubble() {
       )}
 
       {open && (
-        <div className="fixed bottom-5 right-5 z-50 w-[360px] max-w-[calc(100vw-2.5rem)] h-[520px] max-h-[calc(100vh-3rem)] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-gray-100">
+        <div
+          className={`fixed z-50 bg-white shadow-2xl flex flex-col overflow-hidden border border-gray-100 ${
+            maximized
+              ? "inset-4 rounded-2xl"
+              : "bottom-5 right-5 w-[360px] max-w-[calc(100vw-2.5rem)] h-[520px] max-h-[calc(100vh-3rem)] rounded-2xl"
+          }`}
+        >
           <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
             <span className="font-semibold text-sm">Assistant</span>
             <div className="flex items-center gap-3 text-gray-400">
@@ -327,6 +365,14 @@ export default function AgentChatBubble() {
               </button>
               <button onClick={startNewConversation} className="text-xs hover:text-gray-700" title="New chat">
                 + New
+              </button>
+              <button
+                onClick={() => setMaximized((v) => !v)}
+                className="hover:text-gray-700"
+                aria-label={maximized ? "Minimize" : "Maximize"}
+                title={maximized ? "Minimize" : "Maximize"}
+              >
+                {maximized ? "🗗" : "🗖"}
               </button>
               <button onClick={() => setOpen(false)} className="hover:text-gray-700" aria-label="Close">
                 ✕
@@ -417,7 +463,7 @@ export default function AgentChatBubble() {
                       }`}
                     >
                       {m.role === "assistant" ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponentsWithLinks}>
                           {m.content}
                         </ReactMarkdown>
                       ) : (

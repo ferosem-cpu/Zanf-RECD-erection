@@ -303,6 +303,7 @@ const searchOrdersAndSites: AgentTool = {
       orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
       site: o.site
         ? {
+            id: o.site.id,
             address: o.site.address,
             companyName: o.site.companyName,
             currentStage: o.site.currentStage.label,
