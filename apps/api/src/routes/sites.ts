@@ -116,7 +116,14 @@ sitesRouter.post(
     const parsed = createStageEventSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, include: { order: true } });
+    const site = await prisma.site.findUnique({
+      where: { id: asString(req.params.id) },
+      include: {
+        order: {
+          include: { product: true, lineItems: { include: { product: true } } },
+        },
+      },
+    });
     if (!site) return res.status(404).json({ error: "Site not found" });
     if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
 
@@ -137,10 +144,24 @@ sitesRouter.post(
 
     const customerContact = await prisma.user.findFirst({ where: { customerId: site.order.customerId } });
     if (customerContact) {
+      const recdUnits = [
+        `${site.order.product.name} (${site.order.product.model})${site.order.quantity > 1 ? ` x${site.order.quantity}` : ""}`,
+        ...site.order.lineItems.map(
+          (li) => `${li.product.name} (${li.product.model})${li.quantity > 1 ? ` x${li.quantity}` : ""}`,
+        ),
+      ];
       await sendNotification({
         recipientId: customerContact.id,
         templateKey: "site_stage_updated",
-        data: { stage: event.stageDefinition.label, status: event.statusOption.label, comment: event.comment },
+        data: {
+          stage: event.stageDefinition.label,
+          status: event.statusOption.label,
+          comment: event.comment,
+          orderNumber: site.order.orderNumber,
+          address: site.address,
+          companyName: site.companyName,
+          recdUnits,
+        },
       });
     }
 
