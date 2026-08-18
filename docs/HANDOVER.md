@@ -105,7 +105,7 @@ sync with Platino's own repo).
 | **Production DB** | Supabase project `zan-app`, ref `idqzupopsuusoihpmoqc`, region `ap-south-1` (Mumbai). |
 | **Vercel — admin-web** | `admin-web` project, **git-connected** — push to `master` auto-deploys. URL: `admin-web-three-blush.vercel.app`. |
 | **Vercel — api** | `zan-app-api` project (`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`, team `ferose-salahudeen-s-projects`), **NOT git-connected** — needs the manual deploy dance below every time. URL: `zan-app-api.vercel.app`. |
-| **Google Drive (agent doc search)** | Dedicated account `zanfpowersystems@gmail.com`, folder `ZanF_DropBox` (id `1M3V4MdO0NLMHPJMr7naK0EFGLIT8aIRU`). OAuth client `zan-app-agent-drive` (Desktop type) lives in Cloud project `MyPersonalAgent` (`mypersonalagent-503004`), owned by `ferosem@gmail.com` — **not** `zanfpowersystems@gmail.com`, which only owns the Drive folder itself. Consent screen was **published to production 2026-08-18**, which removed the old 7-day Testing-mode refresh-token expiry (confirmed: a token minted after publishing has no `refresh_token_expires_in` in Google's response at all, vs. exactly 604760s/7d before). Still shows an "unverified app" warning on re-consent since Drive scopes need Google review to fully verify — harmless, just click through Advanced. |
+| **Google Drive (agent doc search + folder creation)** | Dedicated account `zanfpowersystems@gmail.com`, folder `ZanF_DropBox` (id `1M3V4MdO0NLMHPJMr7naK0EFGLIT8aIRU`). OAuth client `zan-app-agent-drive` (Desktop type) lives in Cloud project `MyPersonalAgent` (`mypersonalagent-503004`), owned by `ferosem@gmail.com` — **not** `zanfpowersystems@gmail.com`, which only owns the Drive folder itself. Consent screen was **published to production 2026-08-18**, which removed the old 7-day Testing-mode refresh-token expiry (confirmed: a token minted after publishing has no `refresh_token_expires_in` in Google's response at all, vs. exactly 604760s/7d before). Still shows an "unverified app" warning on re-consent since Drive scopes need Google review to fully verify — harmless, just click through Advanced. **Token scope is `drive.readonly` + `drive.file`** (as of 2026-08-18, later) — readonly alone can search/read pre-existing shared documents but can't create anything, which silently broke "Create Drive folders" even after the expiry was fixed; `drive.file` adds create/manage access scoped to files the app itself creates. Regenerate via `apps/api/scripts/getDriveRefreshToken.js` if this ever needs redoing (kept in the repo, not a one-off). |
 | **Working dir on user's machine** | `D:\Projects\Zan-APP` (reached via the Desktop Commander MCP — see tooling note below, not this harness's own `device_bash`). |
 
 ## Standing architecture (inherited from Platino, unchanged)
@@ -315,11 +315,15 @@ same session:
 
 ## Current open items (as of 2026-08-18)
 
-- **Drive folder creation fixed and deployed (2026-08-18) but not yet click-tested live** -
-  new refresh token generated, verified, deployed; OAuth consent screen published to production so
-  the 7-day expiry is gone for good. See changelog. Owed: click "Create Drive folders" on a real
-  site as a logged-in user and confirm it succeeds (standing "agent can't log into admin-web"
-  restriction blocks this from any session, not just cloud ones).
+- **Drive folder creation fixed and deployed (2026-08-18, two rounds) but not yet click-tested
+  live** - round 1 fixed the expired token + published the consent screen (7-day expiry gone for
+  good); the user then reported the button still didn't work, which turned out to be a second,
+  unrelated problem - the token's scope was `drive.readonly` only, which can't create anything.
+  Round 2 widened the scope to `drive.readonly` + `drive.file` and verified end-to-end by actually
+  creating and deleting a real test folder via the Drive API directly (not just checking the scope
+  string). See changelog for both rounds. Owed: click "Create Drive folders" on a real site as a
+  logged-in user and confirm it succeeds (standing "agent can't log into admin-web" restriction
+  blocks this from any session, not just cloud ones).
 - ~~`zan-app-api` deploy pending: agent tools' `OrderLineItem` fix~~ **Deployed 2026-08-18** - the
   chat agent now sums an order's base quantity plus every `OrderLineItem` when answering "how many
   RECDs at X". Confirmed live via `/health` -> 200 and an auth-gated route -> 401.
@@ -448,6 +452,28 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### "Create Drive folders" still failing after the token-expiry fix - wrong scope, not auth (2026-08-18, later)
+User confirmed the expiry fix (below) didn't actually fix the button - still no folder created.
+Checked the token directly (POST to Google's token endpoint): valid, 200 OK, no expiry issue this
+time. The real problem: its scope was `drive.readonly` only. `drive.files.create()` (what "Create
+Drive folders" calls) needs write access, which `drive.readonly` categorically cannot grant -
+this was likely broken from the very first time the feature was used, not a regression from
+today's fix; the earlier "authentication error" chat message and this session's silent failure
+were two different symptoms of two different problems that happened to overlap in time.
+
+The handover's own prior open item ("File-upload-to-Drive... would need the scope widened from
+drive.readonly to drive.file") had already named the fix for a different feature (uploads) without
+anyone realizing folder creation needed the same widening. Updated
+`getDriveRefreshToken.js` to request both `drive.readonly` (broad read, for pre-existing shared
+documents the app didn't create) and `drive.file` (create/manage access, scoped to files the app
+itself creates) together in one consent grant, re-ran the loopback flow, and this time verified
+end-to-end before shipping - not just decoding the token's scope string, but actually calling
+`POST /drive/v3/files` to create a real test folder and `DELETE` to remove it, using the new
+access token directly. Updated the env var in both places and redeployed (env-only change, reused
+the existing prebuilt build output). **Confirmed this was the last gap** - not yet re-confirmed by
+the user clicking the button live, but the exact same underlying Drive API call the button
+triggers was just proven to work.
 
 ### Drive folder creation silently failing (expired OAuth token) + permanent fix (2026-08-18)
 User reported clicking "Create Drive folders" on a site did nothing and there was no way to
