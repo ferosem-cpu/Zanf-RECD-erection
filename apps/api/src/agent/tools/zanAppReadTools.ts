@@ -231,8 +231,12 @@ const searchOrdersAndSites: AgentTool = {
   name: "search_orders_and_sites",
   description:
     "Search sales orders (and their site's SITC progress) by order number, customer name, " +
-    "site/end-client company name (e.g. 'BPCL', 'VRL'), or site address/location (e.g. " +
-    "'Belgaum', 'Bangalore') - matches any of these, not just order number or customer. " +
+    "site/end-client company name (e.g. 'BPCL', 'VRL'), site address/location (e.g. " +
+    "'Belgaum', 'Bangalore'), or product name/model/rating (e.g. 'RECD-500', '500', " +
+    "'500 KVA') - matches any of these, not just order number or customer. When answering a " +
+    "'how many <rating> RECD are available' question, sum the quantity field plus every " +
+    "additionalLineItems quantity across all matching results yourself - there's no single " +
+    "pre-aggregated total field. " +
     "Returns id, orderNumber, customer, product, quantity, additionalLineItems (extra products " +
     "on the same order, if any - an order can carry more than one RECD/product), order value, " +
     "dispatch dates, and - if a site exists - its address, end-client company name, current " +
@@ -257,6 +261,12 @@ const searchOrdersAndSites: AgentTool = {
             { customer: { name: { contains: query, mode: "insensitive" } } },
             { site: { is: { address: { contains: query, mode: "insensitive" } } } },
             { site: { is: { companyName: { contains: query, mode: "insensitive" } } } },
+            { product: { is: { name: { contains: query, mode: "insensitive" } } } },
+            { product: { is: { model: { contains: query, mode: "insensitive" } } } },
+            { product: { is: { ratingSpec: { contains: query, mode: "insensitive" } } } },
+            { lineItems: { some: { product: { is: { name: { contains: query, mode: "insensitive" } } } } } },
+            { lineItems: { some: { product: { is: { model: { contains: query, mode: "insensitive" } } } } } },
+            { lineItems: { some: { product: { is: { ratingSpec: { contains: query, mode: "insensitive" } } } } } },
           ],
         }
       : {};
