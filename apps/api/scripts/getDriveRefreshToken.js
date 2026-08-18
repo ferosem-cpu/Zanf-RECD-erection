@@ -21,10 +21,18 @@ if (!clientId || !clientSecret) {
 
 const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, REDIRECT_URI);
 
+// drive.readonly alone can't create folders/files (used by search/read tools + folder
+// creation's read-back); drive.file grants create/manage access scoped to files this app
+// itself creates (used by "Create Drive folders" and any future upload feature) - it does
+// NOT on its own allow reading pre-existing shared documents the app didn't create, so both
+// scopes are requested together.
 const authUrl = oauth2Client.generateAuthUrl({
   access_type: "offline",
   prompt: "consent",
-  scope: ["https://www.googleapis.com/auth/drive.readonly"],
+  scope: [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.file",
+  ],
 });
 
 console.log("\nOpen this URL and sign in as zanfpowersystems@gmail.com:\n");
