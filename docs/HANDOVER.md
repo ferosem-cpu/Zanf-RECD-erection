@@ -64,52 +64,58 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-20):** working tree clean, `master` pushed to
-> `origin`. **This was the first session with real local filesystem/shell
-> access to the user's own machine** (not the "cloud session" pattern every
-> prior entry below warns about) - `tsc`, `next build`, and `npm run
-> dev`/`start` were all run directly against `D:\Projects\Zan-APP`, and both
-> `zan-api` (4011) and `zan-admin-web` (6011) were started locally so the
-> user could click-test changes themselves before anything shipped. No
-> Vercel deploy was attempted or needed for the `admin-web` half (git-push
-> auto-deploy handled it); see below for the `zan-app-api` half, which is
-> **not yet deployed**.
+> **Session boundary (2026-08-20, later):** working tree clean, `master`
+> pushed to `origin`, and - a first for this file - **the `zan-app-api`
+> backend was deployed by the session itself**, not handed off to the user.
+> **This was the first session with real local filesystem/shell access to
+> the user's own machine** (not the "cloud session" pattern every prior
+> entry below warns about), and it turned out `api.vercel.com` is actually
+> reachable and the CLI already authenticated against the right project -
+> so the full manual deploy dance was run start to finish in-session for
+> the first time ever recorded here.
 >
 > Built a reusable **`DataTable`** component
 > (`apps/admin-web/src/components/DataTable.tsx`) - per-column show/hide
 > (persisted per page via `localStorage`) and a per-column filter row
 > (dropdown of distinct values for categorical columns, free-text search for
-> columns marked `filterType: "text"`) - and wired it into **Sites**,
-> **Customers**, and **Products** (the other list pages - Vendors, Orders,
-> Invoices, Quotations, Purchase Orders, Expenses, Users, Work Orders,
-> Complaints - still have their old hand-rolled tables; same pattern drops
-> in cleanly whenever asked). Sites also gained four columns that didn't
-> exist in the table before: **Address**, **Product**, **Vendor**, and
-> **Update status** (the label from the site's most recent "Post a status
-> update" entry - `SiteStageEvent.statusOption.label` - deliberately
-> different from **Stage**, which is `currentStage.label`). The Vendor/
-> Product/Update-status columns needed `apps/api/src/routes/sites.ts`'s
-> `GET /sites` list query widened (`order.product`, and each site's latest
-> `stageEvents` via `take: 1`) - **this is a backend change, so it needs the
-> full `zan-app-api` manual deploy dance before it's live in production**,
-> same as every other backend-only change in this file. Not yet deployed.
-> **No DB schema or migration changes this session** - only Prisma
-> `include` widened on an existing query - so there's nothing DB-side that
-> could conflict between local test data and production.
+> columns marked `filterType: "text"`) - and rolled it out to **every list
+> page**: Sites, Customers, Products first, then Vendors, Orders, Invoices,
+> Quotations, Purchase Orders, Expenses, Users, Work Orders, and Complaints
+> in the same session. Sites also gained four columns that didn't exist in
+> the table before: **Address**, **Product**, **Vendor**, and **Update
+> status** (the label from the site's most recent "Post a status update"
+> entry - `SiteStageEvent.statusOption.label` - deliberately different from
+> **Stage**, which is `currentStage.label`).
 >
-> Two build/process gotchas worth knowing for next time, both new this
-> session (see "Known gotchas" below for the full writeups): (1) building
-> `admin-web` via `next build <path>` from outside that directory silently
-> produces an almost-unstyled page - Tailwind's `content` glob in
-> `tailwind.config.js` resolves relative to `process.cwd()`, not the config
-> file's location, and the only symptom is a quiet "content option is
-> missing" build warning, not an error; always build with cwd actually
-> inside `apps/admin-web`. (2) `next start`'s actual server runs as a child
-> process, not the PID `Start-Process` itself returns - killing the
-> launcher PID leaves the real server still bound to port 6011, so the next
-> start attempt fails with `EADDRINUSE` (or worse, silently serves stale
-> output) - always kill whatever `Get-NetTCPConnection -LocalPort 6011
-> -State Listen` actually reports, not the recorded launcher PID.
+> **Mid-session, the user reported a real production crash** on Sites -
+> caused by `admin-web`'s auto-deploy (instant on push) going live with
+> code that assumed `order.product`/`stageEvents` always exist, while
+> `zan-app-api` (needs the manual dance) was still on the old query shape.
+> Root-caused, then fixed two ways: deployed `zan-app-api` (confirmed live -
+> `/health` → 200, `/agent/providers` → 401), and hardened the Sites page
+> with null-checks so a future deploy-order gap degrades instead of
+> crashing. See "Known gotchas" for the durable lesson (don't push a
+> `admin-web`+`api` change together assuming they deploy in lockstep - they
+> don't) and the changelog for the full story. **Not yet re-confirmed by the
+> user that Sites is clean in production post-deploy** - owed, see Current
+> open items.
+>
+> **No DB schema or migration changes this session** - only Prisma
+> `include` widened on an existing query - so there was nothing DB-side that
+> could conflict between local test data and production, despite the local
+> vs. prod confusion above (that was a code/deploy-timing issue, not a data
+> one).
+>
+> Four build/process/deploy gotchas worth knowing for next time, all new
+> this session (see "Known gotchas" and the deploy-dance write-up above for
+> full detail): (1) `next build` for `admin-web` must run with cwd actually
+> inside `apps/admin-web` or Tailwind silently emits near-empty CSS: (2)
+> `next start`'s real server is a child process, not the PID
+> `Start-Process` returns - kill by port, not launcher PID; (3) the
+> `@recd/shared` patch step's spot list changed with a newer Vercel CLI (3
+> spots now, not 5 - see the deploy dance section); (4) pushing `admin-web`
+> and `apps/api` changes together assumes they deploy together, which is
+> false and caused the production crash above.
 >
 > Start a new session by reading this file top to bottom before touching
 > anything - "Current open items" and the top of "Changelog" are the
@@ -168,15 +174,32 @@ needs this sequence from `apps/api`:
    build's output before deploying** - don't rely on step 8's "401 not 404"
    check alone for a *new* route (see why below):
    `Select-String -Path ".vercel\output\functions\api\index.func\apps\api\dist\routes\<file>.js" -Pattern "<distinctive string from the new code>"`.
-6. **Patch `@recd/shared`** into all 5 spots the npm-workspaces symlink
-   doesn't survive Vercel's Windows-symlink-unaware function tracer — this
-   step is required after every fresh build, since each build's own install
-   step wipes it:
+6. **Patch `@recd/shared`** into the spots the npm-workspaces symlink doesn't
+   survive Vercel's Windows-symlink-unaware function tracer — this step is
+   required after every fresh build, since each build's own install step
+   wipes it. **As of Vercel CLI 59.1.4 (2026-08-20) this is only 3 spots, not
+   the 5 an earlier CLI version needed** - `.vercel/output/functions/`
+   now contains only `api/index.func/` (everything is rewritten to
+   `/api/index` per `vercel.json`); the old bare `functions/index.func/`
+   target from prior write-ups no longer exists in the output at all, and
+   trying to patch into it is a silent no-op (its parent directory doesn't
+   exist - skip it, don't create it). The 3 real spots, confirmed
+   2026-08-20:
    - `apps/api/node_modules/@recd/shared`
    - `.vercel/output/functions/api/index.func/node_modules/@recd/shared`
    - `.vercel/output/functions/api/index.func/apps/api/node_modules/@recd/shared`
-   - `.vercel/output/functions/index.func/node_modules/@recd/shared`
-   - `.vercel/output/functions/index.func/apps/api/node_modules/@recd/shared`
+   **The `@recd` scope folder itself doesn't exist yet in a fresh build** -
+   a patch script that only checks/overwrites the final `shared` folder
+   (assuming its parent `@recd` dir is already there) silently no-ops on
+   all three, since `Test-Path` on the *parent* of `@recd/shared` (i.e.
+   `@recd` itself) correctly reports missing, but a script that instead
+   checks the *grandparent* (`node_modules`, which does exist) will think
+   the target is patchable and then fail to actually create anything - the
+   `@recd` intermediate directory must be `New-Item -ItemType Directory`'d
+   before copying into it. Always re-verify the exact spot list by checking
+   what actually exists in *this* build's `.vercel/output/functions/`
+   tree rather than trusting a prior session's list blindly - Vercel CLI
+   upgrades have already changed this layout once.
    Write this as a `.ps1` file via an editor and run it with `-File` rather
    than pasting inline (multi-line pastes into a live PowerShell prompt have
    corrupted before) - and if using `notepad <name>.ps1` to create it,
@@ -241,6 +264,24 @@ same session:
   than attempting the deploy dance from a cloud session - it will not work.
 
 ## Known gotchas (still live)
+
+- **Pushing a single commit that touches both `admin-web` and `apps/api` is dangerous if the
+  frontend change depends on a new/changed API field.** `admin-web` auto-deploys the instant
+  `git push` lands; `zan-app-api` does not deploy until someone runs the full manual dance,
+  which can be minutes to hours later. **Confirmed as a real production outage 2026-08-20**:
+  a commit added `order.product`/`vendor`/`stageEvents`-dependent columns to the Sites page
+  *and* the `sites.ts` `include` that supplies them, in the same push - `admin-web` went live
+  immediately with code calling `s.order.product.name` (no optional chaining, since the field
+  was assumed always present), while production's API still returned the old shape without
+  `product` on `order` at all, so `s.order.product` was `undefined` and the Sites page threw a
+  full client-side exception for every real user, for as long as the API deploy was pending.
+  Local dev looked completely fine throughout (same commit, but the local API dev server picks
+  up backend changes on save) — **local looking fine is not evidence production is fine**
+  whenever the two apps are out of deploy-sync like this. Lesson: either (a) deploy the backend
+  *first* and confirm it live before pushing the dependent frontend change, or (b) if that
+  ordering isn't practical, make the frontend degrade gracefully (optional chaining +
+  fallback text) for fields the *current* production API might not have yet, not just the
+  fields the code assumes will always exist.
 
 - **`next dev` is broken in this environment** (not production-affecting):
   `globals.css`'s `@import`/`@tailwind` lines fail through Next's
@@ -355,17 +396,19 @@ same session:
 
 ## Current open items (as of 2026-08-20)
 
-- **`zan-app-api` deploy pending: Sites list's Vendor/Product/Update-status columns** - the
-  `GET /sites` list query now includes `order.product` and each site's latest `stageEvents`
-  (see 2026-08-20 changelog entry). Live-verified locally against the local dev DB, but the
-  production API still serves the old query shape until the manual deploy dance runs - until
-  then those three columns (and the "Update status" text in the mobile card) will show
-  `undefined`/blank in production even though `admin-web` itself is already live. Verify after
-  deploying with a real site that has at least one status update and a vendor assigned.
-- **`DataTable` (column show/hide + per-column filter) only covers Sites, Customers, and
-  Products so far** (2026-08-20, see changelog) - Vendors, Orders, Invoices, Quotations,
-  Purchase Orders, Expenses, Users, Work Orders, and Complaints still use their original
-  hand-rolled tables. Same component, same pattern - straightforward to extend when asked.
+- ~~`zan-app-api` deploy pending: Sites list's Vendor/Product/Update-status columns~~
+  **Deployed 2026-08-20** - this was the session that also self-ran the deploy dance for the
+  first time (see changelog). The gap between this deploying and `admin-web`'s already-live
+  frontend caused a real production crash on Sites (`order.product` was `undefined` for the
+  window it was undeployed) - fixed by the deploy itself, plus the Sites page was hardened with
+  null-checks as defense-in-depth. **Not yet re-confirmed by the user that Sites loads cleanly
+  in production post-deploy** - owed.
+- **`DataTable` (column show/hide + per-column filter) now covers all list pages** (2026-08-20,
+  see changelog) - Sites/Customers/Products from earlier this session, plus Vendors, Orders,
+  Invoices, Quotations, Purchase Orders, Expenses, Users, Work Orders, and Complaints in the
+  same session. Not yet click-tested live in production by the user (standing "agent can't log
+  into admin-web" restriction applies as always) - owed: a real click-through of the Columns
+  menu and per-column filters on a few of the newly-converted pages.
 - **Drive folder creation fixed and deployed (2026-08-18, two rounds) but not yet click-tested
   live** - round 1 fixed the expired token + published the consent screen (7-day expiry gone for
   good); the user then reported the button still didn't work, which turned out to be a second,
@@ -503,6 +546,59 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### DataTable rolled out to all remaining list pages; self-run `zan-app-api` deploy fixes a real production Sites crash (2026-08-20, later)
+Picked up from "Current open items" - user asked for the same `DataTable` (column show/hide +
+per-column filter) treatment on **Vendors, Orders, Invoices, Quotations, Purchase Orders,
+Expenses, Users, Work Orders, and Complaints**, matching the shape already shipped on Sites/
+Customers/Products. Converted all nine: each page's hand-rolled `<table>` became a `DataTable`
+column config (multi-line cells like Vendors' name+address or contact name+email/phone became
+a single column with a custom `render`; delete/edit/manage action buttons became an
+`alwaysVisible`, `filterable: false` actions column), while every page's existing mobile card
+list was left as hand-written JSX, now driven by the filtered-rows render-prop instead of the
+raw state array so mobile stays in sync with active filters. `tsc --noEmit` and a full `next
+build` (all 33 routes) both clean throughout.
+
+**Before finishing, the user reported "Application error: a client-side exception" on Sites in
+production** - this genuinely was a bug, and a useful one to understand. The Sites page columns
+added in the prior session's push (Vendor/Product/Update-status) read `s.order.product.name`
+and `s.stageEvents[0]` with no null-guard, correctly assuming the API always returns those
+fields - which it does *once the backend is deployed*. But that push landed both the frontend
+change and the `sites.ts` backend `include` change in one commit, and `admin-web` (git-connected,
+auto-deploys instantly) went live immediately while `zan-app-api` (not git-connected, needs the
+manual dance) was still sitting on the old query shape - so for every real user, `order.product`
+was `undefined` on the live site until the backend deploy caught up. Local dev looked completely
+fine the whole time, which delayed diagnosis - the local API dev server had the new code from the
+start, so this class of bug is invisible locally by construction. See the new "Known gotchas" entry
+above for the lesson (deploy backend first, or degrade gracefully for fields that might not exist
+in *production* yet even if they always exist in code).
+
+**This was also the first session able to run the manual deploy dance itself** - a prior
+assumption (baked into this file for weeks) was that only a session with Desktop Commander
+access to the user's own machine could reach `api.vercel.com`; this session had real local
+shell access and confirmed `api.vercel.com` was reachable and `vercel pull` authenticated
+cleanly against `ferose-salahudeen-s-projects/zan-app-api` with no token wrangling needed (the
+project was already linked from a prior session's `.vercel/project.json`). Ran the actual dance
+end to end: stopped the local API dev server, cleared stale `.vercel/output`/`dist`, `vercel
+build --prod` (~15 min, confirmed via a background watcher rather than blocking), verified
+`stageEvents`/`order.product` present in the compiled output before deploying, patched
+`@recd/shared`, and `vercel deploy --prebuilt --prod`. **The patch step needed updating**:
+Vercel CLI 59.1.4's output layout only has 3 real `@recd/shared` spots now, not the 5 documented
+from an earlier CLI version - the old `functions/index.func/` target doesn't exist in this
+layout at all (everything rewrites through `functions/api/index.func/` per `vercel.json`), and a
+first patch-script attempt silently no-opped on all three real spots because it checked
+`node_modules` (which already existed) rather than the missing `@recd` scope folder one level
+deeper - fixed by explicitly `New-Item`-ing the `@recd` directory before copying into it. Updated
+the deploy-dance write-up above with the corrected spot list and the general warning to
+re-verify against the actual build output tree rather than trusting a prior write-up blindly,
+since this has now changed once already. Verified live: `GET /health` → 200,
+`GET /agent/providers` → 401. This should have fixed the Sites crash immediately, since
+production's API now returns the same shape the already-deployed frontend expects - not yet
+re-confirmed by the user in the live UI as of this writing.
+
+Also hardened the Sites page itself as defense-in-depth per the lesson above: `order.product`
+is now read with a null-check (renders "-" instead of crashing) both in the table column and the
+mobile card, so a future deploy-order mismatch degrades instead of taking the whole page down.
 
 ### Reusable `DataTable` (column show/hide + per-column filter) on Sites, Customers, Products; four new Sites columns (2026-08-20)
 User asked for two things on the Sites/Customers/Products list pages: the ability to

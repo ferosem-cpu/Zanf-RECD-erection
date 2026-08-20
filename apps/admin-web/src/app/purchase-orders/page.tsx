@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { formatINR, formatDate, PO_STATUS_LABEL, statusPillClass } from "@/lib/finance";
+import { DataTable } from "@/components/DataTable";
 
 interface PoRow {
   id: string;
@@ -82,48 +83,45 @@ export default function PurchaseOrdersPage() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">PO #</th>
-                <th className="px-4 py-3">Supplier</th>
-                <th className="px-4 py-3">Order date</th>
-                <th className="px-4 py-3">Total</th>
-                <th className="px-4 py-3">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rows.map((r) => (
-                <tr key={r.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold"><Link href={`/purchase-orders/${r.id}`} className="text-[var(--theme-accent)] hover:underline">{r.poNumber}</Link></td>
-                  <td className="px-4 py-3">{r.supplier.name}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.orderDate)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{formatINR(r.total)}</td>
-                  <td className="px-4 py-3"><span className={statusPillClass(r.status)}>{PO_STATUS_LABEL[r.status] ?? r.status}</span></td>
-                </tr>
-              ))}
-              {rows.length === 0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">No purchase orders yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="cards-mobile">
-        {rows.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No purchase orders yet.</div>
-        ) : rows.map((r) => (
-          <Link key={r.id} href={`/purchase-orders/${r.id}`} className="data-card block">
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <span className="font-mono text-xs font-semibold text-gray-900">{r.poNumber}</span>
-              <span className={statusPillClass(r.status)}>{PO_STATUS_LABEL[r.status] ?? r.status}</span>
-            </div>
-            <p className="text-sm font-semibold text-gray-900 truncate">{r.supplier.name}</p>
-            <div className="data-card-row"><span className="label">Total</span><span className="value font-semibold">{formatINR(r.total)}</span></div>
-          </Link>
-        ))}
-      </div>
+      <DataTable
+        storageKey="purchase-orders"
+        rows={rows}
+        rowKey={(r) => r.id}
+        emptyMessage="No purchase orders yet."
+        columns={[
+          {
+            key: "poNumber",
+            label: "PO #",
+            accessor: (r) => r.poNumber,
+            filterType: "text",
+            alwaysVisible: true,
+            render: (r) => <Link href={`/purchase-orders/${r.id}`} className="font-mono text-xs font-semibold text-[var(--theme-accent)] hover:underline">{r.poNumber}</Link>,
+          },
+          { key: "supplier", label: "Supplier", accessor: (r) => r.supplier.name },
+          { key: "orderDate", label: "Order date", accessor: (r) => formatDate(r.orderDate), filterType: "text" },
+          { key: "total", label: "Total", accessor: (r) => r.total, filterType: "text", render: (r) => formatINR(r.total) },
+          { key: "status", label: "Status", accessor: (r) => PO_STATUS_LABEL[r.status] ?? r.status, render: (r) => <span className={statusPillClass(r.status)}>{PO_STATUS_LABEL[r.status] ?? r.status}</span> },
+        ]}
+      >
+        {(filteredRows) => (
+          <div className="cards-mobile">
+            {filteredRows.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {rows.length === 0 ? "No purchase orders yet." : "No rows match the current filters."}
+              </div>
+            ) : filteredRows.map((r) => (
+              <Link key={r.id} href={`/purchase-orders/${r.id}`} className="data-card block">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <span className="font-mono text-xs font-semibold text-gray-900">{r.poNumber}</span>
+                  <span className={statusPillClass(r.status)}>{PO_STATUS_LABEL[r.status] ?? r.status}</span>
+                </div>
+                <p className="text-sm font-semibold text-gray-900 truncate">{r.supplier.name}</p>
+                <div className="data-card-row"><span className="label">Total</span><span className="value font-semibold">{formatINR(r.total)}</span></div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

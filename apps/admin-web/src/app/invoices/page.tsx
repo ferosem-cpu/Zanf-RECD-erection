@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { formatINR, formatDate, INVOICE_STATUS_LABEL, statusPillClass } from "@/lib/finance";
+import { DataTable } from "@/components/DataTable";
 
 interface InvoiceRow {
   id: string;
@@ -155,64 +156,70 @@ export default function InvoicesPage() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">Invoice #</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Customer</th>
-                <th className="px-4 py-3">Issue date</th>
-                <th className="px-4 py-3">Invoice amount</th>
-                <th className="px-4 py-3">GST</th>
-                <th className="px-4 py-3">Total</th>
-                <th className="px-4 py-3">Balance</th>
-                <th className="px-4 py-3">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rows.map((r) => (
-                <tr key={r.id} className={r.overdue ? "bg-red-50/40 hover:bg-red-50/60" : "hover:bg-gray-50/60"}>
-                  <td className="px-4 py-3 font-mono text-xs font-semibold"><Link href={`/invoices/${r.id}`} className="text-[var(--theme-accent)] hover:underline">{r.invoiceNumber}</Link></td>
-                  <td className="px-4 py-3 text-gray-500">{r.docType === "tax_invoice" ? "Tax" : "Proforma"}</td>
-                  <td className="px-4 py-3">{r.customer.name}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.issueDate)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{formatINR(r.subtotal)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{formatINR(String(parseFloat(r.cgstAmount) + parseFloat(r.sgstAmount) + parseFloat(r.igstAmount)))}</td>
-                  <td className="px-4 py-3 whitespace-nowrap font-semibold">{formatINR(r.total)}</td>
-                  <td className="px-4 py-3 whitespace-nowrap">{formatINR(r.balance)}</td>
-                  <td className="px-4 py-3">
-                    <span className={statusPillClass(r.status)}>{INVOICE_STATUS_LABEL[r.status] ?? r.status}</span>
-                    {r.overdue && <span className="ml-2 text-xs text-red-600 font-medium">Overdue</span>}
-                  </td>
-                </tr>
-              ))}
-              {rows.length === 0 && <tr><td colSpan={9} className="px-4 py-8 text-center text-gray-400">No invoices yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="cards-mobile">
-        {rows.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No invoices yet.</div>
-        ) : (
-          rows.map((r) => (
-            <Link key={r.id} href={`/invoices/${r.id}`} className="data-card block">
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <span className="font-mono text-xs font-semibold text-gray-900">{r.invoiceNumber}</span>
+      <DataTable
+        storageKey="invoices"
+        rows={rows}
+        rowKey={(r) => r.id}
+        emptyMessage="No invoices yet."
+        columns={[
+          {
+            key: "invoiceNumber",
+            label: "Invoice #",
+            accessor: (r) => r.invoiceNumber,
+            filterType: "text",
+            alwaysVisible: true,
+            render: (r) => <Link href={`/invoices/${r.id}`} className="font-mono text-xs font-semibold text-[var(--theme-accent)] hover:underline">{r.invoiceNumber}</Link>,
+          },
+          { key: "type", label: "Type", accessor: (r) => (r.docType === "tax_invoice" ? "Tax" : "Proforma") },
+          { key: "customer", label: "Customer", accessor: (r) => r.customer.name },
+          { key: "issueDate", label: "Issue date", accessor: (r) => formatDate(r.issueDate), filterType: "text" },
+          { key: "amount", label: "Invoice amount", accessor: (r) => r.subtotal, filterType: "text", render: (r) => formatINR(r.subtotal) },
+          {
+            key: "gst",
+            label: "GST",
+            accessor: (r) => parseFloat(r.cgstAmount) + parseFloat(r.sgstAmount) + parseFloat(r.igstAmount),
+            filterType: "text",
+            render: (r) => formatINR(String(parseFloat(r.cgstAmount) + parseFloat(r.sgstAmount) + parseFloat(r.igstAmount))),
+          },
+          { key: "total", label: "Total", accessor: (r) => r.total, filterType: "text", render: (r) => <span className="font-semibold">{formatINR(r.total)}</span> },
+          { key: "balance", label: "Balance", accessor: (r) => r.balance, filterType: "text", render: (r) => formatINR(r.balance) },
+          {
+            key: "status",
+            label: "Status",
+            accessor: (r) => INVOICE_STATUS_LABEL[r.status] ?? r.status,
+            render: (r) => (
+              <>
                 <span className={statusPillClass(r.status)}>{INVOICE_STATUS_LABEL[r.status] ?? r.status}</span>
+                {r.overdue && <span className="ml-2 text-xs text-red-600 font-medium">Overdue</span>}
+              </>
+            ),
+          },
+        ]}
+      >
+        {(filteredRows) => (
+          <div className="cards-mobile">
+            {filteredRows.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {rows.length === 0 ? "No invoices yet." : "No rows match the current filters."}
               </div>
-              <p className="text-sm font-semibold text-gray-900 truncate">{r.customer.name}</p>
-              <div className="data-card-row"><span className="label">Amount</span><span className="value">{formatINR(r.subtotal)}</span></div>
-              <div className="data-card-row"><span className="label">GST</span><span className="value">{formatINR(String(parseFloat(r.cgstAmount) + parseFloat(r.sgstAmount) + parseFloat(r.igstAmount)))}</span></div>
-              <div className="data-card-row"><span className="label">Total</span><span className="value">{formatINR(r.total)}</span></div>
-              <div className="data-card-row"><span className="label">Balance</span><span className="value font-semibold">{formatINR(r.balance)}</span></div>
-            </Link>
-          ))
+            ) : (
+              filteredRows.map((r) => (
+                <Link key={r.id} href={`/invoices/${r.id}`} className="data-card block">
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <span className="font-mono text-xs font-semibold text-gray-900">{r.invoiceNumber}</span>
+                    <span className={statusPillClass(r.status)}>{INVOICE_STATUS_LABEL[r.status] ?? r.status}</span>
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{r.customer.name}</p>
+                  <div className="data-card-row"><span className="label">Amount</span><span className="value">{formatINR(r.subtotal)}</span></div>
+                  <div className="data-card-row"><span className="label">GST</span><span className="value">{formatINR(String(parseFloat(r.cgstAmount) + parseFloat(r.sgstAmount) + parseFloat(r.igstAmount)))}</span></div>
+                  <div className="data-card-row"><span className="label">Total</span><span className="value">{formatINR(r.total)}</span></div>
+                  <div className="data-card-row"><span className="label">Balance</span><span className="value font-semibold">{formatINR(r.balance)}</span></div>
+                </Link>
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

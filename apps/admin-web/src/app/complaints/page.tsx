@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { COMPLAINT_STATUS } from "@recd/shared";
+import { DataTable } from "@/components/DataTable";
 
 interface ComplaintRow {
   id: string;
@@ -123,79 +124,66 @@ export default function ComplaintsPage() {
       )}
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      {/* Desktop table */}
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">Ticket</th>
-                <th className="px-4 py-3">Customer</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Severity</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Assigned to</th>
-                <th className="px-4 py-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {complaints.map((c) => (
-                <tr key={c.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold">{c.ticketNumber}</td>
-                  <td className="px-4 py-3">{c.site?.order.customer.name ?? "—"}</td>
-                  <td className="px-4 py-3 capitalize">{pretty(c.category)}</td>
-                  <td className="px-4 py-3 capitalize">{c.severity}</td>
-                  <td className="px-4 py-3">
-                    <span className={statusBadge(c.status)}>
-                      {pretty(c.status)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">{c.assignedTo?.name ?? "Unassigned"}</td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => openEditor(c)}
-                      className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
-                    >
-                      {canManage ? "Manage" : "Update"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {complaints.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No complaints to show.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Mobile cards */}
-      <div className="cards-mobile" data-testid="complaints-mobile-cards">
-        {complaints.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No complaints to show.</div>
-        ) : (
-          complaints.map((c) => (
-            <div key={c.id} className="data-card" data-testid={`complaint-card-${c.ticketNumber}`}>
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <span className="font-mono text-xs font-semibold text-gray-900">{c.ticketNumber}</span>
-                <span className={statusBadge(c.status)}>
-                  {pretty(c.status)}
-                </span>
-              </div>
-              <p className="text-sm font-semibold text-gray-900 truncate">{c.site?.order.customer.name ?? "—"}</p>
-              <p className="text-xs text-gray-500 capitalize">{pretty(c.category)} · {c.severity}</p>
-              <p className="text-xs text-gray-500 mt-1">Assigned: {c.assignedTo?.name ?? "Unassigned"}</p>
+      <DataTable
+        storageKey="complaints"
+        rows={complaints}
+        rowKey={(c) => c.id}
+        emptyMessage="No complaints to show."
+        columns={[
+          { key: "ticket", label: "Ticket", accessor: (c) => c.ticketNumber, filterType: "text", alwaysVisible: true, render: (c) => <span className="font-mono text-xs font-semibold">{c.ticketNumber}</span> },
+          { key: "customer", label: "Customer", accessor: (c) => c.site?.order.customer.name ?? "" },
+          { key: "category", label: "Category", accessor: (c) => pretty(c.category) },
+          { key: "severity", label: "Severity", accessor: (c) => c.severity },
+          { key: "status", label: "Status", accessor: (c) => pretty(c.status), render: (c) => <span className={statusBadge(c.status)}>{pretty(c.status)}</span> },
+          { key: "assignedTo", label: "Assigned to", accessor: (c) => c.assignedTo?.name ?? "Unassigned" },
+          {
+            key: "action",
+            label: "Action",
+            align: "right",
+            alwaysVisible: true,
+            filterable: false,
+            render: (c) => (
               <button
                 onClick={() => openEditor(c)}
-                className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
-                data-testid={`complaint-action-${c.ticketNumber}`}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
               >
                 {canManage ? "Manage" : "Update"}
               </button>
-            </div>
-          ))
+            ),
+          },
+        ]}
+      >
+        {(filteredComplaints) => (
+          <div className="cards-mobile" data-testid="complaints-mobile-cards">
+            {filteredComplaints.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {complaints.length === 0 ? "No complaints to show." : "No rows match the current filters."}
+              </div>
+            ) : (
+              filteredComplaints.map((c) => (
+                <div key={c.id} className="data-card" data-testid={`complaint-card-${c.ticketNumber}`}>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <span className="font-mono text-xs font-semibold text-gray-900">{c.ticketNumber}</span>
+                    <span className={statusBadge(c.status)}>
+                      {pretty(c.status)}
+                    </span>
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{c.site?.order.customer.name ?? "—"}</p>
+                  <p className="text-xs text-gray-500 capitalize">{pretty(c.category)} · {c.severity}</p>
+                  <p className="text-xs text-gray-500 mt-1">Assigned: {c.assignedTo?.name ?? "Unassigned"}</p>
+                  <button
+                    onClick={() => openEditor(c)}
+                    className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
+                    data-testid={`complaint-action-${c.ticketNumber}`}
+                  >
+                    {canManage ? "Manage" : "Update"}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {editing && (
         <div className="modal-backdrop" onClick={() => setEditing(null)}>

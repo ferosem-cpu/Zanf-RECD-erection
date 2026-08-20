@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+import { DataTable } from "@/components/DataTable";
 
 interface OrderRow {
   id: string;
@@ -186,67 +187,70 @@ function OrdersPageInner() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      {/* Desktop / tablet: table */}
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">Order #</th>
-                <th className="px-4 py-3">Site name</th>
-                <th className="px-4 py-3">Customer</th>
-                <th className="px-4 py-3">Product</th>
-                <th className="px-4 py-3">Value</th>
-                <th className="px-4 py-3">Current stage</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {orders.map((o) => (
-                <tr key={o.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold">
-                    <Link href={`/orders/${o.id}`} className="hover:underline" style={{ color: "var(--theme-primary)" }}>
-                      {o.orderNumber}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">{o.site?.companyName ?? "-"}</td>
-                  <td className="px-4 py-3">{o.customer.name}</td>
-                  <td className="px-4 py-3">{o.product.name} ({o.product.model})</td>
-                  <td className="px-4 py-3 whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</td>
-                  <td className="px-4 py-3">{o.site?.currentStage.label ?? "-"}</td>
-                </tr>
-              ))}
-              {orders.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No orders yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Mobile: card stack */}
-      <div className="cards-mobile" data-testid="orders-mobile-cards">
-        {orders.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No orders yet.</div>
-        ) : (
-          orders.map((o) => (
-            <Link key={o.id} href={`/orders/${o.id}`} className="data-card block" data-testid={`order-card-${o.orderNumber}`}>
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <span className="font-mono text-xs font-semibold text-gray-900">{o.orderNumber}</span>
-                <span className="badge badge-accent">{o.site?.currentStage.label ?? "—"}</span>
+      <DataTable
+        storageKey="orders"
+        rows={orders}
+        rowKey={(o) => o.id}
+        emptyMessage="No orders yet."
+        columns={[
+          {
+            key: "orderNumber",
+            label: "Order #",
+            accessor: (o) => o.orderNumber,
+            filterType: "text",
+            alwaysVisible: true,
+            render: (o) => (
+              <Link href={`/orders/${o.id}`} className="font-mono text-xs font-semibold hover:underline" style={{ color: "var(--theme-primary)" }}>
+                {o.orderNumber}
+              </Link>
+            ),
+          },
+          { key: "siteName", label: "Site name", accessor: (o) => o.site?.companyName ?? "", filterType: "text" },
+          { key: "customer", label: "Customer", accessor: (o) => o.customer.name },
+          {
+            key: "product",
+            label: "Product",
+            accessor: (o) => `${o.product.name} (${o.product.model})`,
+            render: (o) => <>{o.product.name} ({o.product.model})</>,
+          },
+          {
+            key: "value",
+            label: "Value",
+            accessor: (o) => Number(o.value),
+            filterType: "text",
+            render: (o) => <span className="whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</span>,
+          },
+          { key: "stage", label: "Current stage", accessor: (o) => o.site?.currentStage.label ?? "" },
+        ]}
+      >
+        {(filteredOrders) => (
+          <div className="cards-mobile" data-testid="orders-mobile-cards">
+            {filteredOrders.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {orders.length === 0 ? "No orders yet." : "No rows match the current filters."}
               </div>
-              {o.site?.companyName && (
-                <p className="text-sm font-semibold text-gray-900 truncate">{o.site.companyName}</p>
-              )}
-              <p className="text-xs text-gray-500 truncate">{o.customer.name}</p>
-              <p className="text-xs text-gray-500 mb-2 truncate">{o.product.name} ({o.product.model})</p>
-              <div className="data-card-row">
-                <span className="label">Value</span>
-                <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>
-              </div>
-            </Link>
-          ))
+            ) : (
+              filteredOrders.map((o) => (
+                <Link key={o.id} href={`/orders/${o.id}`} className="data-card block" data-testid={`order-card-${o.orderNumber}`}>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <span className="font-mono text-xs font-semibold text-gray-900">{o.orderNumber}</span>
+                    <span className="badge badge-accent">{o.site?.currentStage.label ?? "—"}</span>
+                  </div>
+                  {o.site?.companyName && (
+                    <p className="text-sm font-semibold text-gray-900 truncate">{o.site.companyName}</p>
+                  )}
+                  <p className="text-xs text-gray-500 truncate">{o.customer.name}</p>
+                  <p className="text-xs text-gray-500 mb-2 truncate">{o.product.name} ({o.product.model})</p>
+                  <div className="data-card-row">
+                    <span className="label">Value</span>
+                    <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>
+                  </div>
+                </Link>
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { WORK_ORDER_STATUS } from "@recd/shared";
+import { DataTable } from "@/components/DataTable";
 
 interface WorkOrderRow {
   id: string;
@@ -180,75 +181,64 @@ export default function WorkOrdersPage() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      {/* Desktop table */}
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">WO #</th>
-                <th className="px-4 py-3">Customer</th>
-                <th className="px-4 py-3">Task</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Assigned to</th>
-                <th className="px-4 py-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {workOrders.map((w) => (
-                <tr key={w.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3 font-mono text-xs font-semibold">{w.workOrderNumber}</td>
-                  <td className="px-4 py-3">{w.site.order.customer.name}</td>
-                  <td className="px-4 py-3">{w.title}</td>
-                  <td className="px-4 py-3 capitalize">{pretty(w.taskType)}</td>
-                  <td className="px-4 py-3">
-                    <span className={statusBadge(w.status)}>{pretty(w.status)}</span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-600">{w.assignedTo?.name ?? "Unassigned"}</td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => openEditor(w)}
-                      className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
-                    >
-                      {canManage ? "Manage" : "Update"}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {workOrders.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No work orders yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Mobile cards */}
-      <div className="cards-mobile" data-testid="work-orders-mobile-cards">
-        {workOrders.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No work orders yet.</div>
-        ) : (
-          workOrders.map((w) => (
-            <div key={w.id} className="data-card" data-testid={`work-order-card-${w.workOrderNumber}`}>
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <span className="font-mono text-xs font-semibold text-gray-900">{w.workOrderNumber}</span>
-                <span className={statusBadge(w.status)}>{pretty(w.status)}</span>
-              </div>
-              <p className="text-sm font-semibold text-gray-900 truncate">{w.title}</p>
-              <p className="text-xs text-gray-500 truncate">{w.site.order.customer.name} · {pretty(w.taskType)}</p>
-              <p className="text-xs text-gray-500 mt-1">Assigned: {w.assignedTo?.name ?? "Unassigned"}</p>
+      <DataTable
+        storageKey="work-orders"
+        rows={workOrders}
+        rowKey={(w) => w.id}
+        emptyMessage="No work orders yet."
+        columns={[
+          { key: "workOrderNumber", label: "WO #", accessor: (w) => w.workOrderNumber, filterType: "text", alwaysVisible: true, render: (w) => <span className="font-mono text-xs font-semibold">{w.workOrderNumber}</span> },
+          { key: "customer", label: "Customer", accessor: (w) => w.site.order.customer.name },
+          { key: "task", label: "Task", accessor: (w) => w.title, filterType: "text" },
+          { key: "type", label: "Type", accessor: (w) => pretty(w.taskType) },
+          { key: "status", label: "Status", accessor: (w) => pretty(w.status), render: (w) => <span className={statusBadge(w.status)}>{pretty(w.status)}</span> },
+          { key: "assignedTo", label: "Assigned to", accessor: (w) => w.assignedTo?.name ?? "Unassigned" },
+          {
+            key: "action",
+            label: "Action",
+            align: "right",
+            alwaysVisible: true,
+            filterable: false,
+            render: (w) => (
               <button
                 onClick={() => openEditor(w)}
-                className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
-                data-testid={`work-order-action-${w.workOrderNumber}`}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
               >
                 {canManage ? "Manage" : "Update"}
               </button>
-            </div>
-          ))
+            ),
+          },
+        ]}
+      >
+        {(filteredWorkOrders) => (
+          <div className="cards-mobile" data-testid="work-orders-mobile-cards">
+            {filteredWorkOrders.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {workOrders.length === 0 ? "No work orders yet." : "No rows match the current filters."}
+              </div>
+            ) : (
+              filteredWorkOrders.map((w) => (
+                <div key={w.id} className="data-card" data-testid={`work-order-card-${w.workOrderNumber}`}>
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <span className="font-mono text-xs font-semibold text-gray-900">{w.workOrderNumber}</span>
+                    <span className={statusBadge(w.status)}>{pretty(w.status)}</span>
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900 truncate">{w.title}</p>
+                  <p className="text-xs text-gray-500 truncate">{w.site.order.customer.name} · {pretty(w.taskType)}</p>
+                  <p className="text-xs text-gray-500 mt-1">Assigned: {w.assignedTo?.name ?? "Unassigned"}</p>
+                  <button
+                    onClick={() => openEditor(w)}
+                    className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-semibold hover:bg-gray-50"
+                    data-testid={`work-order-action-${w.workOrderNumber}`}
+                  >
+                    {canManage ? "Manage" : "Update"}
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

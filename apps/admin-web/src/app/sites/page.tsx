@@ -62,12 +62,15 @@ const columns: DataTableColumn<SiteRow>[] = [
   {
     key: "product",
     label: "Product",
-    accessor: (s) => `${s.order.product.name} (${s.order.product.model})`,
-    render: (s) => (
-      <>
-        {s.order.product.name} <span className="text-gray-400 font-mono text-xs">{s.order.product.model}</span>
-      </>
-    ),
+    accessor: (s) => (s.order.product ? `${s.order.product.name} (${s.order.product.model})` : ""),
+    render: (s) =>
+      s.order.product ? (
+        <>
+          {s.order.product.name} <span className="text-gray-400 font-mono text-xs">{s.order.product.model}</span>
+        </>
+      ) : (
+        "-"
+      ),
   },
   { key: "stage", label: "Stage", accessor: (s) => s.currentStage.label },
   { key: "updateStatus", label: "Update status", accessor: (s) => updateStatus(s) },
@@ -132,7 +135,7 @@ export default function SitesPage() {
                   )}
                   <div className="data-card-row">
                     <span className="label">Product</span>
-                    <span className="value">{s.order.product.name} ({s.order.product.model})</span>
+                    <span className="value">{s.order.product ? `${s.order.product.name} (${s.order.product.model})` : "-"}</span>
                   </div>
                   <div className="data-card-row">
                     <span className="label">Engineer</span>

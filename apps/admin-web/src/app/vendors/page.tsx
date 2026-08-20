@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { DataTable, DataTableColumn } from "@/components/DataTable";
 
 interface Vendor {
   id: string;
@@ -175,95 +176,105 @@ export default function VendorsPage() {
         </div>
       )}
 
-      {/* ── Vendors table (desktop) ───────────────────────────────────── */}
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-5 py-3">Vendor</th>
-                <th className="px-5 py-3">Contact</th>
-                <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3">Engineers</th>
-                <th className="px-5 py-3">Sites</th>
-                <th className="px-5 py-3 text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {vendors.map((v) => (
-                <tr key={v.id} className="hover:bg-gray-50/60">
-                  <td className="px-5 py-3">
-                    <div className="font-medium">{v.name}</div>
-                    <div className="text-xs text-gray-400">{v.address ?? "—"}</div>
-                  </td>
-                  <td className="px-5 py-3">
-                    <div>{v.contactName}</div>
-                    <div className="text-xs text-gray-400">{v.contactEmail}{v.contactPhone ? ` · ${v.contactPhone}` : ""}</div>
-                  </td>
-                  <td className="px-5 py-3">
-                    <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${statusBadge(v.status)}`}>{v.status}</span>
-                  </td>
-                  <td className="px-5 py-3 text-gray-600">{v._count.members}</td>
-                  <td className="px-5 py-3 text-gray-600">{v._count.sites}</td>
-                  <td className="px-5 py-3">
-                    <div className="flex items-center justify-end gap-2">
-                      {v.status === "pending" ? (
-                        <>
-                          <button
-                            onClick={() => approve(v)}
-                            disabled={busy === v.id}
-                            className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                          >
-                            {busy === v.id ? "…" : "Approve"}
-                          </button>
-                          <button
-                            onClick={() => reject(v)}
-                            disabled={busy === v.id}
-                            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      ) : v.status === "rejected" ? (
-                        <button
-                          onClick={() => approve(v)}
-                          disabled={busy === v.id}
-                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                        >
-                          Reconsider
-                        </button>
-                      ) : v.status === "archived" ? (
-                        <span className="text-xs text-gray-400">Archived {v.archivedAt ? new Date(v.archivedAt).toLocaleDateString() : ""}</span>
-                      ) : (
-                        <>
-                          <span className="text-xs text-gray-400">Approved {v.approvedAt ? new Date(v.approvedAt).toLocaleDateString() : ""}</span>
-                          <button
-                            onClick={() => openArchive(v)}
-                            disabled={busy === v.id}
-                            className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                          >
-                            Archive
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {vendors.length === 0 && (
-                <tr><td colSpan={6} className="px-5 py-8 text-center text-gray-400">No vendors registered yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ── Vendors cards (mobile) ────────────────────────────────────── */}
-      <div className="cards-mobile" data-testid="vendors-mobile-cards">
-        {vendors.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No vendors registered yet.</div>
-        ) : (
-          vendors.map((v) => (
+      <DataTable
+        storageKey="vendors"
+        rows={vendors}
+        rowKey={(v) => v.id}
+        emptyMessage="No vendors registered yet."
+        columns={[
+          {
+            key: "name",
+            label: "Vendor",
+            accessor: (v) => v.name,
+            filterType: "text",
+            alwaysVisible: true,
+            render: (v) => (
+              <>
+                <div className="font-medium">{v.name}</div>
+                <div className="text-xs text-gray-400">{v.address ?? "—"}</div>
+              </>
+            ),
+          },
+          {
+            key: "contact",
+            label: "Contact",
+            accessor: (v) => `${v.contactName} ${v.contactEmail} ${v.contactPhone ?? ""}`,
+            filterType: "text",
+            render: (v) => (
+              <>
+                <div>{v.contactName}</div>
+                <div className="text-xs text-gray-400">{v.contactEmail}{v.contactPhone ? ` · ${v.contactPhone}` : ""}</div>
+              </>
+            ),
+          },
+          {
+            key: "status",
+            label: "Status",
+            accessor: (v) => v.status,
+            render: (v) => <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${statusBadge(v.status)}`}>{v.status}</span>,
+          },
+          { key: "engineers", label: "Engineers", accessor: (v) => v._count.members },
+          { key: "sites", label: "Sites", accessor: (v) => v._count.sites },
+          {
+            key: "action",
+            label: "Action",
+            align: "right",
+            alwaysVisible: true,
+            filterable: false,
+            render: (v) => (
+              <div className="flex items-center justify-end gap-2">
+                {v.status === "pending" ? (
+                  <>
+                    <button
+                      onClick={() => approve(v)}
+                      disabled={busy === v.id}
+                      className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {busy === v.id ? "…" : "Approve"}
+                    </button>
+                    <button
+                      onClick={() => reject(v)}
+                      disabled={busy === v.id}
+                      className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Reject
+                    </button>
+                  </>
+                ) : v.status === "rejected" ? (
+                  <button
+                    onClick={() => approve(v)}
+                    disabled={busy === v.id}
+                    className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Reconsider
+                  </button>
+                ) : v.status === "archived" ? (
+                  <span className="text-xs text-gray-400">Archived {v.archivedAt ? new Date(v.archivedAt).toLocaleDateString() : ""}</span>
+                ) : (
+                  <>
+                    <span className="text-xs text-gray-400">Approved {v.approvedAt ? new Date(v.approvedAt).toLocaleDateString() : ""}</span>
+                    <button
+                      onClick={() => openArchive(v)}
+                      disabled={busy === v.id}
+                      className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Archive
+                    </button>
+                  </>
+                )}
+              </div>
+            ),
+          },
+        ]}
+      >
+        {(filteredVendors) => (
+          <div className="cards-mobile" data-testid="vendors-mobile-cards">
+            {filteredVendors.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {vendors.length === 0 ? "No vendors registered yet." : "No rows match the current filters."}
+              </div>
+            ) : (
+              filteredVendors.map((v) => (
             <div key={v.id} className="data-card" data-testid={`vendor-card-${v.id}`}>
               <div className="flex items-start justify-between gap-3 mb-2">
                 <div className="min-w-0">
@@ -338,9 +349,11 @@ export default function VendorsPage() {
                 )}
               </div>
             </div>
-          ))
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

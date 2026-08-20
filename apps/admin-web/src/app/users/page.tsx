@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { DataTable } from "@/components/DataTable";
 
 interface UserRow {
   id: string;
@@ -331,93 +332,84 @@ export default function UsersPage() {
         </div>
       )}
 
-      {/* ── Users table (desktop) ─────────────────────────────────────── */}
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                <th className="px-5 py-3">Name</th>
-                <th className="px-5 py-3">Title</th>
-                <th className="px-5 py-3">Email</th>
-                <th className="px-5 py-3">Phone</th>
-                <th className="px-5 py-3">Role</th>
-                <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {users.map((u) => (
-                <tr key={u.id} className={`hover:bg-gray-50/60 transition-colors ${!u.isActive ? "opacity-60 bg-gray-50/30" : ""}`}>
-                  <td className="px-5 py-3 font-medium">{u.name}</td>
-                  <td className="px-5 py-3 text-gray-500">{u.title ?? "—"}</td>
-                  <td className="px-5 py-3">{u.email ?? "—"}</td>
-                  <td className="px-5 py-3 text-gray-500">{u.phone ?? "—"}</td>
-                  <td className="px-5 py-3">
-                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">
-                      {u.role.name}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3">
-                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${u.isActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
-                      {u.isActive ? "Active" : "Inactive"}
-                    </span>
-                  </td>
-                  <td className="px-5 py-3">
-                    <div className="flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => openEdit(u)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-                        title="Edit user"
-                      >
-                        <PencilIcon />
-                      </button>
-                      <button
-                        onClick={() => { setResetUser(u); setResetResult(null); }}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                        title="Reset password"
-                      >
-                        <KeyIcon />
-                      </button>
-                      {u.isActive ? (
-                        <button
-                          onClick={() => setDeactivateUser(u)}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                          title="Deactivate user"
-                        >
-                          <BlockIcon />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => handleActivate(u)}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-green-600 hover:bg-green-50 transition-colors"
-                          title="Activate user"
-                        >
-                          <CheckIcon />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {users.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-8 text-center text-gray-400">
-                    No users found
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ── Users cards (mobile) ──────────────────────────────────────── */}
-      <div className="cards-mobile" data-testid="users-mobile-cards">
-        {users.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No users found</div>
-        ) : (
-          users.map((u) => (
+      <DataTable
+        storageKey="users"
+        rows={users}
+        rowKey={(u) => u.id}
+        emptyMessage="No users found"
+        columns={[
+          { key: "name", label: "Name", accessor: (u) => u.name, filterType: "text", alwaysVisible: true },
+          { key: "title", label: "Title", accessor: (u) => u.title ?? "" },
+          { key: "email", label: "Email", accessor: (u) => u.email ?? "", filterType: "text" },
+          { key: "phone", label: "Phone", accessor: (u) => u.phone ?? "", filterType: "text" },
+          {
+            key: "role",
+            label: "Role",
+            accessor: (u) => u.role.name,
+            render: (u) => <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-700">{u.role.name}</span>,
+          },
+          {
+            key: "status",
+            label: "Status",
+            accessor: (u) => (u.isActive ? "Active" : "Inactive"),
+            render: (u) => (
+              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${u.isActive ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}>
+                {u.isActive ? "Active" : "Inactive"}
+              </span>
+            ),
+          },
+          {
+            key: "actions",
+            label: "Actions",
+            align: "right",
+            alwaysVisible: true,
+            filterable: false,
+            render: (u) => (
+              <div className="flex items-center justify-end gap-1">
+                <button
+                  onClick={() => openEdit(u)}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                  title="Edit user"
+                >
+                  <PencilIcon />
+                </button>
+                <button
+                  onClick={() => { setResetUser(u); setResetResult(null); }}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                  title="Reset password"
+                >
+                  <KeyIcon />
+                </button>
+                {u.isActive ? (
+                  <button
+                    onClick={() => setDeactivateUser(u)}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                    title="Deactivate user"
+                  >
+                    <BlockIcon />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleActivate(u)}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-green-600 hover:bg-green-50 transition-colors"
+                    title="Activate user"
+                  >
+                    <CheckIcon />
+                  </button>
+                )}
+              </div>
+            ),
+          },
+        ]}
+      >
+        {(filteredUsers) => (
+          <div className="cards-mobile" data-testid="users-mobile-cards">
+            {filteredUsers.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {users.length === 0 ? "No users found" : "No rows match the current filters."}
+              </div>
+            ) : (
+              filteredUsers.map((u) => (
             <div key={u.id} className={`data-card ${!u.isActive ? "opacity-70" : ""}`} data-testid={`user-card-${u.id}`}>
               <div className="flex items-start justify-between gap-3 mb-2">
                 <div className="min-w-0">
@@ -474,9 +466,11 @@ export default function UsersPage() {
                 )}
               </div>
             </div>
-          ))
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {/* ── Edit Modal ────────────────────────────────────────────────── */}
       {editUser && (

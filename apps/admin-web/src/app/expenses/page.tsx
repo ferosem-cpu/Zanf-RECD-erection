@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { formatINR, formatDate, PAYMENT_METHOD_LABEL } from "@/lib/finance";
+import { DataTable } from "@/components/DataTable";
 
 interface Cat { id: string; key: string; label: string; }
 interface ExpenseRow {
@@ -102,62 +103,62 @@ export default function ExpensesPage() {
 
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Category</th>
-                <th className="px-4 py-3">Description</th>
-                <th className="px-4 py-3">Method</th>
-                <th className="px-4 py-3">Amount</th>
-                {canManage && <th className="px-4 py-3"></th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {rows.map((r) => (
-                <tr key={r.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.expenseDate)}</td>
-                  <td className="px-4 py-3">{r.category.label}</td>
-                  <td className="px-4 py-3">{r.description}</td>
-                  <td className="px-4 py-3 text-gray-500">{PAYMENT_METHOD_LABEL[r.method] ?? r.method}</td>
-                  <td className="px-4 py-3 whitespace-nowrap font-medium">{formatINR(r.amount)}</td>
-                  {canManage && (
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
+      <DataTable
+        storageKey="expenses"
+        rows={rows}
+        rowKey={(r) => r.id}
+        emptyMessage="No expenses yet."
+        columns={[
+          { key: "date", label: "Date", accessor: (r) => formatDate(r.expenseDate), filterType: "text", alwaysVisible: true },
+          { key: "category", label: "Category", accessor: (r) => r.category.label },
+          { key: "description", label: "Description", accessor: (r) => r.description, filterType: "text" },
+          { key: "method", label: "Method", accessor: (r) => PAYMENT_METHOD_LABEL[r.method] ?? r.method },
+          { key: "amount", label: "Amount", accessor: (r) => r.amount, filterType: "text", render: (r) => <span className="font-medium">{formatINR(r.amount)}</span> },
+          ...(canManage
+            ? [
+                {
+                  key: "actions",
+                  label: "",
+                  align: "right" as const,
+                  alwaysVisible: true,
+                  filterable: false,
+                  render: (r: ExpenseRow) => (
+                    <>
                       <button onClick={() => openEdit(r)} className="text-xs font-medium text-[var(--theme-accent)] mr-3">Edit</button>
                       <button onClick={() => remove(r.id)} className="text-xs text-red-500">Delete</button>
-                    </td>
-                  )}
-                </tr>
-              ))}
-              {rows.length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-gray-400">No expenses yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div className="cards-mobile">
-        {rows.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No expenses yet.</div>
-        ) : rows.map((r) => (
-          <div key={r.id} className="data-card">
-            <div className="flex items-start justify-between gap-3 mb-2">
-              <span className="text-sm font-semibold text-gray-900">{r.category.label}</span>
-              <span className="font-semibold">{formatINR(r.amount)}</span>
-            </div>
-            <p className="text-sm text-gray-600 truncate">{r.description}</p>
-            <div className="data-card-row"><span className="label">Date</span><span className="value">{formatDate(r.expenseDate)}</span></div>
-            <div className="data-card-row"><span className="label">Method</span><span className="value">{PAYMENT_METHOD_LABEL[r.method] ?? r.method}</span></div>
-            {canManage && (
-              <div className="mt-3 flex gap-2">
-                <button onClick={() => openEdit(r)} className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium">Edit</button>
-                <button onClick={() => remove(r.id)} className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-red-500">Delete</button>
+                    </>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      >
+        {(filteredRows) => (
+          <div className="cards-mobile">
+            {filteredRows.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {rows.length === 0 ? "No expenses yet." : "No rows match the current filters."}
               </div>
-            )}
+            ) : filteredRows.map((r) => (
+              <div key={r.id} className="data-card">
+                <div className="flex items-start justify-between gap-3 mb-2">
+                  <span className="text-sm font-semibold text-gray-900">{r.category.label}</span>
+                  <span className="font-semibold">{formatINR(r.amount)}</span>
+                </div>
+                <p className="text-sm text-gray-600 truncate">{r.description}</p>
+                <div className="data-card-row"><span className="label">Date</span><span className="value">{formatDate(r.expenseDate)}</span></div>
+                <div className="data-card-row"><span className="label">Method</span><span className="value">{PAYMENT_METHOD_LABEL[r.method] ?? r.method}</span></div>
+                {canManage && (
+                  <div className="mt-3 flex gap-2">
+                    <button onClick={() => openEdit(r)} className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium">Edit</button>
+                    <button onClick={() => remove(r.id)} className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-red-500">Delete</button>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        )}
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
