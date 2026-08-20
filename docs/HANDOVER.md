@@ -554,6 +554,43 @@ same session:
 
 ## Changelog (condensed)
 
+### DataTable print fixed: full letterhead + landscape layout, not the compact report header (2026-08-20, even later)
+User tried the print feature above and reported three real problems from a screenshot: the
+table was wider than the printed page (columns clipped off the right edge, mid-word), the
+browser's own print header ("RECD Project & Service Tracker" + timestamp/URL) was showing
+above everything, and the header itself was too compact - they wanted a real letterhead with
+address and a footer, matching the invoice/quotation/PO print documents, not the minimal
+`ReportPrintHeader` used for the Reports section (logo + name only, no address, no footer).
+
+Three fixes, all in `DataTable.tsx` and `globals.css`:
+1. **Full letterhead**, copied from the invoice print page's own markup rather than reusing
+   `ReportPrintHeader`: `.print-header` with logo/legal name/`<address>` (street, city-pin,
+   email·website·phone) on the left and the page title + active-filter summary + generated
+   timestamp on the right, plus a `.print-footer` showing the company's
+   `documentFooterNote`. `DataTable` now fetches `/settings` itself (a local `Company`
+   interface with the address/contact fields `ReportChrome`'s minimal version doesn't have)
+   instead of importing `useCompany`.
+2. **Landscape, not portrait** - a data table can have 7-9+ visible columns, several times
+   what an invoice line-item table has, so portrait was never going to fit. Added a *named*
+   `@page datatable-landscape { size: landscape; ... }` in `globals.css` and assigned it via
+   the CSS `page` property on the print container (`page: datatable-landscape` - a real,
+   Chrome/Edge-supported CSS Paged Media feature) - this only affects table-page prints, so
+   invoice/quotation/PO prints stay on their existing portrait `@page`. Also added a
+   `.print-table.compact` modifier (smaller font/padding than the invoice table's default)
+   since list exports need to fit far more columns than a 6-column line-item table.
+3. **Browser's own print header/footer** (date/URL/page title/page-number, printed by the
+   browser itself, not by any page CSS) - **cannot be suppressed from CSS at all**, only the
+   browser's own print-dialog "Headers and footers" toggle controls it. Applied the same
+   `document.title` trick the invoice print page already uses (set it to the table's own
+   title, e.g. "Sites", while mounted, restore on unmount) so at least the printed title text
+   is meaningful instead of the generic app name - documented in a code comment that this
+   does *not* remove the date/URL/page-number lines, and told the user directly that turning
+   those off requires the browser dialog's own checkbox, not something the app can control.
+
+Frontend-only (`/settings` was already live in production, no backend dependency), so no
+`zan-app-api` deploy needed for this. `tsc --noEmit` and full `next build` both clean. Not yet
+re-confirmed by the user with a fresh print preview - owed.
+
 ### Print button (with company letterhead) on every DataTable page (2026-08-20, later still)
 User confirmed the production Sites crash fix, then asked for a way to print a filtered list
 (e.g. "just this customer's sites") with the company logo as a letterhead, "like a letterhead".

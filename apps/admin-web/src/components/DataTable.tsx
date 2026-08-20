@@ -1,7 +1,29 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useCompany, ReportPrintHeader } from "@/components/reports/ReportChrome";
+import { api } from "@/lib/apiClient";
+
+interface Company {
+  legalName?: string | null;
+  address?: string | null;
+  city?: string | null;
+  pinCode?: string | null;
+  email?: string | null;
+  website?: string | null;
+  phone?: string | null;
+  documentFooterNote?: string | null;
+  logoDataUrl?: string | null;
+}
+
+/** "City, Pin Code" / "City" / "Pin Code" - whichever parts are set. */
+function cityPinLine(company: Company | undefined): string {
+  return [company?.city, company?.pinCode].filter(Boolean).join(" - ");
+}
+
+/** "email · website · phone" contact line - whichever parts are set. */
+function contactLine(company: Company | undefined): string {
+  return [company?.email, company?.website, company?.phone].filter(Boolean).join("  ·  ");
+}
 
 export interface DataTableColumn<T> {
   key: string;
@@ -66,7 +88,22 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [colMenuOpen, setColMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const company = useCompany();
+  const [company, setCompany] = useState<Company | undefined>(undefined);
+
+  useEffect(() => {
+    api<Company>("/settings").then(setCompany).catch(() => {});
+  }, []);
+
+  // The browser's own print header/footer prints document.title (top-centre) - set it to
+  // this table's title while mounted so a printed page reads "Sites" instead of the app's
+  // generic name, same trick the invoice/PO print pages use. Doesn't remove the browser's
+  // date/URL/page-number lines - only turning off "Headers and footers" in the print dialog
+  // does that, which is a browser setting outside what page CSS can control.
+  useEffect(() => {
+    const prev = document.title;
+    document.title = title;
+    return () => { document.title = prev; };
+  }, [title]);
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -263,9 +300,27 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
 
       <div className="print:hidden">{children ? children(filteredRows) : null}</div>
 
-      <div className="hidden print:block print-doc">
-        <ReportPrintHeader company={company} title={title} subtitle={printSubtitle} />
-        <table className="print-table">
+      <div className="hidden print:block print-doc datatable-print">
+        <div className="print-header">
+          <div className="print-co-block">
+            {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
+            <div className="print-co-name">{company?.legalName ?? "Your Company"}</div>
+            <address>
+              {company?.address}
+              {cityPinLine(company) && <><br />{cityPinLine(company)}</>}
+              {contactLine(company) && <><br />{contactLine(company)}</>}
+            </address>
+          </div>
+          <div className="print-title-block">
+            <div className="print-doc-title">{title}</div>
+            <div className="print-meta">
+              <div>{printSubtitle}</div>
+              <div>Generated: <b>{new Date().toLocaleString()}</b></div>
+            </div>
+          </div>
+        </div>
+
+        <table className="print-table compact">
           <thead>
             <tr>
               {printColumns.map((c) => (
@@ -290,6 +345,12 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
             )}
           </tbody>
         </table>
+
+        <div className="print-footer">
+          <div className="print-footer-info">
+            {company?.documentFooterNote && <div className="note">{company.documentFooterNote}</div>}
+          </div>
+        </div>
       </div>
     </div>
   );

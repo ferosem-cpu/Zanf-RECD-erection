@@ -642,3 +642,33 @@ body {
     print-color-adjust: exact;
   }
 }
+
+/* ── DataTable print letterhead (list pages: Sites, Customers, etc.) ────
+   Named landscape page, assigned via the `page` CSS property (Chrome/Edge
+   support this) - keeps invoice/quotation/PO printing on the default
+   portrait @page above, while wide data-table exports (7-9+ columns) get
+   more horizontal room instead of clipping columns off the page edge. */
+@page datatable-landscape {
+  size: landscape;
+  margin: 10mm 12mm;
+}
+
+.datatable-print {
+  page: datatable-landscape;
+}
+
+/* Tighter than the invoice/PO .print-table default - list exports can have
+   far more columns, so a smaller font and padding keeps everything on-page
+   without wrapping every cell awkwardly. */
+.print-table.compact {
+  font-size: 9.5px;
+}
+
+.print-table.compact thead th {
+  font-size: 8.5px;
+  padding: 5px 6px;
+}
+
+.print-table.compact tbody td {
+  padding: 5px 6px;
+}
