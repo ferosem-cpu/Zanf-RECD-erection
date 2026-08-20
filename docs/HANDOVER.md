@@ -554,6 +554,42 @@ same session:
 
 ## Changelog (condensed)
 
+### Sites list's Product column missed multi-RECD sites - same root cause as the earlier agent-chat undercounting bug (2026-08-20, latest)
+User reported filtering Sites by Product didn't surface sites with multiple RECDs. Root cause
+was the exact same class of bug already fixed once in this codebase for a different surface
+(see the 2026-08-17 changelog entry, "Agent chat undercounted RECDs..."): the Sites list only
+ever read `order.product` (the order's single top-level product), never `order.lineItems` (the
+"add another RECD unit -> same order" path for putting more than one RECD at a site without a
+second order) - so a site whose *only* match for a filtered product was on a line item, not the
+base order, was invisible to both the Product column's display and its filter.
+
+Fixed both ends:
+- **Backend** (`apps/api/src/routes/sites.ts`, `GET /sites`): widened the `order` include to
+  also fetch `lineItems: { include: { product: true } }`, mirroring what the detail route and
+  the agent tools already do.
+- **Frontend** (`apps/admin-web/src/app/sites/page.tsx`): added an `allProducts(s)` helper
+  (base product + every line item's product) and switched the Product column from `accessor`
+  to a new `accessorList` - see below.
+- **`DataTable.tsx` itself needed a real feature added**, not just a call-site fix: it had no
+  concept of a column where one row can have *multiple* values for filtering purposes. Added
+  `accessorList?: (row: T) => (value)[]` to `DataTableColumn` - when set, the filter dropdown's
+  options are the *union* of every row's values (not one combined string per row, which would've
+  made "RECD-250 (M2)" and "RECD-200 (M1), RECD-250 (M2)" show up as two unrelated dropdown
+  entries instead of one filterable "RECD-250" value), and a row matches a selected filter if
+  *any* of its values equals it, not the whole joined string. Cell/print text falls back to
+  joining the list with ", " when no custom `render` is given. This is a generic DataTable
+  capability now, not a Sites-only hack - any future multi-value column (a site with several
+  assigned engineers, an order with several customers, etc.) can reuse it directly.
+
+**This was a backend change, so it needed the full `zan-app-api` manual deploy dance again** -
+ran it a second time this session (build ~15 min, watched via a background monitor rather than
+blocking on it), and **this time deployed and verified the backend live *before* pushing the
+dependent frontend change**, deliberately following the lesson from the earlier Sites-crash
+incident rather than repeating it. `tsc --noEmit` clean on both apps; local dev DB had zero
+sites with line items to visually confirm against (checked via a throwaway Prisma script, not
+committed), so this is code-correct and mirrors an already-proven fix pattern, but not yet
+click-tested against a real multi-RECD site.
+
 ### DataTable print fixed: full letterhead + landscape layout, not the compact report header (2026-08-20, even later)
 User tried the print feature above and reported three real problems from a screenshot: the
 table was wider than the printed page (columns clipped off the right edge, mid-word), the

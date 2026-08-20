@@ -30,6 +30,14 @@ export interface DataTableColumn<T> {
   label: string;
   /** Raw value used for filtering (and as the default cell text if `render` is omitted). */
   accessor?: (row: T) => string | number | null | undefined;
+  /**
+   * For columns where a single row can have multiple values (e.g. several products at one
+   * site via order line items) - the filter dropdown lists the union of every value across
+   * all rows, and a row matches a selected filter if ANY of its values equals it. Takes
+   * priority over `accessor` for filtering/dropdown options when set; `accessor` still
+   * supplies the plain-text fallback for the cell and for print/CSV if no `render` is given.
+   */
+  accessorList?: (row: T) => (string | number | null | undefined)[];
   /** Custom cell renderer. Falls back to `accessor`'s value if omitted. */
   render?: (row: T) => React.ReactNode;
   /** Shown by default when the user has no saved preference yet. Default true. */
@@ -135,8 +143,14 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
     return rows.filter((row) =>
       active.every(([key, val]) => {
         const col = columns.find((c) => c.key === key);
-        if (!col?.accessor) return true;
-        const raw = String(col.accessor(row) ?? "");
+        if (!col?.accessor && !col?.accessorList) return true;
+        if (col.accessorList) {
+          const values = col.accessorList(row).map((v) => String(v ?? ""));
+          return (col.filterType ?? "select") === "select"
+            ? values.includes(val)
+            : values.some((v) => v.toLowerCase().includes(val.trim().toLowerCase()));
+        }
+        const raw = String(col.accessor!(row) ?? "");
         if ((col.filterType ?? "select") === "select") {
           return raw === val;
         }
@@ -149,12 +163,14 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
   const columnOptions = useMemo(() => {
     const map: Record<string, string[]> = {};
     columns.forEach((c) => {
-      if (!c.accessor || (c.filterType ?? "select") !== "select") return;
+      if ((!c.accessor && !c.accessorList) || (c.filterType ?? "select") !== "select") return;
       const values = new Set<string>();
       rows.forEach((row) => {
-        const raw = c.accessor!(row);
-        if (raw === null || raw === undefined || raw === "") return;
-        values.add(String(raw));
+        const raw = c.accessorList ? c.accessorList(row) : [c.accessor!(row)];
+        raw.forEach((v) => {
+          if (v === null || v === undefined || v === "") return;
+          values.add(String(v));
+        });
       });
       map[c.key] = Array.from(values).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     });
@@ -170,7 +186,12 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
     return `Filtered by ${parts.join(" · ")} — ${countNote}`;
   }, [filters, columns, filteredRows.length, rows.length]);
 
-  const printColumns = visibleColumns.filter((c) => c.accessor);
+  const printColumns = visibleColumns.filter((c) => c.accessor || c.accessorList);
+
+  function cellText(c: DataTableColumn<T>, row: T): string {
+    if (c.accessorList) return c.accessorList(row).filter((v) => v !== null && v !== undefined && v !== "").join(", ") || "-";
+    return String(c.accessor?.(row) ?? "-");
+  }
 
   return (
     <div className="space-y-2">
@@ -248,7 +269,7 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
               <tr className="border-b border-gray-100 bg-white">
                 {visibleColumns.map((c) => (
                   <th key={c.key} className="px-4 py-1.5 font-normal">
-                    {c.accessor && c.filterable !== false ? (
+                    {(c.accessor || c.accessorList) && c.filterable !== false ? (
                       (c.filterType ?? "select") === "select" ? (
                         <select
                           value={filters[c.key] ?? ""}
@@ -281,7 +302,7 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
                       key={c.key}
                       className={`px-4 py-3 ${c.align === "right" ? "whitespace-nowrap text-right" : ""} ${c.className ?? ""}`}
                     >
-                      {c.render ? c.render(row) : String(c.accessor?.(row) ?? "-")}
+                      {c.render ? c.render(row) : cellText(c, row)}
                     </td>
                   ))}
                 </tr>
@@ -333,7 +354,7 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
               <tr key={rowKey(row)}>
                 {printColumns.map((c) => (
                   <td key={c.key} className={c.align === "right" ? "num" : undefined}>
-                    {String(c.accessor?.(row) ?? "-")}
+                    {cellText(c, row)}
                   </td>
                 ))}
               </tr>

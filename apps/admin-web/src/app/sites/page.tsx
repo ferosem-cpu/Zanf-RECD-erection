@@ -13,8 +13,22 @@ interface SiteRow {
   assignedEngineer: { name: string } | null;
   vendor: { name: string } | null;
   updatedAt: string;
-  order: { orderNumber: string; customer: { name: string }; product: { name: string; model: string } };
+  order: {
+    orderNumber: string;
+    customer: { name: string };
+    product: { name: string; model: string } | null;
+    lineItems: { product: { name: string; model: string } }[];
+  };
   stageEvents: { statusOption: { label: string } }[];
+}
+
+/** All RECDs at this site's order - the base product plus any extra units added as
+ * order line items (the "add another RECD unit -> same order" path). A site can have
+ * more than one product this way without a second order, so any column/filter over
+ * "which product is at this site" has to look at both, not just `order.product`. */
+function allProducts(s: SiteRow): { name: string; model: string }[] {
+  const base = s.order.product ? [s.order.product] : [];
+  return [...base, ...s.order.lineItems.map((li) => li.product)];
 }
 
 function daysSince(updatedAt: string) {
@@ -62,15 +76,21 @@ const columns: DataTableColumn<SiteRow>[] = [
   {
     key: "product",
     label: "Product",
-    accessor: (s) => (s.order.product ? `${s.order.product.name} (${s.order.product.model})` : ""),
-    render: (s) =>
-      s.order.product ? (
+    accessorList: (s) => allProducts(s).map((p) => `${p.name} (${p.model})`),
+    render: (s) => {
+      const products = allProducts(s);
+      if (products.length === 0) return "-";
+      return (
         <>
-          {s.order.product.name} <span className="text-gray-400 font-mono text-xs">{s.order.product.model}</span>
+          {products.map((p, i) => (
+            <span key={i}>
+              {i > 0 && ", "}
+              {p.name} <span className="text-gray-400 font-mono text-xs">{p.model}</span>
+            </span>
+          ))}
         </>
-      ) : (
-        "-"
-      ),
+      );
+    },
   },
   { key: "stage", label: "Stage", accessor: (s) => s.currentStage.label },
   { key: "updateStatus", label: "Update status", accessor: (s) => updateStatus(s) },
@@ -135,7 +155,7 @@ export default function SitesPage() {
                   )}
                   <div className="data-card-row">
                     <span className="label">Product</span>
-                    <span className="value">{s.order.product ? `${s.order.product.name} (${s.order.product.model})` : "-"}</span>
+                    <span className="value">{allProducts(s).map((p) => `${p.name} (${p.model})`).join(", ") || "-"}</span>
                   </div>
                   <div className="data-card-row">
                     <span className="label">Engineer</span>

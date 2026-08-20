@@ -36,7 +36,7 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
   const sites = await prisma.site.findMany({
     where,
     include: {
-      order: { include: { customer: true, product: true } },
+      order: { include: { customer: true, product: true, lineItems: { include: { product: true } } } },
       currentStage: true,
       assignedEngineer: true,
       vendor: true,
