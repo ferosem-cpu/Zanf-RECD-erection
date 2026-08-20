@@ -148,7 +148,7 @@ function CustomersPageInner() {
 
   return (
     <div className="space-y-6 max-w-5xl" data-testid="customers-page">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Customers</h1>
           <p className="mt-1 text-sm text-gray-500">Companies we're contracted with. Each can have multiple orders and sites.</p>
@@ -164,11 +164,12 @@ function CustomersPageInner() {
         )}
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
       {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
 
       <DataTable
         storageKey="customers"
+        title="Customers"
         rows={customers}
         rowKey={(c) => c.id}
         emptyMessage="No customers yet."

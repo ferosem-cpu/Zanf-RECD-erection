@@ -215,7 +215,7 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6 max-w-5xl" data-testid="users-page">
-      <div>
+      <div className="print:hidden">
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Users</h1>
         <p className="mt-1 text-sm text-gray-500">
           Manage team members and their roles. Add new users, edit details, activate/deactivate accounts, or reset passwords.
@@ -223,7 +223,7 @@ export default function UsersPage() {
       </div>
 
       {/* ── Add user form ─────────────────────────────────────────────── */}
-      <form onSubmit={handleSubmit} className="card p-4 sm:p-5" data-testid="add-user-form">
+      <form onSubmit={handleSubmit} className="card p-4 sm:p-5 print:hidden" data-testid="add-user-form">
         <h2 className="text-sm font-semibold mb-3">Add new user</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
           <div>
@@ -305,7 +305,7 @@ export default function UsersPage() {
 
       {/* ── Feedback banners ──────────────────────────────────────────── */}
       {error && (
-        <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+        <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 print:hidden">
           <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
           </svg>
@@ -314,7 +314,7 @@ export default function UsersPage() {
         </div>
       )}
       {tempPassword && (
-        <div className="flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700">
+        <div className="flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-700 print:hidden">
           <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
@@ -323,7 +323,7 @@ export default function UsersPage() {
         </div>
       )}
       {success && !tempPassword && (
-        <div className="flex items-center gap-2 rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-700">
+        <div className="flex items-center gap-2 rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-700 print:hidden">
           <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
@@ -334,6 +334,7 @@ export default function UsersPage() {
 
       <DataTable
         storageKey="users"
+        title="Users"
         rows={users}
         rowKey={(u) => u.id}
         emptyMessage="No users found"

@@ -401,8 +401,15 @@ same session:
   first time (see changelog). The gap between this deploying and `admin-web`'s already-live
   frontend caused a real production crash on Sites (`order.product` was `undefined` for the
   window it was undeployed) - fixed by the deploy itself, plus the Sites page was hardened with
-  null-checks as defense-in-depth. **Not yet re-confirmed by the user that Sites loads cleanly
-  in production post-deploy** - owed.
+  null-checks as defense-in-depth. **Confirmed fixed by the user in production** the same
+  session.
+- **Every `DataTable` page now has a Print button** (2026-08-20, later - see changelog) - prints
+  only the currently-filtered rows and currently-visible columns, with a letterhead (company
+  logo/name from `/settings`, page title, active-filter summary, generated timestamp) reusing
+  the same `ReportPrintHeader`/`print-table` styling the Reports section already used. Built
+  into `DataTable` itself, so all 12 pages got it in one change - not yet click-tested live by
+  the user (standing restriction), owed: print preview on at least one page with an active
+  filter to confirm the letterhead/logo renders correctly.
 - **`DataTable` (column show/hide + per-column filter) now covers all list pages** (2026-08-20,
   see changelog) - Sites/Customers/Products from earlier this session, plus Vendors, Orders,
   Invoices, Quotations, Purchase Orders, Expenses, Users, Work Orders, and Complaints in the
@@ -546,6 +553,42 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Print button (with company letterhead) on every DataTable page (2026-08-20, later still)
+User confirmed the production Sites crash fix, then asked for a way to print a filtered list
+(e.g. "just this customer's sites") with the company logo as a letterhead, "like a letterhead".
+Realized the Reports section already had exactly this - `apps/admin-web/src/components/
+reports/ReportChrome.tsx`'s `useCompany()` (fetches `/settings` for `logoDataUrl`/`legalName`)
+and `ReportPrintHeader` (the letterhead itself: logo + company name left, report title + active
+filters + generated timestamp right, `hidden print:block` so it only appears when printing) -
+so rather than building new print infrastructure, wired those directly into `DataTable` itself.
+
+- Added a **Print** button to `DataTable`'s toolbar (`window.print()`), a `title` prop (each
+  page passes its own name - "Sites", "Customers", etc. - as the letterhead title), and a
+  `printSubtitle` computed from the active per-column filters (e.g. "Filtered by Customer:
+  Acme Corp · Stage: Dispatched — 4 of 37 rows") as the letterhead's subtitle - so what got
+  printed and why is self-documenting on the page itself, not just implied.
+- The printed table only includes columns that have an `accessor` (i.e. real data columns -
+  Actions columns are `filterable: false` with no `accessor`, so they're automatically excluded
+  from print without needing a separate flag) and renders each cell as **plain text via the
+  column's `accessor`, not its `render`** - deliberately ignoring custom `render` output (links,
+  buttons, colored badges) since those don't mean anything on paper; the raw value reads cleanly
+  instead. Reused the existing `.print-table`/`.print-doc` CSS classes (navy header, serif body)
+  already styling the invoice/quotation/PO print pages, so the printed list matches those
+  documents' look rather than introducing a third print style.
+- The on-screen table, mobile cards, and each page's own header/banners/KPI tiles/inline
+  filter dropdowns all got `print:hidden` added (about a dozen small edits, one page at a time)
+  so the printed page shows *only* the letterhead + data table - nothing from the live UI chrome
+  leaks onto paper. The sidebar/topbar were already `print:hidden` from the existing Reports
+  work, so nothing needed changing there.
+- `/settings` only requires `authenticate` (not `manage_settings`), confirmed by reading the
+  route before assuming `useCompany()` would work for every role - it does, so the letterhead
+  logo renders correctly regardless of who's printing, not just Super Admins.
+
+One component change (`DataTable.tsx`) plus a `title` prop and a `print:hidden` pass across all
+12 pages using it. `tsc --noEmit` and a full `next build` (33 routes) both clean. Not yet
+click-tested live by the user (standing restriction) - owed: confirm the letterhead/logo
+actually renders in a real browser print preview on at least one page with an active filter.
 
 ### DataTable rolled out to all remaining list pages; self-run `zan-app-api` deploy fixes a real production Sites crash (2026-08-20, later)
 Picked up from "Current open items" - user asked for the same `DataTable` (column show/hide +

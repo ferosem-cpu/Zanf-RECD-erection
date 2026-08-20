@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useCompany, ReportPrintHeader } from "@/components/reports/ReportChrome";
 
 export interface DataTableColumn<T> {
   key: string;
@@ -25,6 +26,8 @@ export interface DataTableColumn<T> {
 interface DataTableProps<T> {
   /** Unique id for this table, used as the localStorage key for column visibility. */
   storageKey: string;
+  /** Page/table name, shown as the printed letterhead's title (e.g. "Sites"). */
+  title: string;
   columns: DataTableColumn<T>[];
   rows: T[];
   rowKey: (row: T) => string;
@@ -58,11 +61,12 @@ function loadVisibility<T>(storageKey: string, columns: DataTableColumn<T>[]): R
   }
 }
 
-export function DataTable<T>({ storageKey, columns, rows, rowKey, emptyMessage = "No records.", children }: DataTableProps<T>) {
+export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMessage = "No records.", children }: DataTableProps<T>) {
   const [visible, setVisible] = useState<Record<string, boolean>>(() => loadVisibility(storageKey, columns));
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [colMenuOpen, setColMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const company = useCompany();
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
@@ -121,14 +125,35 @@ export function DataTable<T>({ storageKey, columns, rows, rowKey, emptyMessage =
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, columns]);
 
+  const printSubtitle = useMemo(() => {
+    const active = Object.entries(filters).filter(([, v]) => v && v.trim() !== "");
+    const countNote = `${filteredRows.length} of ${rows.length} row${rows.length === 1 ? "" : "s"}`;
+    if (active.length === 0) return countNote;
+    const parts = active.map(([key, val]) => `${columns.find((c) => c.key === key)?.label ?? key}: ${val}`);
+    return `Filtered by ${parts.join(" · ")} — ${countNote}`;
+  }, [filters, columns, filteredRows.length, rows.length]);
+
+  const printColumns = visibleColumns.filter((c) => c.accessor);
+
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-end gap-3">
+      <div className="flex items-center justify-end gap-3 print:hidden">
         {hasActiveFilters && (
           <button onClick={() => setFilters({})} className="text-xs font-medium text-gray-500 hover:text-gray-700">
             Clear filters
           </button>
         )}
+        <button
+          onClick={() => window.print()}
+          className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="6 9 6 2 18 2 18 9" />
+            <path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2" />
+            <rect x="6" y="14" width="12" height="8" />
+          </svg>
+          Print
+        </button>
         <div className="relative" ref={menuRef}>
           <button
             onClick={() => setColMenuOpen((o) => !o)}
@@ -172,7 +197,7 @@ export function DataTable<T>({ storageKey, columns, rows, rowKey, emptyMessage =
         </div>
       </div>
 
-      <div className="table-desktop">
+      <div className="table-desktop print:hidden">
         <div className="table-scroll card overflow-hidden">
           <table className="w-full border-collapse text-sm">
             <thead className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
@@ -236,7 +261,36 @@ export function DataTable<T>({ storageKey, columns, rows, rowKey, emptyMessage =
         </div>
       </div>
 
-      {children ? children(filteredRows) : null}
+      <div className="print:hidden">{children ? children(filteredRows) : null}</div>
+
+      <div className="hidden print:block print-doc">
+        <ReportPrintHeader company={company} title={title} subtitle={printSubtitle} />
+        <table className="print-table">
+          <thead>
+            <tr>
+              {printColumns.map((c) => (
+                <th key={c.key} className={c.align === "right" ? "num" : undefined}>{c.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRows.map((row) => (
+              <tr key={rowKey(row)}>
+                {printColumns.map((c) => (
+                  <td key={c.key} className={c.align === "right" ? "num" : undefined}>
+                    {String(c.accessor?.(row) ?? "-")}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {filteredRows.length === 0 && (
+              <tr>
+                <td colSpan={printColumns.length || 1}>{rows.length === 0 ? emptyMessage : "No rows match the current filters."}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

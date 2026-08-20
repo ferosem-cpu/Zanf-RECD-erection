@@ -130,7 +130,7 @@ export default function VendorsPage() {
 
   return (
     <div className="space-y-6 max-w-5xl">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Vendors</h1>
           <p className="mt-1 text-sm text-gray-500">
@@ -146,11 +146,11 @@ export default function VendorsPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700 print:hidden">{error}</div>
       )}
 
       {approval && (
-        <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800">
+        <div className="rounded-lg bg-green-50 border border-green-200 px-4 py-3 text-sm text-green-800 print:hidden">
           <p><strong>{approval.name}</strong> approved.</p>
           {approval.created ? (
             <p className="mt-1">
@@ -167,7 +167,7 @@ export default function VendorsPage() {
       )}
 
       {archiveResult && (
-        <div className="rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700">
+        <div className="rounded-lg bg-gray-50 border border-gray-200 px-4 py-3 text-sm text-gray-700 print:hidden">
           <p><strong>{archiveResult.name}</strong> archived — its history (sites, complaints, work orders) is untouched, and it no longer appears in any active selection.</p>
           {archiveResult.reassignedCount > 0 && (
             <p className="mt-1">{archiveResult.reassignedCount} site(s) reassigned to <strong>{archiveResult.reassignedToName ?? "the selected vendor"}</strong>.</p>
@@ -177,6 +177,7 @@ export default function VendorsPage() {
       )}
 
       <DataTable
+        title="Vendors"
         storageKey="vendors"
         rows={vendors}
         rowKey={(v) => v.id}

@@ -93,7 +93,7 @@ export default function ExpensesPage() {
 
   return (
     <div className="space-y-6 max-w-5xl" data-testid="expenses-page">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Expenses</h1>
           <p className="mt-1 text-sm text-gray-500">Non-PO spend book. Total: {formatINR(total)}</p>
@@ -101,10 +101,11 @@ export default function ExpensesPage() {
         {canManage && <button onClick={() => setOpen(true)} className="btn-primary px-4 py-2 text-sm self-start sm:self-auto">+ Add expense</button>}
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
 
       <DataTable
         storageKey="expenses"
+        title="Expenses"
         rows={rows}
         rowKey={(r) => r.id}
         emptyMessage="No expenses yet."

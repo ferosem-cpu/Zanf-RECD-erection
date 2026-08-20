@@ -120,7 +120,7 @@ export default function QuotationsPage() {
 
   return (
     <div className="space-y-6 max-w-6xl" data-testid="quotations-page">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Quotations</h1>
           <p className="mt-1 text-sm text-gray-500">Price quotes sent to customers before invoicing.</p>
@@ -132,10 +132,11 @@ export default function QuotationsPage() {
         )}
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
 
       <DataTable
         storageKey="quotations"
+        title="Quotations"
         rows={rows}
         rowKey={(r) => r.id}
         emptyMessage="No quotations yet."

@@ -100,7 +100,7 @@ export default function ComplaintsPage() {
 
   return (
     <div className="space-y-6 max-w-5xl" data-testid="complaints-page">
-      <div>
+      <div className="print:hidden">
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Complaints</h1>
         <p className="mt-1 text-sm text-gray-500">
           {canManage
@@ -110,7 +110,7 @@ export default function ComplaintsPage() {
       </div>
 
       {overview && (
-        <section>
+        <section className="print:hidden">
           <h2 className="mb-2.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-gray-500">Company-wide, by status</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {Object.entries(overview.countsByStatus).map(([status, count]) => (
@@ -122,10 +122,11 @@ export default function ComplaintsPage() {
           </div>
         </section>
       )}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
 
       <DataTable
         storageKey="complaints"
+        title="Complaints"
         rows={complaints}
         rowKey={(c) => c.id}
         emptyMessage="No complaints to show."

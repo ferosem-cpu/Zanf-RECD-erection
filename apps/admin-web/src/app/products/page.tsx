@@ -157,7 +157,7 @@ function ProductsPageInner() {
 
   return (
     <div className="space-y-6 max-w-5xl" data-testid="products-page">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Products</h1>
           <p className="mt-1 text-sm text-gray-500">RECD models used across orders, quotations, and invoices.</p>
@@ -173,11 +173,12 @@ function ProductsPageInner() {
         )}
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
       {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
 
       <DataTable
         storageKey="products"
+        title="Products"
         rows={products}
         rowKey={(p) => p.id}
         emptyMessage="No products yet."

@@ -126,7 +126,7 @@ export default function InvoicesPage() {
 
   return (
     <div className="space-y-6 max-w-6xl" data-testid="invoices-page">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 print:hidden">
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Invoices</h1>
           <p className="mt-1 text-sm text-gray-500">Proforma and tax invoices with payment status.</p>
@@ -138,7 +138,7 @@ export default function InvoicesPage() {
         )}
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-2 print:hidden">
         <select className="field w-auto" value={docType} onChange={(e) => setDocType(e.target.value)}>
           <option value="">All types</option>
           <option value="proforma">Proforma</option>
@@ -154,10 +154,11 @@ export default function InvoicesPage() {
         </select>
       </div>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
 
       <DataTable
         storageKey="invoices"
+        title="Invoices"
         rows={rows}
         rowKey={(r) => r.id}
         emptyMessage="No invoices yet."
