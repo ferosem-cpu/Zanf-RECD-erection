@@ -554,6 +554,31 @@ same session:
 
 ## Changelog (condensed)
 
+### Same multi-RECD bug on the Orders list too - fixed identically (2026-08-20, latest still)
+User confirmed the Sites fix worked, then reported the same symptom on Orders. Exact same root
+cause: `GET /orders` (`apps/api/src/routes/orders.ts`) only ever included `product` (the
+order's single top-level product), never `lineItems` - the detail route already did, the list
+route never had. Fixed the same way as Sites: widened the list query's include to
+`lineItems: { include: { product: true } }`, added an `allProducts(o)` helper to
+`apps/admin-web/src/app/orders/page.tsx` (base product + every line item's product), and
+switched the Product column to the `accessorList` capability `DataTable` gained for the Sites
+fix - no further `DataTable.tsx` changes needed this time, since the multi-value filtering
+machinery already existed generically.
+
+Given this is the second time the identical bug showed up on a second list page in one
+session, it's worth flagging as a pattern to check proactively next time a new list page (or a
+new column on an existing one) surfaces "product" for an Order or Site: **`Order.lineItems` is
+easy to forget** because `Order.productId`/`product` looks like the whole story until a row
+has more than one RECD. Quotations/Invoices/Purchase Orders have their own separate
+line-item models (`QuotationLineItem` etc.) and were not touched here - not established
+whether they have the same gap, since those documents don't necessarily have this "base
+product + optional extra units on the same document" shape in the first place.
+
+Followed the now-established deploy order again: backend built, verified in the compiled
+output (`Select-String` for `lineItems` in the deployed `orders.js`), deployed, confirmed live
+(`/health` -> 200, `/agent/providers` -> 401) - only then was the frontend built and pushed.
+`tsc --noEmit` clean on both apps.
+
 ### Sites list's Product column missed multi-RECD sites - same root cause as the earlier agent-chat undercounting bug (2026-08-20, latest)
 User reported filtering Sites by Product didn't surface sites with multiple RECDs. Root cause
 was the exact same class of bug already fixed once in this codebase for a different surface

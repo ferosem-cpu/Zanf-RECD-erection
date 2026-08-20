@@ -13,7 +13,14 @@ interface OrderRow {
   value: string;
   customer: { name: string };
   product: { name: string; model: string };
+  lineItems: { product: { name: string; model: string } }[];
   site: { companyName: string | null; currentStage: { label: string } } | null;
+}
+
+/** All RECDs on this order - the base product plus any extra units added as line items
+ * (the "add another RECD unit -> same order" path) - see the identical Sites-page fix. */
+function allProducts(o: OrderRow): { name: string; model: string }[] {
+  return [o.product, ...o.lineItems.map((li) => li.product)];
 }
 
 interface Customer {
@@ -211,8 +218,17 @@ function OrdersPageInner() {
           {
             key: "product",
             label: "Product",
-            accessor: (o) => `${o.product.name} (${o.product.model})`,
-            render: (o) => <>{o.product.name} ({o.product.model})</>,
+            accessorList: (o) => allProducts(o).map((p) => `${p.name} (${p.model})`),
+            render: (o) => (
+              <>
+                {allProducts(o).map((p, i) => (
+                  <span key={i}>
+                    {i > 0 && ", "}
+                    {p.name} ({p.model})
+                  </span>
+                ))}
+              </>
+            ),
           },
           {
             key: "value",
@@ -241,7 +257,7 @@ function OrdersPageInner() {
                     <p className="text-sm font-semibold text-gray-900 truncate">{o.site.companyName}</p>
                   )}
                   <p className="text-xs text-gray-500 truncate">{o.customer.name}</p>
-                  <p className="text-xs text-gray-500 mb-2 truncate">{o.product.name} ({o.product.model})</p>
+                  <p className="text-xs text-gray-500 mb-2 truncate">{allProducts(o).map((p) => `${p.name} (${p.model})`).join(", ")}</p>
                   <div className="data-card-row">
                     <span className="label">Value</span>
                     <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>

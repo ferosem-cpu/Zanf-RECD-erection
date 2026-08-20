@@ -11,7 +11,7 @@ ordersRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (re
   const where = req.auth!.customerId ? { customerId: req.auth!.customerId } : {};
   const orders = await prisma.order.findMany({
     where,
-    include: { customer: true, product: true, site: { include: { currentStage: true } } },
+    include: { customer: true, product: true, site: { include: { currentStage: true } }, lineItems: { include: { product: true } } },
     orderBy: { createdAt: "desc" },
   });
   res.json(orders);
