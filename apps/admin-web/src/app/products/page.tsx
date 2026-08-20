@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+import { DataTable } from "@/components/DataTable";
 
 interface Product {
   id: string;
@@ -175,38 +176,48 @@ function ProductsPageInner() {
       {error && <p className="text-sm text-red-600">{error}</p>}
       {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
 
-      {/* Desktop / tablet: table */}
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Model</th>
-                <th className="px-4 py-3">Rating spec</th>
-                <th className="px-4 py-3">Capacity (kVA)</th>
-                <th className="px-4 py-3">Warranty (months)</th>
-                {canManage && <th className="px-4 py-3 text-right">Actions</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {products.map((p) => (
-                <tr key={p.id} className="hover:bg-gray-50/60">
-                  <td className="px-4 py-3 font-medium">
-                    <Link href={`/products/${p.id}`} className="hover:underline" style={{ color: "var(--theme-primary)" }}>
-                      {p.name}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 font-mono text-xs">{p.model}</td>
-                  <td className="px-4 py-3 text-gray-500">{p.ratingSpec ?? "-"}</td>
-                  <td className="px-4 py-3 text-gray-500">{p.capacityKva ?? "-"}</td>
-                  <td className="px-4 py-3 text-gray-500">{p.warrantyMonths ?? "-"}</td>
-                  {canManage && (
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => openEdit(p)}
-                        className="text-sm font-medium text-blue-600 hover:text-blue-800 mr-3"
-                      >
+      <DataTable
+        storageKey="products"
+        rows={products}
+        rowKey={(p) => p.id}
+        emptyMessage="No products yet."
+        columns={[
+          {
+            key: "name",
+            label: "Name",
+            accessor: (p) => p.name,
+            alwaysVisible: true,
+            filterType: "text",
+            render: (p) => (
+              <Link href={`/products/${p.id}`} className="hover:underline" style={{ color: "var(--theme-primary)" }}>
+                {p.name}
+              </Link>
+            ),
+          },
+          {
+            key: "model",
+            label: "Model",
+            accessor: (p) => p.model,
+            filterType: "text",
+            render: (p) => <span className="font-mono text-xs">{p.model}</span>,
+          },
+          { key: "ratingSpec", label: "Rating spec", accessor: (p) => p.ratingSpec ?? "" },
+          { key: "capacityKva", label: "Capacity (kVA)", accessor: (p) => p.capacityKva ?? "" },
+          { key: "warrantyMonths", label: "Warranty (months)", accessor: (p) => p.warrantyMonths ?? "" },
+          { key: "shape", label: "Shape", accessor: (p) => p.shape ?? "", defaultVisible: false },
+          { key: "dimensions", label: "Dimensions", accessor: (p) => p.dimensions ?? "", defaultVisible: false, filterType: "text" },
+          { key: "weightKg", label: "Weight (kg)", accessor: (p) => p.weightKg ?? "", defaultVisible: false },
+          ...(canManage
+            ? [
+                {
+                  key: "actions",
+                  label: "Actions",
+                  align: "right" as const,
+                  alwaysVisible: true,
+                  filterable: false,
+                  render: (p: Product) => (
+                    <>
+                      <button onClick={() => openEdit(p)} className="text-sm font-medium text-blue-600 hover:text-blue-800 mr-3">
                         Edit
                       </button>
                       <button
@@ -216,63 +227,62 @@ function ProductsPageInner() {
                       >
                         {deletingId === p.id ? "Deleting…" : "Delete"}
                       </button>
-                    </td>
+                    </>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      >
+        {(filteredProducts) => (
+          <div className="cards-mobile" data-testid="products-mobile-cards">
+            {filteredProducts.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {products.length === 0 ? "No products yet." : "No rows match the current filters."}
+              </div>
+            ) : (
+              filteredProducts.map((p) => (
+                <div key={p.id} className="data-card">
+                  <Link href={`/products/${p.id}`} className="text-sm font-semibold text-gray-900 truncate block hover:underline">
+                    {p.name}
+                  </Link>
+                  <p className="text-xs text-gray-500 mb-2 font-mono">{p.model}</p>
+                  {p.ratingSpec && (
+                    <div className="data-card-row">
+                      <span className="label">Rating spec</span>
+                      <span className="value">{p.ratingSpec}</span>
+                    </div>
                   )}
-                </tr>
-              ))}
-              {products.length === 0 && (
-                <tr><td colSpan={canManage ? 6 : 5} className="px-4 py-8 text-center text-gray-400">No products yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Mobile: card stack */}
-      <div className="cards-mobile" data-testid="products-mobile-cards">
-        {products.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No products yet.</div>
-        ) : (
-          products.map((p) => (
-            <div key={p.id} className="data-card">
-              <Link href={`/products/${p.id}`} className="text-sm font-semibold text-gray-900 truncate block hover:underline">
-                {p.name}
-              </Link>
-              <p className="text-xs text-gray-500 mb-2 font-mono">{p.model}</p>
-              {p.ratingSpec && (
-                <div className="data-card-row">
-                  <span className="label">Rating spec</span>
-                  <span className="value">{p.ratingSpec}</span>
+                  {p.capacityKva && (
+                    <div className="data-card-row">
+                      <span className="label">Capacity</span>
+                      <span className="value">{p.capacityKva} kVA</span>
+                    </div>
+                  )}
+                  {p.warrantyMonths != null && (
+                    <div className="data-card-row">
+                      <span className="label">Warranty</span>
+                      <span className="value">{p.warrantyMonths} months</span>
+                    </div>
+                  )}
+                  {canManage && (
+                    <div className="mt-3 flex justify-end gap-4">
+                      <button onClick={() => openEdit(p)} className="text-sm font-medium text-blue-600">Edit</button>
+                      <button
+                        onClick={() => remove(p)}
+                        disabled={deletingId === p.id}
+                        className="text-sm font-medium text-red-600 disabled:opacity-50"
+                      >
+                        {deletingId === p.id ? "Deleting…" : "Delete"}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-              {p.capacityKva && (
-                <div className="data-card-row">
-                  <span className="label">Capacity</span>
-                  <span className="value">{p.capacityKva} kVA</span>
-                </div>
-              )}
-              {p.warrantyMonths != null && (
-                <div className="data-card-row">
-                  <span className="label">Warranty</span>
-                  <span className="value">{p.warrantyMonths} months</span>
-                </div>
-              )}
-              {canManage && (
-                <div className="mt-3 flex justify-end gap-4">
-                  <button onClick={() => openEdit(p)} className="text-sm font-medium text-blue-600">Edit</button>
-                  <button
-                    onClick={() => remove(p)}
-                    disabled={deletingId === p.id}
-                    className="text-sm font-medium text-red-600 disabled:opacity-50"
-                  >
-                    {deletingId === p.id ? "Deleting…" : "Delete"}
-                  </button>
-                </div>
-              )}
-            </div>
-          ))
+              ))
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

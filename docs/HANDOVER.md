@@ -64,38 +64,56 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-17, later):** working tree clean, `master`
-> pushed to `origin`. This session: the user ran the `zan-app-api` deploy
-> dance twice more - once for the customer-role guard + PO-tool cleanup
-> (confirmed live), and again for **vendor archiving** (deactivate a vendor
-> without losing its history - see changelog for why this was chosen over a
-> hard delete or a shared "History Vendor" placeholder), plus a real bug fix
-> (`apiClient.ts` throwing on 204 responses - every delete button was
-> falsely reporting failure even on success). **The vendor-archive deploy
-> hit real friction the first time round** (wrong-directory `vercel build`
-> silently left a stale `.vercel\output` for `deploy --prebuilt` to pick up,
-> then `notepad patch.ps1` saved to the wrong folder) - **both root-caused
-> and fixed on the second attempt, confirmed working by the user archiving a
-> real vendor through the live UI.** Both gotchas are now baked directly
-> into "The `zan-app-api` manual deploy dance" steps below (delete stale
-> output before rebuilding, verify a new route landed in the build output,
-> don't trust "401 not 404" alone for a brand-new route, confirm
-> `patch.ps1` actually saved where expected) so they shouldn't cost time
-> again. This cloud session still can't run the deploy dance itself (same
-> unchanged blockers: no Desktop Commander, `api.vercel.com` network-
-> blocked) - all of the above was done by the user on their own machine,
-> talked through step by step. Also this session: verified a user-uploaded
-> delivery-status spreadsheet against production (read-only, no changes) -
-> found `RecdDelivery` is almost entirely unpopulated for Ethen's sites (see
-> changelog and Current open items), waiting on the user before importing
-> anything. Still open: flip on
-> **Settings → Agent Visibility → Customer** in production (customer chat is
-> code-complete and live-verified, deliberately left for the user to enable),
-> and the Reports section still hasn't been click-tested as a logged-in user
-> (same "agent can't log into admin-web" restriction blocks that from any
-> session, not just cloud ones). Start a new session by reading this file top
-> to bottom before touching anything - "Current open items" and the top of
-> "Changelog" are the fastest way back up to speed.
+> **Session boundary (2026-08-20):** working tree clean, `master` pushed to
+> `origin`. **This was the first session with real local filesystem/shell
+> access to the user's own machine** (not the "cloud session" pattern every
+> prior entry below warns about) - `tsc`, `next build`, and `npm run
+> dev`/`start` were all run directly against `D:\Projects\Zan-APP`, and both
+> `zan-api` (4011) and `zan-admin-web` (6011) were started locally so the
+> user could click-test changes themselves before anything shipped. No
+> Vercel deploy was attempted or needed for the `admin-web` half (git-push
+> auto-deploy handled it); see below for the `zan-app-api` half, which is
+> **not yet deployed**.
+>
+> Built a reusable **`DataTable`** component
+> (`apps/admin-web/src/components/DataTable.tsx`) - per-column show/hide
+> (persisted per page via `localStorage`) and a per-column filter row
+> (dropdown of distinct values for categorical columns, free-text search for
+> columns marked `filterType: "text"`) - and wired it into **Sites**,
+> **Customers**, and **Products** (the other list pages - Vendors, Orders,
+> Invoices, Quotations, Purchase Orders, Expenses, Users, Work Orders,
+> Complaints - still have their old hand-rolled tables; same pattern drops
+> in cleanly whenever asked). Sites also gained four columns that didn't
+> exist in the table before: **Address**, **Product**, **Vendor**, and
+> **Update status** (the label from the site's most recent "Post a status
+> update" entry - `SiteStageEvent.statusOption.label` - deliberately
+> different from **Stage**, which is `currentStage.label`). The Vendor/
+> Product/Update-status columns needed `apps/api/src/routes/sites.ts`'s
+> `GET /sites` list query widened (`order.product`, and each site's latest
+> `stageEvents` via `take: 1`) - **this is a backend change, so it needs the
+> full `zan-app-api` manual deploy dance before it's live in production**,
+> same as every other backend-only change in this file. Not yet deployed.
+> **No DB schema or migration changes this session** - only Prisma
+> `include` widened on an existing query - so there's nothing DB-side that
+> could conflict between local test data and production.
+>
+> Two build/process gotchas worth knowing for next time, both new this
+> session (see "Known gotchas" below for the full writeups): (1) building
+> `admin-web` via `next build <path>` from outside that directory silently
+> produces an almost-unstyled page - Tailwind's `content` glob in
+> `tailwind.config.js` resolves relative to `process.cwd()`, not the config
+> file's location, and the only symptom is a quiet "content option is
+> missing" build warning, not an error; always build with cwd actually
+> inside `apps/admin-web`. (2) `next start`'s actual server runs as a child
+> process, not the PID `Start-Process` itself returns - killing the
+> launcher PID leaves the real server still bound to port 6011, so the next
+> start attempt fails with `EADDRINUSE` (or worse, silently serves stale
+> output) - always kill whatever `Get-NetTCPConnection -LocalPort 6011
+> -State Listen` actually reports, not the recorded launcher PID.
+>
+> Start a new session by reading this file top to bottom before touching
+> anything - "Current open items" and the top of "Changelog" are the
+> fastest way back up to speed.
 
 ## Quick facts
 
@@ -231,6 +249,28 @@ same session:
   works correctly and is what Vercel uses anyway, so production is unaffected.
   Use `next build && next start` for local admin-web testing until this is
   root-caused.
+- **`next build` for `admin-web` must actually run with its cwd inside
+  `apps/admin-web`** — invoking the CLI with a directory argument
+  (`next build "D:\...\apps\admin-web"`) from somewhere else builds
+  successfully but silently produces an almost-unstyled page: Tailwind's
+  `content: ["./src/**/*..."]` glob in `tailwind.config.js` resolves
+  relative to `process.cwd()`, not the config file's own location, so from
+  the wrong cwd it matches nothing and Tailwind emits nearly empty CSS. The
+  only symptom is a quiet `warn - The content option ... is missing or
+  empty` line in the build output, not a failure — easy to miss. Confirmed
+  2026-08-20: the page loaded and functioned, just with zero styling (huge
+  unsized images, unstyled nav). Fix: run `npm run build`/`next build` via
+  `Start-Process -WorkingDirectory apps\admin-web` (or an actual `cd`), not
+  a path argument to the CLI from elsewhere.
+- **`next start`'s real server is a child process, not the PID
+  `Start-Process`/`npm run start` itself returns.** Killing that recorded
+  PID leaves the actual server still bound to port 6011 — the next start
+  attempt then fails with `EADDRINUSE`, and worse, until you notice, the
+  browser keeps serving whatever stale build the orphaned process still has
+  loaded. Confirmed 2026-08-20. Fix: before restarting, kill whatever
+  `Get-NetTCPConnection -LocalPort 6011 -State Listen` actually reports
+  (`| ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`), not the
+  launcher's own PID.
 - Editing `packages/shared` source has **zero effect** until it's rebuilt
   (`npm run build --workspace=packages/shared`) and the API dev server is
   restarted — bit twice by this (once historically, once during the HSN-
@@ -313,8 +353,19 @@ same session:
   **Always check for these before assuming a feature doesn't exist or
   starting to rebuild it from scratch.**
 
-## Current open items (as of 2026-08-18)
+## Current open items (as of 2026-08-20)
 
+- **`zan-app-api` deploy pending: Sites list's Vendor/Product/Update-status columns** - the
+  `GET /sites` list query now includes `order.product` and each site's latest `stageEvents`
+  (see 2026-08-20 changelog entry). Live-verified locally against the local dev DB, but the
+  production API still serves the old query shape until the manual deploy dance runs - until
+  then those three columns (and the "Update status" text in the mobile card) will show
+  `undefined`/blank in production even though `admin-web` itself is already live. Verify after
+  deploying with a real site that has at least one status update and a vendor assigned.
+- **`DataTable` (column show/hide + per-column filter) only covers Sites, Customers, and
+  Products so far** (2026-08-20, see changelog) - Vendors, Orders, Invoices, Quotations,
+  Purchase Orders, Expenses, Users, Work Orders, and Complaints still use their original
+  hand-rolled tables. Same component, same pattern - straightforward to extend when asked.
 - **Drive folder creation fixed and deployed (2026-08-18, two rounds) but not yet click-tested
   live** - round 1 fixed the expired token + published the consent screen (7-day expiry gone for
   good); the user then reported the button still didn't work, which turned out to be a second,
@@ -452,6 +503,57 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Reusable `DataTable` (column show/hide + per-column filter) on Sites, Customers, Products; four new Sites columns (2026-08-20)
+User asked for two things on the Sites/Customers/Products list pages: the ability to
+show/hide columns, and a search/filter per column. Built a shared
+`apps/admin-web/src/components/DataTable.tsx` rather than one-off code per page - takes a
+column config (`key`, `label`, `accessor` for filtering, optional custom `render`,
+`defaultVisible`, `alwaysVisible`, `filterType: "select" | "text"`) plus `rows`, and renders
+the desktop `<table>` itself while handing the same filtered row array back to the caller via
+a render-prop child, so each page's existing hand-built mobile card list stays in sync with
+whatever filters are active instead of needing its own separate filtering logic.
+
+- **Column visibility**: a "Columns" button opens a checklist (one column per page pinned
+  `alwaysVisible` so the table can't be emptied out); choice persists per page in
+  `localStorage` under `zan-app:columns:<page>`, with a "Reset to default" link.
+- **Per-column filter**: a second header row, one control per visible column. Defaults to a
+  `<select>` populated with that column's distinct values across all rows (exact-match
+  filtering) - genuinely useful for categorical columns like Stage/Engineer/Customer/Shape.
+  Columns marked `filterType: "text"` (mostly-unique free-text fields - Order #, names,
+  addresses, model numbers) get a substring-match text box instead, since a dropdown of every
+  order number wouldn't help anyone.
+- Wired into **Sites**, **Customers**, **Products** only - the other list pages keep their
+  original tables for now (see Current open items).
+
+While rebuilding Sites, the user asked for more columns than existed in the table at all:
+**Address** (field already fetched, just never rendered), **Product**, **Vendor**, and
+**Update status**. The first request for "Installation status" turned out, after the user
+clarified with a screenshot of the site detail page's "Post a status update" form, to mean
+the *latest status update's status* (e.g. "Pending"), not the SITC phase (Supply/
+Installation/Testing/Commissioning) - those are two genuinely different fields
+(`SiteStageEvent.statusOption.label` vs. `currentStage.phase`), easy to conflate from the
+name alone. Implemented the one actually wanted: `apps/api/src/routes/sites.ts`'s `GET
+/sites` list query widened to `include: { order: { include: { product: true } },
+stageEvents: { orderBy: { createdAt: "desc" }, take: 1, include: { statusOption: true } }
+}` (alongside the existing `vendor: true`), giving each row its base product and the label
+of its own most recent status update with one query each, no N+1. **Backend change - not
+live in production until the `zan-app-api` manual deploy dance runs** (see Current open
+items); `admin-web`'s three new/changed columns will render blank against production until
+then even though the frontend itself deploys automatically.
+
+This session had genuine local shell access to the user's own machine (a first - every prior
+session in this file was a cloud/web session blocked from exactly this), so verification
+went further than usual: `tsc --noEmit` clean on both `apps/admin-web` and `apps/api`, a full
+`next build` clean, and then both `apps/api` (port 4011) and `apps/admin-web` (port 6011)
+were actually started locally against the user's own dev Postgres so they could click-test
+the real UI themselves before anything shipped - not just build-clean-and-hope. That process
+surfaced two real build/runtime gotchas (Tailwind silently emitting near-empty CSS when
+`next build` runs from the wrong cwd; `next start`'s child process outliving the PID
+`Start-Process` returns, causing `EADDRINUSE` on restart) - both root-caused, fixed, and
+written up in "Known gotchas" above so they don't cost time again. **No DB schema or
+migration changes this session** - only an `include` widened on an existing query - so there
+was nothing DB-side that could conflict between the user's local test data and production.
 
 ### "Create Drive folders" still failing after the token-expiry fix - wrong scope, not auth (2026-08-18, later)
 User confirmed the expiry fix (below) didn't actually fix the button - still no folder created.

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+import { DataTable, DataTableColumn } from "@/components/DataTable";
 
 interface Customer {
   id: string;
@@ -166,103 +167,112 @@ function CustomersPageInner() {
       {error && <p className="text-sm text-red-600">{error}</p>}
       {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
 
-      {/* Desktop / tablet: table */}
-      <div className="card overflow-hidden table-desktop">
-        <div className="table-scroll">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Address</th>
-                <th className="px-4 py-3">Primary contact</th>
-                {canManage && <th className="px-4 py-3 text-right">Actions</th>}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {customers.map((c) => {
+      <DataTable
+        storageKey="customers"
+        rows={customers}
+        rowKey={(c) => c.id}
+        emptyMessage="No customers yet."
+        columns={[
+          {
+            key: "name",
+            label: "Name",
+            accessor: (c) => c.name,
+            alwaysVisible: true,
+            filterType: "text",
+            render: (c) => (
+              <Link href={`/customers/${c.id}`} className="hover:underline" style={{ color: "var(--theme-primary)" }}>
+                {c.name}
+              </Link>
+            ),
+          },
+          { key: "address", label: "Address", accessor: (c) => c.address ?? "", filterType: "text" },
+          {
+            key: "contact",
+            label: "Primary contact",
+            filterType: "text",
+            accessor: (c) => {
+              const contact = c.contacts[0];
+              return contact ? `${contact.name}${contact.phone ? ` ${contact.phone}` : ""}` : "";
+            },
+            render: (c) => {
+              const contact = c.contacts[0];
+              return contact ? (
+                <>
+                  {contact.name}
+                  {contact.phone && <> · {contact.phone}</>}
+                </>
+              ) : (
+                "-"
+              );
+            },
+          },
+          ...(canManage
+            ? [
+                {
+                  key: "actions",
+                  label: "Actions",
+                  align: "right" as const,
+                  alwaysVisible: true,
+                  filterable: false,
+                  render: (c: Customer) => (
+                    <>
+                      <button onClick={() => openEdit(c)} className="text-sm font-medium text-blue-600 hover:text-blue-800 mr-3">
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => remove(c)}
+                        disabled={deletingId === c.id}
+                        className="text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                      >
+                        {deletingId === c.id ? "Deleting…" : "Delete"}
+                      </button>
+                    </>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      >
+        {(filteredCustomers) => (
+          <div className="cards-mobile" data-testid="customers-mobile-cards">
+            {filteredCustomers.length === 0 ? (
+              <div className="card p-6 text-center text-sm text-gray-400">
+                {customers.length === 0 ? "No customers yet." : "No rows match the current filters."}
+              </div>
+            ) : (
+              filteredCustomers.map((c) => {
                 const contact = c.contacts[0];
                 return (
-                  <tr key={c.id} className="hover:bg-gray-50/60">
-                    <td className="px-4 py-3 font-medium">
-                      <Link href={`/customers/${c.id}`} className="hover:underline" style={{ color: "var(--theme-primary)" }}>
-                        {c.name}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-gray-500">{c.address ?? "-"}</td>
-                    <td className="px-4 py-3 text-gray-500">
-                      {contact ? (
-                        <>
-                          {contact.name}
-                          {contact.phone && <> · {contact.phone}</>}
-                        </>
-                      ) : (
-                        "-"
-                      )}
-                    </td>
+                  <div key={c.id} className="data-card">
+                    <Link href={`/customers/${c.id}`} className="text-sm font-semibold text-gray-900 truncate block hover:underline">
+                      {c.name}
+                    </Link>
+                    <p className="text-xs text-gray-500 mb-2 truncate">{c.address ?? "No address on file"}</p>
+                    {contact && (
+                      <div className="data-card-row">
+                        <span className="label">Contact</span>
+                        <span className="value">{contact.name}{contact.phone && ` · ${contact.phone}`}</span>
+                      </div>
+                    )}
                     {canManage && (
-                      <td className="px-4 py-3 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => openEdit(c)}
-                          className="text-sm font-medium text-blue-600 hover:text-blue-800 mr-3"
-                        >
-                          Edit
-                        </button>
+                      <div className="mt-3 flex justify-end gap-4">
+                        <button onClick={() => openEdit(c)} className="text-sm font-medium text-blue-600">Edit</button>
                         <button
                           onClick={() => remove(c)}
                           disabled={deletingId === c.id}
-                          className="text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                          className="text-sm font-medium text-red-600 disabled:opacity-50"
                         >
                           {deletingId === c.id ? "Deleting…" : "Delete"}
                         </button>
-                      </td>
+                      </div>
                     )}
-                  </tr>
+                  </div>
                 );
-              })}
-              {customers.length === 0 && (
-                <tr><td colSpan={canManage ? 4 : 3} className="px-4 py-8 text-center text-gray-400">No customers yet.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Mobile: card stack */}
-      <div className="cards-mobile" data-testid="customers-mobile-cards">
-        {customers.length === 0 ? (
-          <div className="card p-6 text-center text-sm text-gray-400">No customers yet.</div>
-        ) : (
-          customers.map((c) => {
-            const contact = c.contacts[0];
-            return (
-              <div key={c.id} className="data-card">
-                <Link href={`/customers/${c.id}`} className="text-sm font-semibold text-gray-900 truncate block hover:underline">
-                  {c.name}
-                </Link>
-                <p className="text-xs text-gray-500 mb-2 truncate">{c.address ?? "No address on file"}</p>
-                {contact && (
-                  <div className="data-card-row">
-                    <span className="label">Contact</span>
-                    <span className="value">{contact.name}{contact.phone && ` · ${contact.phone}`}</span>
-                  </div>
-                )}
-                {canManage && (
-                  <div className="mt-3 flex justify-end gap-4">
-                    <button onClick={() => openEdit(c)} className="text-sm font-medium text-blue-600">Edit</button>
-                    <button
-                      onClick={() => remove(c)}
-                      disabled={deletingId === c.id}
-                      className="text-sm font-medium text-red-600 disabled:opacity-50"
-                    >
-                      {deletingId === c.id ? "Deleting…" : "Delete"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })
+              })
+            )}
+          </div>
         )}
-      </div>
+      </DataTable>
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>
