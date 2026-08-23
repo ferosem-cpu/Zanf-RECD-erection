@@ -215,6 +215,7 @@ export const createProductSchema = z.object({
   shape: z.enum(["cylinder", "triangle", "rectangle"]).optional(),
   dimensions: z.string().optional(),
   weightKg: z.number().optional(),
+  silencerType: z.union([z.literal(1), z.literal(2)]).optional(),
 });
 
 export const updateProductSchema = z.object({
@@ -226,6 +227,34 @@ export const updateProductSchema = z.object({
   shape: z.enum(["cylinder", "triangle", "rectangle"]).optional(),
   dimensions: z.string().optional(),
   weightKg: z.number().optional(),
+  silencerType: z.union([z.literal(1), z.literal(2)]).optional(),
+});
+
+export const upsertCustomerProductPriceSchema = z.object({
+  customerId: z.string().min(1),
+  productId: z.string().min(1),
+  price: z.number().nonnegative(),
+});
+
+export const upsertCustomerSavedItemPriceSchema = z.object({
+  customerId: z.string().min(1),
+  savedItemId: z.string().min(1),
+  price: z.number().nonnegative(),
+});
+
+export const createSavedLineItemSchema = z.object({
+  name: z.string().min(1),
+  hsnCode: z.string().optional(),
+  standardPrice: z.number().nonnegative(),
+  taxRatePct: z.number().nonnegative().optional(),
+});
+
+export const updateSavedLineItemSchema = z.object({
+  name: z.string().min(1).optional(),
+  hsnCode: z.string().optional(),
+  standardPrice: z.number().nonnegative().optional(),
+  taxRatePct: z.number().nonnegative().optional(),
+  active: z.boolean().optional(),
 });
 
 export const registerVendorSchema = z.object({

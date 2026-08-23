@@ -53,6 +53,10 @@ export default function QuotationsPage() {
   const [lines, setLines] = useState([
     { productId: "", description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" },
   ]);
+  // This customer's negotiated product prices (productId -> price), fetched whenever
+  // form.customerId changes - used to auto-fill an empty unitPrice when a product is picked,
+  // same "only fill if still empty" guard as the description auto-fill below.
+  const [customerProductPrices, setCustomerProductPrices] = useState<Record<string, string>>({});
 
   function load() {
     api<QuotationRow[]>("/quotations").then(setRows).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
@@ -63,6 +67,16 @@ export default function QuotationsPage() {
     }
   }
   useEffect(load, [canManage]);
+
+  useEffect(() => {
+    if (!form.customerId) {
+      setCustomerProductPrices({});
+      return;
+    }
+    api<{ products: { productId: string; price: string }[] }>(`/customer-pricing?customerId=${form.customerId}`)
+      .then((data) => setCustomerProductPrices(Object.fromEntries(data.products.map((p) => [p.productId, p.price]))))
+      .catch(() => setCustomerProductPrices({}));
+  }, [form.customerId]);
 
   async function remove(id: string) {
     if (!confirm("Delete this quotation? This can't be undone.")) return;
@@ -248,6 +262,7 @@ export default function QuotationsPage() {
                             updateLine(i, {
                               productId: pid,
                               description: p && !l.description ? `${p.name} (${p.model})` : l.description,
+                              unitPrice: p && customerProductPrices[pid] && !l.unitPrice ? customerProductPrices[pid] : l.unitPrice,
                             });
                           }}
                         >

@@ -88,6 +88,28 @@ interface PendingActionContent {
   resultId?: string | null;
 }
 
+/** Shape of one entry in preview.lineItems for create_quotation/create_invoice/
+ * create_purchase_order - see zanAppWriteTools.ts. Only these three tools' previews carry a
+ * structured lineItems array; every other tool's preview stays flat and renders through the
+ * generic dt/dd loop below, unchanged. */
+interface PreviewLineItem {
+  description: string;
+  hsnCode?: string | null;
+  quantity: number;
+  unitPrice: number;
+  discountPct?: number;
+  taxRatePct: number;
+  lineTotal: number;
+}
+
+function isLineItemArray(v: unknown): v is PreviewLineItem[] {
+  return Array.isArray(v) && v.every((x) => x && typeof x === "object" && "description" in x && "unitPrice" in x);
+}
+
+function formatMoney(n: number): string {
+  return `₹${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+}
+
 /** A tool-result message is a proposed write action if its JSON content has an actionId -
  * regardless of which write tool produced it, so new write tools need no frontend changes. */
 function parsePendingAction(m: StoredMessage): PendingActionContent | null {
@@ -121,6 +143,10 @@ export default function AgentChatBubble() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolvingActionId, setResolvingActionId] = useState<string | null>(null);
+  // Which line-item checkboxes are ticked, per pending action - only populated for actions
+  // whose preview carries a structured lineItems array (see PreviewLineItem above). Undefined
+  // for an actionId means "not touched yet, treat every line as checked" (the default).
+  const [checkedLines, setCheckedLines] = useState<Record<string, boolean[]>>({});
 
   const [micSupported, setMicSupported] = useState(false);
   const [listening, setListening] = useState(false);
@@ -276,14 +302,14 @@ export default function AgentChatBubble() {
     }
   }
 
-  async function resolveAction(actionId: string, outcome: "confirm" | "reject") {
+  async function resolveAction(actionId: string, outcome: "confirm" | "reject", lineItems?: PreviewLineItem[]) {
     if (!activeId || resolvingActionId) return;
     setResolvingActionId(actionId);
     setError(null);
     try {
       const result = await api<{ messages: StoredMessage[] }>(
         `/agent/conversations/${activeId}/actions/${actionId}/${outcome}`,
-        { method: "POST" },
+        lineItems ? { method: "POST", body: JSON.stringify({ lineItems }) } : { method: "POST" },
       );
       setMessages(result.messages ?? []);
     } catch (err) {
@@ -412,6 +438,19 @@ export default function AgentChatBubble() {
             {visibleMessages.map((m, i) => {
               const action = parsePendingAction(m);
               if (action) {
+                const rawLineItems = action.preview?.lineItems;
+                const lineItems = isLineItemArray(rawLineItems) ? rawLineItems : null;
+                const restEntries = action.preview
+                  ? Object.entries(action.preview).filter(([k, v]) => k !== "lineItems" && v !== null && v !== undefined && v !== "")
+                  : [];
+                const checked = lineItems ? (checkedLines[action.actionId] ?? lineItems.map(() => true)) : null;
+                const toggleLine = (idx: number) => {
+                  if (!lineItems || !checked) return;
+                  const next = [...checked];
+                  next[idx] = !next[idx];
+                  setCheckedLines((prev) => ({ ...prev, [action.actionId]: next }));
+                };
+                const confirmDisabled = resolvingActionId === action.actionId || (checked ? !checked.some(Boolean) : false);
                 return (
                   <div key={i} className="flex justify-start">
                     <div className="max-w-[90%] w-full rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm">
@@ -420,24 +459,57 @@ export default function AgentChatBubble() {
                         {action.status === "confirmed" && "✅ Confirmed and created"}
                         {action.status === "rejected" && "✕ Rejected"}
                       </p>
-                      {action.preview && (
-                        <dl className="space-y-0.5 mb-2">
-                          {Object.entries(action.preview)
-                            .filter(([, v]) => v !== null && v !== undefined && v !== "")
-                            .map(([k, v]) => (
-                              <div key={k} className="flex justify-between gap-3 text-xs">
-                                <dt className="text-gray-500">{labelizeKey(k)}</dt>
-                                <dd className="text-gray-800 font-medium text-right">{String(v)}</dd>
+                      {lineItems && (
+                        <div className="mb-2 border border-amber-200 rounded-lg overflow-hidden">
+                          {lineItems.map((li, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-start gap-2 px-2 py-1.5 text-xs border-b border-amber-100 last:border-b-0 bg-white/60"
+                            >
+                              {action.status === "pending_confirmation" ? (
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5"
+                                  checked={checked?.[idx] ?? true}
+                                  onChange={() => toggleLine(idx)}
+                                />
+                              ) : (
+                                <span className="mt-0.5">{checked?.[idx] === false ? "✕" : "✓"}</span>
+                              )}
+                              <div className="flex-1">
+                                <div className="text-gray-800">{li.description}</div>
+                                <div className="text-gray-500">
+                                  {li.quantity} × {formatMoney(li.unitPrice)}
+                                  {li.hsnCode ? ` · HSN ${li.hsnCode}` : ""}
+                                </div>
                               </div>
-                            ))}
+                              <div className="text-gray-800 font-medium whitespace-nowrap">{formatMoney(li.lineTotal)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {restEntries.length > 0 && (
+                        <dl className="space-y-0.5 mb-2">
+                          {restEntries.map(([k, v]) => (
+                            <div key={k} className="flex justify-between gap-3 text-xs">
+                              <dt className="text-gray-500">{labelizeKey(k)}</dt>
+                              <dd className="text-gray-800 font-medium text-right">{String(v)}</dd>
+                            </div>
+                          ))}
                         </dl>
                       )}
                       {action.status === "pending_confirmation" && (
                         <div className="flex gap-2 pt-1">
                           <button
                             className="flex-1 rounded-lg bg-gray-900 text-white text-xs py-1.5 disabled:opacity-50"
-                            disabled={resolvingActionId === action.actionId}
-                            onClick={() => resolveAction(action.actionId, "confirm")}
+                            disabled={confirmDisabled}
+                            onClick={() =>
+                              resolveAction(
+                                action.actionId,
+                                "confirm",
+                                lineItems && checked ? lineItems.filter((_, idx) => checked[idx]) : undefined,
+                              )
+                            }
                           >
                             {resolvingActionId === action.actionId ? "Working…" : "Confirm"}
                           </button>

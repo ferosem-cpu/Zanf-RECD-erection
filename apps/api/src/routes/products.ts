@@ -37,6 +37,7 @@ productsRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async 
       shape: parsed.data.shape,
       dimensions: parsed.data.dimensions,
       weightKg: parsed.data.weightKg,
+      silencerType: parsed.data.silencerType,
     },
   });
 
@@ -68,6 +69,7 @@ productsRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), asyn
       shape: data.shape,
       dimensions: data.dimensions,
       weightKg: data.weightKg,
+      silencerType: data.silencerType,
     },
   });
   res.json(product);

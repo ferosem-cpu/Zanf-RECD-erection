@@ -17,6 +17,7 @@ interface Product {
   shape: string | null;
   dimensions: string | null;
   weightKg: string | null;
+  silencerType: number | null;
 }
 
 const SHAPE_OPTIONS = [
@@ -24,6 +25,12 @@ const SHAPE_OPTIONS = [
   { value: "cylinder", label: "Cylinder" },
   { value: "triangle", label: "Triangle" },
   { value: "rectangle", label: "Rectangle" },
+];
+
+const SILENCER_TYPE_OPTIONS = [
+  { value: "", label: "Not set" },
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
 ];
 
 const emptyForm = {
@@ -35,6 +42,7 @@ const emptyForm = {
   shape: "",
   dimensions: "",
   weightKg: "",
+  silencerType: "",
 };
 
 export default function ProductsPage() {
@@ -105,6 +113,7 @@ function ProductsPageInner() {
       shape: p.shape ?? "",
       dimensions: p.dimensions ?? "",
       weightKg: p.weightKg ?? "",
+      silencerType: p.silencerType != null ? String(p.silencerType) : "",
     });
     setFormError(null);
     setOpen(true);
@@ -124,6 +133,7 @@ function ProductsPageInner() {
         shape: form.shape || undefined,
         dimensions: form.dimensions || undefined,
         weightKg: form.weightKg ? parseFloat(form.weightKg) : undefined,
+        silencerType: form.silencerType ? (parseInt(form.silencerType, 10) as 1 | 2) : undefined,
       };
       if (editing) {
         await api(`/products/${editing.id}`, { method: "PUT", body: JSON.stringify(body) });
@@ -208,6 +218,7 @@ function ProductsPageInner() {
           { key: "shape", label: "Shape", accessor: (p) => p.shape ?? "", defaultVisible: false },
           { key: "dimensions", label: "Dimensions", accessor: (p) => p.dimensions ?? "", defaultVisible: false, filterType: "text" },
           { key: "weightKg", label: "Weight (kg)", accessor: (p) => p.weightKg ?? "", defaultVisible: false },
+          { key: "silencerType", label: "Silencer Type", accessor: (p) => p.silencerType ?? "", defaultVisible: false },
           ...(canManage
             ? [
                 {
@@ -310,6 +321,14 @@ function ProductsPageInner() {
                 <input type="number" min={0} step="0.01" placeholder="Weight (kg)" className="field" value={form.weightKg} onChange={(e) => setForm({ ...form, weightKg: e.target.value })} />
               </div>
               <input placeholder="Dimensions (e.g. 1200 x 600 x 900 mm)" className="field w-full" value={form.dimensions} onChange={(e) => setForm({ ...form, dimensions: e.target.value })} />
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Silencer Type</label>
+                <select className="field w-full" value={form.silencerType} onChange={(e) => setForm({ ...form, silencerType: e.target.value })}>
+                  {SILENCER_TYPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
 
               {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
 

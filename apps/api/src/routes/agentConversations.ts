@@ -74,8 +74,9 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, async
   const newHistory: UnifiedMessage[] = [...priorHistory, { role: "user", content: message }];
 
   try {
+    const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
     const result = await runAgentTurn({
-      systemPrompt: buildAgentSystemPrompt(!!req.auth!.customerId),
+      systemPrompt: buildAgentSystemPrompt(!!req.auth!.customerId, company?.agentCustomInstructions),
       history: newHistory,
       tools: allTools,
       auth: { ...req.auth!, conversationId: row.id },
@@ -239,6 +240,17 @@ async function executeConfirmedAction(
       });
       return invoice.id;
     }
+    case "create_saved_item": {
+      const item = await prisma.savedLineItem.create({
+        data: {
+          name: String(input.name),
+          hsnCode: input.hsnCode ? String(input.hsnCode) : null,
+          standardPrice: new Prisma.Decimal(String(input.standardPrice)),
+          taxRatePct: new Prisma.Decimal(String(input.taxRatePct ?? 18)),
+        },
+      });
+      return item.id;
+    }
     case "create_complaint": {
       const complaint = await createComplaintRecord(
         {
@@ -296,10 +308,23 @@ async function handleResolveAction(
     return res.status(400).json({ error: `This action was already ${action.status}.` });
   }
 
+  // The confirm card lets the user tick/untick individual line items (quotations, invoices,
+  // purchase orders) before approving - if edited lineItems were sent, use those instead of
+  // the ones originally drafted. Totals are always recomputed server-side from whatever
+  // lineItems end up here (see computeDocumentTotals calls in executeConfirmedAction), so this
+  // never trusts client-supplied money figures, only which lines to include.
+  const editedLineItems = Array.isArray(req.body?.lineItems) ? req.body.lineItems : null;
+  if (editedLineItems && editedLineItems.length === 0) {
+    return res.status(400).json({ error: "At least one line item is required." });
+  }
+  const resolvedInput = editedLineItems
+    ? { ...(action.input as Record<string, unknown>), lineItems: editedLineItems }
+    : (action.input as Record<string, unknown>);
+
   try {
     let resultId: string | null = null;
     if (outcome === "confirmed") {
-      resultId = await executeConfirmedAction(action.toolName, action.input as Record<string, unknown>, req.auth!.userId);
+      resultId = await executeConfirmedAction(action.toolName, resolvedInput, req.auth!.userId);
     }
 
     await prisma.agentPendingAction.update({

@@ -390,6 +390,72 @@ const searchComplaints: AgentTool = {
   },
 };
 
+const searchSavedItems: AgentTool = {
+  name: "search_saved_items",
+  description:
+    "Search the company's saved/standard billing items (reusable line items like 'Installation " +
+    "labour' or 'Crane hire', each with a standard price and HSN code) - returns id, name, " +
+    "hsnCode, standardPrice, taxRatePct. Call this before drafting a quotation, invoice, or " +
+    "purchase order, and offer matching items to the user by name and price rather than " +
+    "inventing line items yourself.",
+  inputSchema: {
+    type: "object",
+    properties: { query: { type: "string", description: "Name (or partial name) to search for. Omit to list all standard items." } },
+  },
+  handler: async (input, auth) => {
+    if (!hasAny(auth, [PERMISSION_KEY.MANAGE_QUOTATIONS, PERMISSION_KEY.MANAGE_INVOICES, PERMISSION_KEY.MANAGE_PURCHASE_ORDERS]))
+      return forbidden("saved items");
+    const query = input.query ? String(input.query) : undefined;
+    const items = await prisma.savedLineItem.findMany({
+      where: {
+        active: true,
+        ...(query ? { name: { contains: query, mode: "insensitive" } } : {}),
+      },
+      orderBy: { name: "asc" },
+      take: RESULT_LIMIT,
+    });
+    return items.map((i) => ({
+      id: i.id, name: i.name, hsnCode: i.hsnCode, standardPrice: num(i.standardPrice), taxRatePct: num(i.taxRatePct),
+    }));
+  },
+};
+
+const getCustomerPricing: AgentTool = {
+  name: "get_customer_pricing",
+  description:
+    "Look up one customer's negotiated prices - both for RECD products and for saved/standard " +
+    "billing items - which may differ from the company-wide standard price. Call this once the " +
+    "customer for a quotation or invoice is resolved, and prefer these prices over the generic " +
+    "standard price when offering items to the user, calling out when a customer's rate differs " +
+    "from the standard one.",
+  inputSchema: {
+    type: "object",
+    properties: { customerId: { type: "string", description: "Customer id, from search_customers." } },
+    required: ["customerId"],
+  },
+  handler: async (input, auth) => {
+    if (!hasAny(auth, [PERMISSION_KEY.MANAGE_QUOTATIONS, PERMISSION_KEY.MANAGE_INVOICES, PERMISSION_KEY.MANAGE_PURCHASE_ORDERS]))
+      return forbidden("customer pricing");
+    const customerId = String(input.customerId ?? "");
+    if (!customerId) return { error: "customerId is required." };
+
+    const [productPrices, savedItemPrices] = await Promise.all([
+      prisma.customerProductPrice.findMany({ where: { customerId }, include: { product: { select: { name: true, model: true } } } }),
+      prisma.customerSavedItemPrice.findMany({ where: { customerId }, include: { savedItem: { select: { name: true, standardPrice: true } } } }),
+    ]);
+
+    return {
+      products: productPrices.map((p) => ({ productId: p.productId, productName: `${p.product.name} (${p.product.model})`, price: num(p.price) })),
+      savedItems: savedItemPrices.map((p) => ({
+        savedItemId: p.savedItemId,
+        name: p.savedItem.name,
+        standardPrice: num(p.savedItem.standardPrice),
+        customerPrice: num(p.price),
+      })),
+    };
+  },
+};
+
 export const zanAppReadTools: AgentTool[] = [
   searchCustomers,
   searchVendors,
@@ -400,4 +466,6 @@ export const zanAppReadTools: AgentTool[] = [
   searchOrdersAndSites,
   searchWorkOrders,
   searchComplaints,
+  searchSavedItems,
+  getCustomerPricing,
 ];

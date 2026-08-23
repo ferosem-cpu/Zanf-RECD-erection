@@ -16,6 +16,7 @@ interface ProductDetail {
   shape: string | null;
   dimensions: string | null;
   weightKg: string | null;
+  silencerType: number | null;
 }
 
 const SHAPE_LABELS: Record<string, string> = {
@@ -116,6 +117,10 @@ export default function ProductDetailPage() {
           <div className="data-card-row">
             <span className="label">Weight</span>
             <span className="value">{product.weightKg ? `${product.weightKg} kg` : "Not set"}</span>
+          </div>
+          <div className="data-card-row">
+            <span className="label">Silencer Type</span>
+            <span className="value">{product.silencerType ?? "Not set"}</span>
           </div>
         </section>
       </div>

@@ -65,6 +65,10 @@ export default function InvoicesPage() {
   const [lines, setLines] = useState([
     { productId: "", description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" },
   ]);
+  // This customer's negotiated product prices (productId -> price), fetched whenever
+  // form.customerId changes - used to auto-fill an empty unitPrice when a product is picked,
+  // same "only fill if still empty" guard as the description auto-fill below.
+  const [customerProductPrices, setCustomerProductPrices] = useState<Record<string, string>>({});
 
   function load() {
     const qs = new URLSearchParams();
@@ -78,6 +82,16 @@ export default function InvoicesPage() {
     }
   }
   useEffect(load, [docType, status, canManage]);
+
+  useEffect(() => {
+    if (!form.customerId) {
+      setCustomerProductPrices({});
+      return;
+    }
+    api<{ products: { productId: string; price: string }[] }>(`/customer-pricing?customerId=${form.customerId}`)
+      .then((data) => setCustomerProductPrices(Object.fromEntries(data.products.map((p) => [p.productId, p.price]))))
+      .catch(() => setCustomerProductPrices({}));
+  }, [form.customerId]);
 
   function addLine() {
     setLines((l) => [...l, { productId: "", description: "", hsnCode: "", quantity: "1", unitPrice: "", discountPct: "0", taxRatePct: "18" }]);
@@ -271,7 +285,23 @@ export default function InvoicesPage() {
                 <div className="space-y-2">
                   {lines.map((l, i) => (
                     <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <select
+                          className="field"
+                          value={l.productId}
+                          onChange={(e) => {
+                            const pid = e.target.value;
+                            const p = products.find((x) => x.id === pid);
+                            updateLine(i, {
+                              productId: pid,
+                              description: p && !l.description ? `${p.name} (${p.model})` : l.description,
+                              unitPrice: p && customerProductPrices[pid] && !l.unitPrice ? customerProductPrices[pid] : l.unitPrice,
+                            });
+                          }}
+                        >
+                          <option value="">No product (free text line)</option>
+                          {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
+                        </select>
                         <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} required />
                         <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} required />
                       </div>

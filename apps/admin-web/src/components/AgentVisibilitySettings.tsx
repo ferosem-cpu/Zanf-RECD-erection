@@ -22,13 +22,15 @@ export default function AgentVisibilitySettings() {
   const canManage = hasPermission("manage_settings");
 
   const [selected, setSelected] = useState<string[] | null>(null);
+  const [customInstructions, setCustomInstructions] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const data = await api<{ agentVisibleRoleKeys?: string[] }>("/settings");
+      const data = await api<{ agentVisibleRoleKeys?: string[]; agentCustomInstructions?: string | null }>("/settings");
       setSelected(data.agentVisibleRoleKeys ?? []);
+      setCustomInstructions(data.agentCustomInstructions ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -48,7 +50,10 @@ export default function AgentVisibilitySettings() {
     setSaving(true);
     setError(null);
     try {
-      await api("/settings", { method: "PUT", body: JSON.stringify({ agentVisibleRoleKeys: selected }) });
+      await api("/settings", {
+        method: "PUT",
+        body: JSON.stringify({ agentVisibleRoleKeys: selected, agentCustomInstructions: customInstructions }),
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -58,7 +63,7 @@ export default function AgentVisibilitySettings() {
 
   return (
     <section className="card p-4 sm:p-6">
-      <h2 className="text-base sm:text-lg font-semibold mb-1">In-app agent - who can see the chat bubble</h2>
+      <h2 className="text-base sm:text-lg font-semibold mb-1">In-app agent - visibility &amp; behavior</h2>
       <p className="text-sm text-gray-500 mb-4">
         Choose which roles see the floating chat assistant across the app. Nobody sees it
         until at least one role is selected here.
@@ -79,8 +84,26 @@ export default function AgentVisibilitySettings() {
         ))}
       </div>
 
+      <div className="mb-4">
+        <label className="block text-sm font-medium mb-1" htmlFor="agent-custom-instructions">
+          Custom instructions
+        </label>
+        <p className="text-sm text-gray-500 mb-2">
+          Free-text guidance appended to the assistant&apos;s instructions on every chat turn,
+          e.g. &quot;always ask for the delivery address before drafting an invoice&quot;.
+        </p>
+        <textarea
+          id="agent-custom-instructions"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+          rows={4}
+          value={customInstructions}
+          onChange={(e) => setCustomInstructions(e.target.value)}
+          placeholder="e.g. Always confirm the delivery address before drafting an invoice."
+        />
+      </div>
+
       <button className="btn-primary px-4 py-2 text-sm" onClick={save} disabled={saving}>
-        {saving ? "Saving…" : "Save visibility"}
+        {saving ? "Saving…" : "Save"}
       </button>
     </section>
   );

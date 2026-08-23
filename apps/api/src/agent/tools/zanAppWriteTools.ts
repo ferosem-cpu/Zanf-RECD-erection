@@ -216,7 +216,7 @@ const createPurchaseOrderTool: AgentTool = {
 
     const preview = {
       supplier: supplier.name,
-      lineItems: normalizedLines.map((l) => `${l.description} x${l.quantity} @ ₹${l.unitPrice}`).join("; "),
+      lineItems: normalizedLines.map((l) => ({ ...l, lineTotal: l.quantity * l.unitPrice })),
       subtotal: Number(totals.subtotal),
       cgst: Number(totals.cgstAmount),
       sgst: Number(totals.sgstAmount),
@@ -359,7 +359,10 @@ const createQuotationTool: AgentTool = {
 
     const preview = {
       customer: customer.name,
-      lineItems: normalizedLines.map((l) => `${l.description} x${l.quantity} @ ₹${l.unitPrice}`).join("; "),
+      lineItems: normalizedLines.map((l) => ({
+        ...l,
+        lineTotal: l.quantity * l.unitPrice * (1 - l.discountPct / 100),
+      })),
       subtotal: Number(totals.subtotal),
       discount: Number(totals.discountAmount),
       cgst: Number(totals.cgstAmount),
@@ -532,7 +535,10 @@ const createInvoiceTool: AgentTool = {
     const preview = {
       docType,
       customer: customer.name,
-      lineItems: normalizedLines.map((l) => `${l.description} x${l.quantity} @ ₹${l.unitPrice}`).join("; "),
+      lineItems: normalizedLines.map((l) => ({
+        ...l,
+        lineTotal: l.quantity * l.unitPrice * (1 - l.discountPct / 100),
+      })),
       subtotal: Number(totals.subtotal),
       discount: Number(totals.discountAmount),
       cgst: Number(totals.cgstAmount),
@@ -647,10 +653,67 @@ const createComplaintTool: AgentTool = {
   },
 };
 
+const createSavedItemTool: AgentTool = {
+  name: "create_saved_item",
+  description:
+    "Save a reusable billing item (name, HSN code, standard price) to the company's standard-" +
+    "items catalog, so it shows up in search_saved_items and can be picked next time a " +
+    "quotation/invoice/PO is drafted. This does NOT save it immediately - it prepares it and " +
+    "shows the user a confirm card in the chat; only THEY can approve it. Only call this after " +
+    "the user has agreed they want a specific item remembered - never save one unasked.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "e.g. 'Installation labour', 'Crane hire'." },
+      hsnCode: { type: "string", description: "HSN/SAC code for GST, if known." },
+      standardPrice: { type: "number", description: "Standard per-unit price in rupees, before tax." },
+      taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
+    },
+    required: ["name", "standardPrice"],
+  },
+  handler: async (input, auth) => {
+    if (!hasAny(auth, [PERMISSION_KEY.MANAGE_QUOTATIONS, PERMISSION_KEY.MANAGE_INVOICES, PERMISSION_KEY.MANAGE_PURCHASE_ORDERS]))
+      return forbidden("saved items");
+    if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
+
+    const name = String(input.name ?? "").trim();
+    const hsnCode = input.hsnCode ? String(input.hsnCode).trim() : null;
+    const standardPrice = Number(input.standardPrice);
+    const taxRatePct = input.taxRatePct !== undefined ? Number(input.taxRatePct) : 18;
+
+    if (!name) return { error: "name is required." };
+    if (!Number.isFinite(standardPrice) || standardPrice < 0) return { error: "standardPrice must be a non-negative number." };
+
+    const preview = { name, hsnCode, standardPrice, taxRatePct };
+
+    const pending = await prisma.agentPendingAction.create({
+      data: {
+        conversationId: auth.conversationId,
+        toolName: "create_saved_item",
+        input: preview,
+        preview,
+        createdById: auth.userId,
+      },
+    });
+
+    return {
+      status: "pending_confirmation",
+      actionId: pending.id,
+      preview,
+      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. Do not tell the user it has been saved yet.",
+    };
+  },
+};
+
+function hasAny(auth: { permissions: Set<string> }, keys: string[]): boolean {
+  return keys.some((k) => auth.permissions.has(k));
+}
+
 export const zanAppWriteTools: AgentTool[] = [
   createExpenseTool,
   createPurchaseOrderTool,
   createQuotationTool,
   createInvoiceTool,
+  createSavedItemTool,
   createComplaintTool,
 ];

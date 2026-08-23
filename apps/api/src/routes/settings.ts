@@ -52,6 +52,7 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
     signatoryName,
     signatoryDataUrl,
     agentVisibleRoleKeys,
+    agentCustomInstructions,
   } = req.body;
 
   try {
@@ -83,6 +84,7 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
         signatoryName,
         signatoryDataUrl,
         agentVisibleRoleKeys,
+        agentCustomInstructions,
       },
       create: {
         id: "singleton",
@@ -111,6 +113,7 @@ settingsRouter.put("/", authenticate, requirePermission(PERMISSION_KEY.MANAGE_SE
         signatoryName,
         signatoryDataUrl,
         agentVisibleRoleKeys,
+        agentCustomInstructions,
       },
     });
     res.json(settings);

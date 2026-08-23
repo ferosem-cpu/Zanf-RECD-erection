@@ -136,6 +136,8 @@ model Customer {
   complaints Complaint[]
   quotations Quotation[]
   invoices   Invoice[]
+  productPrices    CustomerProductPrice[]
+  savedItemPrices  CustomerSavedItemPrice[]
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -179,6 +181,8 @@ model Product {
   /// Free-text, e.g. "1200 x 600 x 900 mm" or "Ø800mm x 1500mm H" - format depends on shape.
   dimensions     String?
   weightKg       Decimal? @db.Decimal(10, 2)
+  /// 1 or 2 - the silencer type fitted to this RECD variant.
+  silencerType   Int?
   createdAt      DateTime @default(now())
 
   orders Order[]
@@ -186,6 +190,38 @@ model Product {
   invoiceLineItems   InvoiceLineItem[]
   recdDeliveries     RecdDelivery[]
   orderLineItems     OrderLineItem[]
+  customerPrices     CustomerProductPrice[]
+}
+
+/// A customer-specific negotiated price for a Product, overriding no company-wide default
+/// (Product itself has none) purely for that one customer - looked up when drafting a
+/// quotation/invoice for them, both in the regular UI and by the in-app agent.
+model CustomerProductPrice {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  price      Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([customerId, productId])
+}
+
+/// Same as CustomerProductPrice but for SavedLineItem (general billing items) instead of
+/// Product - a customer-specific override of that item's company-wide standardPrice.
+model CustomerSavedItemPrice {
+  id          String        @id @default(cuid())
+  customerId  String
+  customer    Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  savedItemId String
+  savedItem   SavedLineItem @relation(fields: [savedItemId], references: [id], onDelete: Cascade)
+  price       Decimal       @db.Decimal(12, 2)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([customerId, savedItemId])
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +657,29 @@ model CompanySettings {
   /// floating chat bubble. Empty array = hidden for everyone. Plain string array, not a
   /// relation/lookup table, since this is a small admin-editable allowlist, not growing data.
   agentVisibleRoleKeys String[] @default([])
+
+  /// Free-text instructions from the admin, appended to the in-app agent's system prompt on
+  /// every turn (e.g. "always ask for the delivery address before drafting an invoice").
+  agentCustomInstructions String?
+}
+
+/// A reusable billing line item (e.g. "Installation labour", "Crane hire") with a standard
+/// price/HSN code, for quotations/invoices/purchase orders - separate from Product, which is
+/// the physical RECD unit catalog tied to orders/sites, not a general billing-item catalog.
+/// Not FK'd from any line item table: values are copied at draft time, same as Product is.
+model SavedLineItem {
+  id            String   @id @default(cuid())
+  name          String
+  hsnCode       String?
+  standardPrice Decimal  @db.Decimal(12, 2)
+  taxRatePct    Decimal  @db.Decimal(5, 2) @default(18)
+  /// Archived (not hard-deleted) items are hidden from search_saved_items and the Settings
+  /// list by default, matching the vendor-archive convention used elsewhere in this app.
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  customerPrices CustomerSavedItemPrice[]
 }
 
 // ---------------------------------------------------------------------------

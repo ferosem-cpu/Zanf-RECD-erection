@@ -149,6 +149,15 @@ const financeLinks = [
       </svg>
     ),
   },
+  {
+    href: "/finance/customer-pricing",
+    label: "Customer Pricing",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-4-8.5h5.5a2 2 0 110 4H10a2 2 0 100 4h6M5.25 4.5h13.5A2.25 2.25 0 0121 6.75v10.5A2.25 2.25 0 0118.75 19.5H5.25A2.25 2.25 0 013 17.25V6.75A2.25 2.25 0 015.25 4.5z" />
+      </svg>
+    ),
+  },
 ];
 
 const phase2Links = [
@@ -197,6 +206,7 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/invoices": ["manage_invoices"],
   "/purchase-orders": ["manage_purchase_orders"],
   "/expenses": ["manage_expenses"],
+  "/finance/customer-pricing": ["manage_quotations", "manage_invoices"],
   "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
 };
 
