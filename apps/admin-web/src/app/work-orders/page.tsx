@@ -30,6 +30,7 @@ interface Assignee {
 interface SiteOption {
   id: string;
   address: string | null;
+  companyName: string | null;
   order: { customer: { name: string } };
 }
 
@@ -254,7 +255,11 @@ export default function WorkOrdersPage() {
                 <select required className="field w-full" value={form.siteId} onChange={(e) => setForm({ ...form, siteId: e.target.value })}>
                   <option value="">Select a site</option>
                   {sites.map((s) => (
-                    <option key={s.id} value={s.id}>{s.order.customer.name}{s.address ? ` — ${s.address}` : ""}</option>
+                    <option key={s.id} value={s.id}>
+                      {s.order.customer.name}
+                      {s.companyName ? ` — ${s.companyName}` : ""}
+                      {s.address ? ` (${s.address})` : ""}
+                    </option>
                   ))}
                 </select>
               </div>
