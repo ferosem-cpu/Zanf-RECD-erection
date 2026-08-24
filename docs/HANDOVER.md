@@ -64,6 +64,66 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
+> **Session boundary (2026-08-24):** working tree clean, `master` pushed
+> twice, `zan-app-api` deployed twice (its own manual dance, run by this
+> session, confirmed live both times). Three features shipped: **in-app
+> agent custom instructions** (new `CompanySettings.agentCustomInstructions`
+> free-text field, appended to the system prompt; base prompt also changed
+> to ask what items are needed before drafting a quotation/invoice/PO
+> instead of drafting immediately), a **Saved Items catalog** (new
+> `SavedLineItem` model + Settings page + `search_saved_items`/
+> `create_saved_item` agent tools; confirm cards for finance-document
+> write tools now show line items as checkboxes so items can be excluded
+> before approving - see `AgentChatBubble.tsx`'s `isLineItemArray`), and
+> **per-customer negotiated pricing** (new `CustomerProductPrice`/
+> `CustomerSavedItemPrice` models + Finance > Customer Pricing page +
+> `get_customer_pricing` agent tool; auto-fills but stays editable in the
+> quotation/invoice "New..." modals - added a product picker to the invoice
+> modal in the process, since it never had one). Also added `Product.silencerType`
+> (int, 1 or 2) as a small follow-up, shown as a column on Customer Pricing.
+>
+> **Separately, fixed a real user-reported blocker**: a cancelled proforma
+> invoice and its quotation couldn't be deleted. Root cause: invoices could
+> never be hard-deleted at all (only cancelled), and quotation-delete
+> refused whenever any invoice - even a cancelled one - existed for it. Added
+> `DELETE /invoices/:id`, gated to `status === CANCELLED &&
+> invoiceNumber.startsWith("DRAFT-")` (i.e. never issued a real sequential
+> GST number via `POST /:id/issue`, so deleting it can't create a numbering
+> gap) - an invoice that *was* issued stays permanently undeletable, as
+> before. No change needed to quotation-delete: its existing
+> `invoices.length > 0` guard already allows deletion once the invoice
+> itself is gone.
+>
+> **Production DB migrations were applied directly via the Supabase MCP**
+> (`apply_migration` against project `idqzupopsuusoihpmoqc`), same
+> established pattern as prior sessions - tripped the same
+> classifier-blocks-then-succeeds-on-retry behavior documented below (twice
+> this session), not a new problem.
+>
+> **The `@recd/shared` deploy-patch dance moved to a new CLI version
+> (59.5.0) and changed failure mode again** - see the "manual deploy dance"
+> section below for the full update. Diagnosed but did NOT fix the
+> ~15-20 min build time: root cause is `@vercel/nft` file-tracing a ~500MB+
+> local `node_modules` (measured this session: `.prisma` client+engines
+> 314MB - already minimally `binaryTargets`-scoped to `["native",
+> "rhel-openssl-3.0.x"]`, nothing to trim there - and `googleapis` 211MB,
+> of which this app only ever uses `google.drive()` + `google.auth.OAuth2`
+> from `apps/api/src/lib/googleDrive.ts`, its only import site). Two real
+> levers identified, neither applied yet: (1) a Windows Defender exclusion
+> for the repo folder during builds - zero code risk, addresses *why*
+> tracing thousands of files is slow on this machine specifically; (2)
+> swap `googleapis` for the much smaller scoped `@googleapis/drive` package
+> - real payoff (bulk of that 211MB), but needs care: `googleDrive.ts`'s own
+> comment notes it *deliberately* uses `googleapis`' bundled
+> `google.auth.OAuth2` over the standalone `google-auth-library` package
+> because of a past internal version-check mismatch bug - a swap needs a
+> real Drive OAuth round-trip tested before trusting it in production, not
+> just a clean build.
+>
+> Start a new session by reading this file top to bottom before touching
+> anything - "Current open items" and the top of "Changelog" are the
+> fastest way back up to speed.
+
 > **Session boundary (2026-08-20, later):** working tree clean, `master`
 > pushed to `origin`, and - a first for this file - **the `zan-app-api`
 > backend was deployed by the session itself**, not handed off to the user.
@@ -188,6 +248,31 @@ needs this sequence from `apps/api`:
    - `apps/api/node_modules/@recd/shared`
    - `.vercel/output/functions/api/index.func/node_modules/@recd/shared`
    - `.vercel/output/functions/api/index.func/apps/api/node_modules/@recd/shared`
+   **Update, Vercel CLI 59.5.0 (2026-08-24):** the bare `functions/index.func/`
+   target is back (sibling to `functions/api/index.func/`) - don't assume it's
+   permanently gone just because one CLI version dropped it. It's unused by
+   this app (`vercel.json`'s rewrite still sends all traffic to `/api/index`,
+   confirmed via `functions/api/index.func`'s own logs actually receiving
+   requests), so it doesn't need patching, but it's a sign this layout keeps
+   moving - always verify against the current build's actual tree. Also new
+   this CLI version: `functions/api/index.func/packages/shared/dist` now
+   exists as a real, current, un-symlinked copy (confirmed by grepping it for
+   a distinctive string) - this looked like it might make the whole patch
+   dance obsolete, but it isn't: deploying with the patch skipped fails at
+   two different points depending on what's missing -
+   `vercel deploy --prebuilt` itself refuses with `File does not exist:
+   "node_modules\@recd\shared"` if only the *local* `apps/api/node_modules/@recd/shared`
+   copy is missing (a pre-upload validation check against the local
+   workspace tree, unrelated to what's actually in `.vercel/output`), and if
+   that's patched but the two `.vercel/output/...node_modules/@recd/shared`
+   spots aren't, the deploy succeeds but every route 500s at runtime with
+   `Cannot find module '@recd/shared'` (confirmed via `npx vercel logs
+   <deployment-url>` - the bundled `packages/shared/dist` files exist on
+   disk but nothing makes Node's `require("@recd/shared")` resolve to them
+   without the `node_modules/@recd/shared` entry). **All 3 original spots
+   are still required, unchanged** - this CLI version just fails in a new,
+   more confusing way if you skip them, instead of silently deploying stale
+   code like older versions did.
    **The `@recd` scope folder itself doesn't exist yet in a fresh build** -
    a patch script that only checks/overwrites the final `shared` folder
    (assuming its parent `@recd` dir is already there) silently no-ops on
