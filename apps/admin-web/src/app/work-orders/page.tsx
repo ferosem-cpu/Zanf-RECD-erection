@@ -22,7 +22,7 @@ interface WorkOrderRow {
   scheduledDate: string | null;
   completionNotes: string | null;
   completionPhotoUrl: string | null;
-  site: { order: { customer: { name: string } } };
+  site: { address: string | null; companyName: string | null; order: { customer: { name: string } } };
   assignedTo: { id: string; name: string } | null;
   createdBy: { id: string; name: string };
   products: { product: ProductRef }[];
@@ -212,6 +212,12 @@ export default function WorkOrdersPage() {
           { key: "workOrderNumber", label: "WO #", accessor: (w) => w.workOrderNumber, filterType: "text", alwaysVisible: true, render: (w) => <span className="font-mono text-xs font-semibold">{w.workOrderNumber}</span> },
           { key: "customer", label: "Customer", accessor: (w) => w.site.order.customer.name },
           {
+            key: "site",
+            label: "Site",
+            accessor: (w) => w.site.companyName ?? w.site.address ?? "",
+            filterType: "text",
+          },
+          {
             key: "products",
             label: "Products",
             accessor: (w) => w.products.map((p) => `${p.product.name} (${p.product.model})`).join(", "),
@@ -253,7 +259,10 @@ export default function WorkOrdersPage() {
                     <span className={statusBadge(w.status)}>{pretty(w.status)}</span>
                   </div>
                   <p className="text-sm font-semibold text-gray-900 truncate">{w.title}</p>
-                  <p className="text-xs text-gray-500 truncate">{w.site.order.customer.name} · {pretty(w.taskType)}</p>
+                  <p className="text-xs text-gray-500 truncate">
+                    {w.site.order.customer.name}
+                    {w.site.companyName || w.site.address ? ` — ${w.site.companyName ?? w.site.address}` : ""} · {pretty(w.taskType)}
+                  </p>
                   <p className="text-xs text-gray-500 mt-1">Assigned: {w.assignedTo?.name ?? "Unassigned"}</p>
                   <button
                     onClick={() => openEditor(w)}
