@@ -480,7 +480,7 @@ export default function AgentChatBubble() {
                                 <div className="text-gray-800">{li.description}</div>
                                 <div className="text-gray-500">
                                   {li.quantity} × {formatMoney(li.unitPrice)}
-                                  {li.hsnCode ? ` · HSN ${li.hsnCode}` : ""}
+                                  {li.hsnCode ? ` · SAC/HSN ${li.hsnCode}` : ""}
                                 </div>
                               </div>
                               <div className="text-gray-800 font-medium whitespace-nowrap">{formatMoney(li.lineTotal)}</div>

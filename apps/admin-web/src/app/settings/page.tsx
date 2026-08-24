@@ -486,7 +486,7 @@ export default function SettingsPage() {
       <section className="card p-4 sm:p-6">
         <h2 className="text-base sm:text-lg font-semibold mb-1">Saved Items</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Standard billing items (name, HSN code, standard price) the assistant offers when
+          Standard billing items (name, SAC/HSN code, standard price) the assistant offers when
           drafting a quotation, invoice, or purchase order.
         </p>
         <Link href="/settings/saved-items" className="btn-primary inline-block px-4 py-2 text-sm">

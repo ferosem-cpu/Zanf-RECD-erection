@@ -270,7 +270,7 @@ export default function QuotationsPage() {
                           {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
                         </select>
                         <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} required />
-                        <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} required />
+                        <input className="field" placeholder="SAC/HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} required />
                       </div>
                       {!l.productId && (
                         <p className="text-[11px] text-amber-600">No product selected — this line can't be converted into an order later. Pick a product if this quotation might turn into an order.</p>

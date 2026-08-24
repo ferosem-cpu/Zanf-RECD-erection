@@ -14,7 +14,9 @@ interface SavedLineItem {
   active: boolean;
 }
 
-const emptyForm = { name: "", hsnCode: "", standardPrice: "", taxRatePct: "18" };
+// Saved items are always services/installation-type billing lines (never goods) - default the
+// code to SAC 9987 (maintenance/repair/installation services) so a new item doesn't start blank.
+const emptyForm = { name: "", hsnCode: "9987", standardPrice: "", taxRatePct: "18" };
 
 export default function SavedItemsPage() {
   const { hasPermission } = useAuth();
@@ -102,7 +104,7 @@ export default function SavedItemsPage() {
           </h1>
           <p className="mt-1 text-sm text-gray-500">
             Standard billing items (e.g. &quot;Installation labour&quot;, &quot;Crane hire&quot;) with a
-            standard price and HSN code - the in-app assistant offers these as options when
+            standard price and SAC/HSN code - the in-app assistant offers these as options when
             drafting a quotation, invoice, or purchase order.
           </p>
         </div>
@@ -124,7 +126,7 @@ export default function SavedItemsPage() {
         emptyMessage="No saved items yet."
         columns={[
           { key: "name", label: "Name", accessor: (i) => i.name, alwaysVisible: true, filterType: "text" },
-          { key: "hsnCode", label: "HSN code", accessor: (i) => i.hsnCode ?? "" },
+          { key: "hsnCode", label: "SAC/HSN code", accessor: (i) => i.hsnCode ?? "" },
           {
             key: "standardPrice",
             label: "Standard price",
@@ -183,7 +185,7 @@ export default function SavedItemsPage() {
                   </div>
                   {i.hsnCode && (
                     <div className="data-card-row">
-                      <span className="label">HSN</span>
+                      <span className="label">SAC/HSN</span>
                       <span className="value">{i.hsnCode}</span>
                     </div>
                   )}
@@ -222,7 +224,7 @@ export default function SavedItemsPage() {
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
               <input
-                placeholder="HSN/SAC code (optional)"
+                placeholder="SAC/HSN code (optional)"
                 className="field w-full"
                 value={form.hsnCode}
                 onChange={(e) => setForm({ ...form, hsnCode: e.target.value })}

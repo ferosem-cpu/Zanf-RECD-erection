@@ -303,7 +303,7 @@ export default function InvoicesPage() {
                           {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
                         </select>
                         <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateLine(i, { description: e.target.value })} required />
-                        <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} required />
+                        <input className="field" placeholder="SAC/HSN" value={l.hsnCode} onChange={(e) => updateLine(i, { hsnCode: e.target.value })} required />
                       </div>
                       <div className="grid grid-cols-3 gap-2">
                         <input type="number" step="0.01" className="field" placeholder="Qty" value={l.quantity} onChange={(e) => updateLine(i, { quantity: e.target.value })} />

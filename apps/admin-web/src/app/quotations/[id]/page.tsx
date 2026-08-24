@@ -205,7 +205,7 @@ export default function QuotationDetailPage() {
             <thead>
               <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
                 <th className="px-4 py-3">Description</th>
-                <th className="px-4 py-3">HSN</th>
+                <th className="px-4 py-3">SAC/HSN</th>
                 <th className="px-4 py-3">Qty</th>
                 <th className="px-4 py-3">Unit price</th>
                 <th className="px-4 py-3">Tax %</th>
@@ -333,7 +333,7 @@ export default function QuotationDetailPage() {
                           {products.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.model})</option>)}
                         </select>
                         <input className="field" placeholder="Description" value={l.description} onChange={(e) => updateEditLine(i, { description: e.target.value })} required />
-                        <input className="field" placeholder="HSN" value={l.hsnCode} onChange={(e) => updateEditLine(i, { hsnCode: e.target.value })} required />
+                        <input className="field" placeholder="SAC/HSN" value={l.hsnCode} onChange={(e) => updateEditLine(i, { hsnCode: e.target.value })} required />
                       </div>
                       {!l.productId && (
                         <p className="text-[11px] text-amber-600">No product selected — this line can't be converted into an order later. Pick a product if this quotation might turn into an order.</p>
