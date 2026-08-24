@@ -351,6 +351,27 @@ invoicesRouter.post("/:id/cancel", requirePermission(PERMISSION_KEY.MANAGE_INVOI
   res.json(invoice);
 });
 
+// Hard-delete a cancelled invoice - only when it was cancelled while still a draft (its
+// invoiceNumber still "DRAFT-<uuid>", never a real sequential number from POST /:id/issue).
+// A cancelled invoice that WAS issued keeps its real number and must stay undeletable forever -
+// deleting it would leave a gap in India's GST-mandated sequential invoice numbering.
+invoicesRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  const existing = await prisma.invoice.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: "Invoice not found" });
+  if (existing.status !== INVOICE_STATUS.CANCELLED) {
+    return res.status(400).json({ error: "Only a cancelled invoice can be deleted" });
+  }
+  if (!existing.invoiceNumber.startsWith("DRAFT-")) {
+    return res.status(400).json({
+      error: "Cannot delete an invoice that was issued a real invoice number - it must stay cancelled for the audit trail",
+    });
+  }
+
+  await prisma.invoice.delete({ where: { id } });
+  res.status(204).end();
+});
+
 invoicesRouter.post(
   "/:id/payments",
   requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),

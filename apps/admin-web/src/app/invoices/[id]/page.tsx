@@ -70,6 +70,18 @@ export default function InvoiceDetailPage() {
     try { await api(`/invoices/${id}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }); setMsg("Invoice cancelled."); load(); }
     catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setAction(null); }
   }
+  async function remove() {
+    if (!inv) return;
+    if (!window.confirm(`Delete invoice ${inv.invoiceNumber}? This cannot be undone.`)) return;
+    setAction("delete"); setMsg(null);
+    try {
+      await api(`/invoices/${id}`, { method: "DELETE" });
+      router.push("/invoices");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Failed");
+      setAction(null);
+    }
+  }
 
   // Recording payment(s) - one form can record several part-payments at once, each with its
   // own amount/method/UTR-or-cheque-reference/date, since real payments often arrive in
@@ -351,6 +363,9 @@ export default function InvoiceDetailPage() {
       )}
       {canManage && (inv.status === "draft" || inv.status === "issued") && (
         <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-red-600" disabled={!!action} onClick={cancel}>Cancel invoice</button>
+      )}
+      {canManage && inv.status === "cancelled" && inv.invoiceNumber.startsWith("DRAFT-") && (
+        <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-red-600" disabled={!!action} onClick={remove}>Delete invoice</button>
       )}
       {canRecord && (inv.status === "issued" || inv.status === "partially_paid") && (
         <button className="btn-primary px-4 py-2 text-sm" onClick={openPay}>Record payment</button>
