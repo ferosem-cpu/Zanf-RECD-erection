@@ -191,6 +191,7 @@ model Product {
   recdDeliveries     RecdDelivery[]
   orderLineItems     OrderLineItem[]
   customerPrices     CustomerProductPrice[]
+  workOrderProducts  WorkOrderProduct[]
 }
 
 /// A customer-specific negotiated price for a Product, overriding no company-wide default
@@ -602,6 +603,22 @@ model WorkOrder {
   createdBy       User      @relation("WorkOrderCreator", fields: [createdById], references: [id])
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+
+  products WorkOrderProduct[]
+}
+
+/// Which product(s) at the site this work order covers - a site's order can have more than
+/// one RECD unit (base product + extra units added as line items), so a work order may need
+/// to target a subset of them rather than "the whole site".
+model WorkOrderProduct {
+  id          String    @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@unique([workOrderId, productId])
 }
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ const include = {
   site: { include: { order: { include: { customer: true } } } },
   assignedTo: { select: { id: true, name: true } },
   createdBy: { select: { id: true, name: true } },
+  products: { include: { product: true } },
 };
 
 workOrdersRouter.get(
@@ -96,6 +97,9 @@ workOrdersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_WORK_ORDERS),
       assignedToId: parsed.data.assignedToId,
       status,
       createdById: req.auth!.userId,
+      products: parsed.data.productIds?.length
+        ? { create: parsed.data.productIds.map((productId) => ({ productId })) }
+        : undefined,
     },
     include,
   });

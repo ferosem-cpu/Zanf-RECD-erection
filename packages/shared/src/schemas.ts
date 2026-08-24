@@ -146,6 +146,7 @@ export const createWorkOrderSchema = z.object({
   instructions: z.string().optional(),
   scheduledDate: z.string().datetime().optional(),
   assignedToId: z.string().optional(),
+  productIds: z.array(z.string()).optional(),
 });
 
 export const updateWorkOrderSchema = z.object({
