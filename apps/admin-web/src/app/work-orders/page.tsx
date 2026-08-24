@@ -6,6 +6,12 @@ import { useAuth } from "@/components/AuthContext";
 import { WORK_ORDER_STATUS } from "@recd/shared";
 import { DataTable } from "@/components/DataTable";
 
+interface ProductRef {
+  id: string;
+  name: string;
+  model: string;
+}
+
 interface WorkOrderRow {
   id: string;
   workOrderNumber: string;
@@ -19,6 +25,7 @@ interface WorkOrderRow {
   site: { order: { customer: { name: string } } };
   assignedTo: { id: string; name: string } | null;
   createdBy: { id: string; name: string };
+  products: { product: ProductRef }[];
 }
 
 interface Assignee {
@@ -31,7 +38,17 @@ interface SiteOption {
   id: string;
   address: string | null;
   companyName: string | null;
-  order: { customer: { name: string } };
+  order: { customer: { name: string }; product: ProductRef | null; lineItems: { product: ProductRef }[] };
+}
+
+// Same "base product + extra units added as line items" shape as sites/page.tsx's own
+// allProducts helper - deduped by id since the same product could in principle appear both
+// as the base product and as a line item.
+function siteProducts(site: SiteOption | undefined): ProductRef[] {
+  if (!site) return [];
+  const all = [...(site.order.product ? [site.order.product] : []), ...site.order.lineItems.map((li) => li.product)];
+  const seen = new Set<string>();
+  return all.filter((p) => (seen.has(p.id) ? false : (seen.add(p.id), true)));
 }
 
 const STATUS_VALUES = Object.values(WORK_ORDER_STATUS);
@@ -79,6 +96,7 @@ export default function WorkOrdersPage() {
     scheduledDate: today(),
     assignedToId: "",
   });
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
 
   // Edit/status modal (managers + assignees)
   const [editing, setEditing] = useState<WorkOrderRow | null>(null);
@@ -115,10 +133,12 @@ export default function WorkOrdersPage() {
           instructions: form.instructions || undefined,
           scheduledDate: form.scheduledDate ? new Date(form.scheduledDate).toISOString() : undefined,
           assignedToId: form.assignedToId || undefined,
+          productIds: selectedProductIds,
         }),
       });
       setOpen(false);
       setForm((f) => ({ ...f, title: "", instructions: "", assignedToId: "" }));
+      setSelectedProductIds([]);
       load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create work order");
@@ -191,6 +211,13 @@ export default function WorkOrdersPage() {
         columns={[
           { key: "workOrderNumber", label: "WO #", accessor: (w) => w.workOrderNumber, filterType: "text", alwaysVisible: true, render: (w) => <span className="font-mono text-xs font-semibold">{w.workOrderNumber}</span> },
           { key: "customer", label: "Customer", accessor: (w) => w.site.order.customer.name },
+          {
+            key: "products",
+            label: "Products",
+            accessor: (w) => w.products.map((p) => `${p.product.name} (${p.product.model})`).join(", "),
+            accessorList: (w) => w.products.map((p) => `${p.product.name} (${p.product.model})`),
+            defaultVisible: false,
+          },
           { key: "task", label: "Task", accessor: (w) => w.title, filterType: "text" },
           { key: "type", label: "Type", accessor: (w) => pretty(w.taskType) },
           { key: "status", label: "Status", accessor: (w) => pretty(w.status), render: (w) => <span className={statusBadge(w.status)}>{pretty(w.status)}</span> },
@@ -252,7 +279,17 @@ export default function WorkOrdersPage() {
             <form onSubmit={submit} className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Site</label>
-                <select required className="field w-full" value={form.siteId} onChange={(e) => setForm({ ...form, siteId: e.target.value })}>
+                <select
+                  required
+                  className="field w-full"
+                  value={form.siteId}
+                  onChange={(e) => {
+                    const siteId = e.target.value;
+                    const products = siteProducts(sites.find((s) => s.id === siteId));
+                    setForm({ ...form, siteId });
+                    setSelectedProductIds(products.length === 1 ? [products[0].id] : []);
+                  }}
+                >
                   <option value="">Select a site</option>
                   {sites.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -263,6 +300,39 @@ export default function WorkOrdersPage() {
                   ))}
                 </select>
               </div>
+
+              {(() => {
+                const products = siteProducts(sites.find((s) => s.id === form.siteId));
+                if (products.length === 0) return null;
+                if (products.length === 1) {
+                  return (
+                    <p className="text-xs text-gray-500">
+                      Product: <span className="font-medium text-gray-700">{products[0].name} ({products[0].model})</span> - only product at this site, auto-selected.
+                    </p>
+                  );
+                }
+                return (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Product(s)</label>
+                    <div className="space-y-1">
+                      {products.map((p) => (
+                        <label key={p.id} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={selectedProductIds.includes(p.id)}
+                            onChange={(e) =>
+                              setSelectedProductIds((ids) =>
+                                e.target.checked ? [...ids, p.id] : ids.filter((id) => id !== p.id),
+                              )
+                            }
+                          />
+                          {p.name} <span className="text-gray-400 font-mono text-xs">{p.model}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
