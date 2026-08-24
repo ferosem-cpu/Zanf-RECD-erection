@@ -64,9 +64,39 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-> **Session boundary (2026-08-24):** working tree clean, `master` pushed
-> twice, `zan-app-api` deployed twice (its own manual dance, run by this
-> session, confirmed live both times). Three features shipped: **in-app
+> **Session boundary (2026-08-24, later):** working tree clean, `master`
+> pushed several more times, `zan-app-api` deployed a third time (same
+> manual dance, confirmed live again). Added **product selection on Work
+> Orders**: new `WorkOrderProduct` join table (`createWorkOrderSchema` gains
+> optional `productIds`) - a site's order can have more than one RECD unit
+> (base product + line items, the same shape `sites/page.tsx`'s
+> `allProducts` helper already handles), so a work order may need to target
+> a subset rather than the whole site. The New Work Order form auto-selects
+> the product when a site has exactly one, and shows checkboxes when it has
+> several - deployed backend-first as its own commit (holding back the
+> frontend file until the API was confirmed live), then the UI commit,
+> exactly per the established ordering rule below.
+>
+> Also two small frontend-only fixes needing no deploy dance: **Site.companyName/
+> address were already returned by `GET /sites` and `GET /work-orders`
+> (full Prisma rows, no `select` narrowing) but never rendered** - added the
+> site name to the New Work Order site `<select>` (was customer + address
+> only) and a new Site column on the Work Orders list/mobile cards. A
+> recurring pattern worth remembering: check what the API *already returns*
+> before assuming a display gap needs a backend change - twice now
+> (Silencer Type's precursor and this) the data was already there.
+>
+> Relabeled **"HSN" to "SAC/HSN"** across every quotation/invoice/PO
+> line-item table, form, and the Saved Items catalog - the print pages
+> already said "SAC/HSN"; the on-screen forms just hadn't caught up. Also
+> gave new Saved Items a default code of **SAC 9987** (maintenance/repair/
+> installation services), since Saved Items are structurally always
+> service/installation lines, never goods - `Product` still has no
+> HSN/SAC field of its own (deliberately out of scope; the user clarified
+> HSN belongs to the sale/goods side, SAC to installation/service, not a
+> single default value across the whole product catalog).
+>
+> Three features shipped earlier the same day: **in-app
 > agent custom instructions** (new `CompanySettings.agentCustomInstructions`
 > free-text field, appended to the system prompt; base prompt also changed
 > to ask what items are needed before drafting a quotation/invoice/PO
