@@ -98,6 +98,28 @@ export default function QuotationsPage() {
     setLines((l) => l.filter((_, idx) => idx !== i));
   }
 
+  // Per-line and cumulative "below standard pricing" warnings, checked against this
+  // customer's CustomerProductPrice overrides - advisory only (see cumulativeBelowStandard's
+  // use below), never blocks submission, since pricing below standard is sometimes a
+  // deliberate business call.
+  const customerName = customers.find((c) => c.id === form.customerId)?.name ?? "this customer";
+  const linePriceChecks = lines.map((l, i) => {
+    const std = l.productId ? customerProductPrices[l.productId] : undefined;
+    if (!std) return null;
+    const unit = parseFloat(l.unitPrice) || 0;
+    if (unit <= 0) return null;
+    const qty = parseFloat(l.quantity) || 0;
+    const discount = parseFloat(l.discountPct) || 0;
+    const effectiveUnit = unit * (1 - discount / 100);
+    const stdPrice = parseFloat(std);
+    return { i, qty, effectiveUnit, stdPrice, belowStandard: effectiveUnit < stdPrice };
+  });
+  const cumulative = linePriceChecks.reduce(
+    (acc, w) => (w ? { standard: acc.standard + w.stdPrice * w.qty, actual: acc.actual + w.effectiveUnit * w.qty } : acc),
+    { standard: 0, actual: 0 },
+  );
+  const cumulativeBelowStandard = linePriceChecks.some(Boolean) && cumulative.actual < cumulative.standard;
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
@@ -280,11 +302,22 @@ export default function QuotationsPage() {
                         <input type="number" step="0.01" className="field" placeholder="Unit price" value={l.unitPrice} onChange={(e) => updateLine(i, { unitPrice: e.target.value })} />
                         <input type="number" step="0.01" className="field" placeholder="Tax %" value={l.taxRatePct} onChange={(e) => updateLine(i, { taxRatePct: e.target.value })} />
                       </div>
+                      {linePriceChecks[i]?.belowStandard && (
+                        <p className="text-[11px] text-amber-600">
+                          ⚠ Below {customerName}&apos;s standard price of {formatINR(String(linePriceChecks[i]!.stdPrice))} for this product (effective {formatINR(String(linePriceChecks[i]!.effectiveUnit))}).
+                        </p>
+                      )}
                       <button type="button" onClick={() => removeLine(i)} className="text-xs text-red-500">Remove</button>
                     </div>
                   ))}
                 </div>
               </div>
+
+              {cumulativeBelowStandard && (
+                <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                  ⚠ These RECD line items total {formatINR(String(cumulative.actual))} against a combined standard price of {formatINR(String(cumulative.standard))} for {customerName} — {formatINR(String(cumulative.standard - cumulative.actual))} below standard. This won&apos;t stop you from creating the quotation.
+                </p>
+              )}
 
               {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
               <div className="flex justify-end gap-3">

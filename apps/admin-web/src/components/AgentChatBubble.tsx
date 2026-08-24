@@ -367,7 +367,7 @@ export default function AgentChatBubble() {
       {!open && (
         <button
           onClick={openPanel}
-          className="fixed bottom-5 right-5 z-50 w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-white text-xl"
+          className="fixed bottom-5 right-5 z-50 w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-white text-xl print:hidden"
           style={{ backgroundColor: "var(--theme-primary, #F58220)" }}
           aria-label="Open assistant"
         >
@@ -377,7 +377,7 @@ export default function AgentChatBubble() {
 
       {open && (
         <div
-          className={`fixed z-50 bg-white shadow-2xl flex flex-col overflow-hidden border border-gray-100 ${
+          className={`fixed z-50 bg-white shadow-2xl flex flex-col overflow-hidden border border-gray-100 print:hidden ${
             maximized
               ? "inset-4 rounded-2xl"
               : "bottom-5 right-5 w-[360px] max-w-[calc(100vw-2.5rem)] h-[520px] max-h-[calc(100vh-3rem)] rounded-2xl"

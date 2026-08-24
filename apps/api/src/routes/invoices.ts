@@ -389,6 +389,9 @@ invoicesRouter.post(
     if (existing.status === INVOICE_STATUS.CANCELLED) {
       return res.status(400).json({ error: "Cannot record payments against a cancelled invoice" });
     }
+    if (existing.status === INVOICE_STATUS.DRAFT) {
+      return res.status(400).json({ error: "Issue the invoice before recording a payment against it" });
+    }
     const paidBefore = existing.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
     const outstanding = new Prisma.Decimal(existing.total).minus(paidBefore);
     const amount = new Prisma.Decimal(String(data.amount));

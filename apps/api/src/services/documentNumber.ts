@@ -8,6 +8,21 @@ const PREFIX_MAP: Record<FinanceDocType, string> = {
   [FINANCE_DOC_TYPE.PURCHASE_ORDER]: "PO",
 };
 
+/**
+ * Proforma and Tax Invoice share ONE running counter per fiscal year, keyed as "invoice"
+ * below - not two independent series. Only the display prefix (PI/ vs INV/) tells them
+ * apart; the number itself keeps incrementing across both types in whatever order they're
+ * issued, since a proforma commonly precedes its own tax invoice and the business wants one
+ * continuous document count rather than two counters that both restart at 0001. Quotation
+ * and Purchase Order are unaffected - each keeps its own independent sequence.
+ */
+const SEQUENCE_KEY: Record<FinanceDocType, string> = {
+  [FINANCE_DOC_TYPE.QUOTATION]: FINANCE_DOC_TYPE.QUOTATION,
+  [FINANCE_DOC_TYPE.PROFORMA]: "invoice",
+  [FINANCE_DOC_TYPE.TAX_INVOICE]: "invoice",
+  [FINANCE_DOC_TYPE.PURCHASE_ORDER]: FINANCE_DOC_TYPE.PURCHASE_ORDER,
+};
+
 /** Indian fiscal year: April–March. A date in Jan 2027 → "2026-27". */
 export function fiscalYearFor(date: Date): string {
   const y = date.getFullYear();
@@ -27,10 +42,11 @@ export async function nextDocumentNumber(
   date: Date = new Date(),
 ): Promise<string> {
   const fiscalYear = fiscalYearFor(date);
+  const sequenceKey = SEQUENCE_KEY[docType];
   const seq = await tx.documentSequence.upsert({
-    where: { docType_fiscalYear: { docType, fiscalYear } },
+    where: { docType_fiscalYear: { docType: sequenceKey, fiscalYear } },
     update: { lastNumber: { increment: 1 } },
-    create: { docType, fiscalYear, lastNumber: 1 },
+    create: { docType: sequenceKey, fiscalYear, lastNumber: 1 },
   });
   const prefix = PREFIX_MAP[docType];
   return `${prefix}/${fiscalYear}/${String(seq.lastNumber).padStart(4, "0")}`;
