@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
+import type { ExtractDocumentParams, LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
 import { ProviderCallError } from "./types";
 
 export interface OpenAICompatibleAdapterConfig {
@@ -89,6 +89,41 @@ export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterCon
       } catch (err) {
         throw new ProviderCallError(
           `Provider "${config.providerName}" call failed: ${(err as Error).message}`,
+          config.providerName,
+          err,
+        );
+      }
+    },
+
+    async extractDocument(params: ExtractDocumentParams): Promise<string> {
+      // Most OpenAI-compatible third-party endpoints (Groq/Together/OpenRouter/etc) accept
+      // vision input as an image_url data: URI but do not accept raw PDF bytes the way the
+      // real OpenAI API's file/vision handling does - fail fast here so the caller falls
+      // back to another provider (typically Anthropic, which handles PDFs directly) instead
+      // of silently sending bytes the model can't read.
+      if (!params.mimeType.startsWith("image/")) {
+        throw new ProviderCallError(
+          `Provider "${config.providerName}" only supports image extraction, not "${params.mimeType}".`,
+          config.providerName,
+        );
+      }
+      try {
+        const response = await client.chat.completions.create({
+          model: config.model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: params.instructions },
+                { type: "image_url", image_url: { url: `data:${params.mimeType};base64,${params.fileBase64}` } },
+              ],
+            },
+          ],
+        });
+        return (response.choices[0]?.message?.content ?? "").trim();
+      } catch (err) {
+        throw new ProviderCallError(
+          `Provider "${config.providerName}" extraction failed: ${(err as Error).message}`,
           config.providerName,
           err,
         );

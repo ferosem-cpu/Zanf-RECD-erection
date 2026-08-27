@@ -3,15 +3,12 @@ import { Prisma } from "@prisma/client";
 import {
   PERMISSION_KEY,
   PO_STATUS,
-  BILL_STATUS,
   PAYMENT_METHOD,
   FINANCE_DOC_TYPE,
   supplierCreateSchema,
   purchaseOrderCreateSchema,
   purchaseOrderUpdateSchema,
   purchaseOrderStatusSchema,
-  billCreateSchema,
-  paymentMadeCreateSchema,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -42,6 +39,35 @@ purchaseOrdersRouter.put("/suppliers/:id", requirePermission(PERMISSION_KEY.MANA
   const supplier = await prisma.supplier.update({ where: { id }, data: parsed.data });
   res.json(supplier);
 });
+
+// One-click "create supplier from vendor" affordance for the Vendor Invoices flow (an
+// erection Vendor is a separate model from Supplier - see Supplier.vendorId's doc comment).
+// Idempotent: if this vendor already has a linked Supplier, that row is returned unchanged
+// instead of erroring (Supplier.vendorId is @unique), so re-clicking the button is harmless.
+purchaseOrdersRouter.post(
+  "/suppliers/from-vendor",
+  requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, PERMISSION_KEY.RECORD_VENDOR_INVOICE),
+  async (req: AuthenticatedRequest, res) => {
+    const vendorId = asString(req.body?.vendorId);
+    const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
+    if (!vendor) return res.status(404).json({ error: "Vendor not found" });
+
+    const existing = await prisma.supplier.findUnique({ where: { vendorId } });
+    if (existing) return res.json(existing);
+
+    const supplier = await prisma.supplier.create({
+      data: {
+        name: vendor.name,
+        vendorId: vendor.id,
+        contactName: vendor.contactName,
+        contactEmail: vendor.contactEmail,
+        contactPhone: vendor.contactPhone,
+        address: vendor.address,
+      },
+    });
+    res.status(201).json(supplier);
+  },
+);
 
 // --- Purchase Orders -------------------------------------------------------
 function mapPoLine(line: {
@@ -223,118 +249,5 @@ purchaseOrdersRouter.post("/:id/status", requirePermission(PERMISSION_KEY.MANAGE
   res.json(po);
 });
 
-// --- Bills -----------------------------------------------------------------
-purchaseOrdersRouter.get("/bills", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (req, res) => {
-  const where: Record<string, unknown> = {};
-  if (typeof req.query.status === "string") where.status = req.query.status;
-  if (typeof req.query.supplierId === "string") where.supplierId = req.query.supplierId;
-
-  const bills = await prisma.bill.findMany({
-    where,
-    include: {
-      supplier: { select: { id: true, name: true } },
-      payments: { select: { amount: true } },
-    },
-    orderBy: { billDate: "desc" },
-  });
-  const rows = bills.map((b) => {
-    const paid = b.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-    return { ...b, amountPaid: paid, balance: new Prisma.Decimal(b.total).minus(paid), payments: undefined };
-  });
-  res.json(rows);
-});
-
-purchaseOrdersRouter.post("/bills", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (req: AuthenticatedRequest, res) => {
-  const parsed = billCreateSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const data = parsed.data;
-
-  const supplier = await prisma.supplier.findUnique({ where: { id: data.supplierId } });
-  if (!supplier) return res.status(404).json({ error: "Supplier not found" });
-  if (data.purchaseOrderId) {
-    const po = await prisma.purchaseOrder.findUnique({ where: { id: data.purchaseOrderId } });
-    if (!po) return res.status(404).json({ error: "Purchase order not found" });
-    if (po.supplierId !== data.supplierId) {
-      return res.status(400).json({ error: "Bill's purchase order belongs to a different supplier" });
-    }
-  }
-
-  const bill = await prisma.bill.create({
-    data: {
-      billNumber: data.billNumber,
-      supplierId: data.supplierId,
-      purchaseOrderId: data.purchaseOrderId,
-      status: BILL_STATUS.UNPAID,
-      billDate: new Date(data.billDate),
-      dueDate: data.dueDate ? new Date(data.dueDate) : null,
-      subtotal: new Prisma.Decimal(String(data.subtotal)),
-      taxAmount: new Prisma.Decimal(String(data.taxAmount)),
-      total: new Prisma.Decimal(String(data.total)),
-      notes: data.notes,
-      recordedById: req.auth!.userId,
-    },
-  });
-  res.status(201).json(bill);
-});
-
-purchaseOrdersRouter.get("/bills/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (req: AuthenticatedRequest, res) => {
-  const id = asString(req.params.id);
-  const bill = await prisma.bill.findUnique({
-    where: { id },
-    include: {
-      supplier: { select: { id: true, name: true } },
-      purchaseOrder: { select: { id: true, poNumber: true } },
-      payments: true,
-    },
-  });
-  if (!bill) return res.status(404).json({ error: "Bill not found" });
-  res.json(bill);
-});
-
-function deriveBillStatus(total: Prisma.Decimal, paid: Prisma.Decimal): string {
-  if (paid.isZero()) return BILL_STATUS.UNPAID;
-  if (paid.greaterThanOrEqualTo(total)) return BILL_STATUS.PAID;
-  return BILL_STATUS.PARTIALLY_PAID;
-}
-
-purchaseOrdersRouter.post(
-  "/bills/:id/payments",
-  requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
-  async (req: AuthenticatedRequest, res) => {
-    const id = asString(req.params.id);
-    const parsed = paymentMadeCreateSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-    const data = parsed.data;
-
-    const bill = await prisma.bill.findUnique({ where: { id }, include: { payments: true } });
-    if (!bill) return res.status(404).json({ error: "Bill not found" });
-    if (bill.status === BILL_STATUS.CANCELLED) {
-      return res.status(400).json({ error: "Cannot record payments against a cancelled bill" });
-    }
-    const paidBefore = bill.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-    const outstanding = new Prisma.Decimal(bill.total).minus(paidBefore);
-    const amount = new Prisma.Decimal(String(data.amount));
-    if (amount.greaterThan(outstanding)) {
-      return res.status(400).json({ error: "Payment exceeds the outstanding balance" });
-    }
-
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.paymentMade.create({
-        data: {
-          billId: bill.id,
-          supplierId: bill.supplierId,
-          amount,
-          method: data.method,
-          reference: data.reference,
-          paidDate: data.paidDate ? new Date(data.paidDate) : new Date(),
-          notes: data.notes,
-          recordedById: req.auth!.userId,
-        },
-      });
-      const newPaid = paidBefore.plus(amount);
-      const newStatus = deriveBillStatus(new Prisma.Decimal(bill.total), newPaid);
-      return tx.bill.update({ where: { id: bill.id }, data: { status: newStatus } });
-    });
-    res.status(201).json(result);
-  },
-);
+// Bill/Vendor-Invoice routes moved to routes/bills.ts (mounted at /bills) as part of the
+// Vendor Invoice (Payables) workflow feature - see docs/HANDOVER.md.

@@ -141,6 +141,15 @@ const financeLinks = [
     ),
   },
   {
+    href: "/finance/vendor-invoices",
+    label: "Vendor Invoices",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 7.5h1.5m-1.5 3h1.5m-7.5 3h7.5m-7.5-9h7.5m-10.5-3h13.5A2.25 2.25 0 0121 5.25v13.5A2.25 2.25 0 0118.75 21H5.25A2.25 2.25 0 013 18.75V5.25A2.25 2.25 0 015.25 3zM9 7.5h.008v.008H9V7.5zm0 3h.008v.008H9v-.008zm0 3h.008v.008H9v-.008z" />
+      </svg>
+    ),
+  },
+  {
     href: "/expenses",
     label: "Expenses",
     icon: (
@@ -205,6 +214,7 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/quotations": ["manage_quotations"],
   "/invoices": ["manage_invoices"],
   "/purchase-orders": ["manage_purchase_orders"],
+  "/finance/vendor-invoices": ["record_vendor_invoice", "approve_vendor_invoice"],
   "/expenses": ["manage_expenses"],
   "/finance/customer-pricing": ["manage_quotations", "manage_invoices"],
   "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],

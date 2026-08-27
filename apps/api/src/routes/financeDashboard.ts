@@ -38,7 +38,7 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
   const receivedThisMonth = paymentsReceived.reduce((s, p) => s.plus(D(p.amount)), zero);
 
   const bills = await prisma.bill.findMany({
-    where: { status: { in: [BILL_STATUS.UNPAID, BILL_STATUS.PARTIALLY_PAID] } },
+    where: { status: { in: [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID] } },
     include: { payments: { select: { amount: true } } },
   });
   let outstandingPayables = zero;
@@ -91,7 +91,7 @@ financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_
 financeDashboardRouter.get("/reports/payables", requirePermission(PERMISSION_KEY.VIEW_FINANCE_DASHBOARD), async (_req, res) => {
   const now = new Date();
   const bills = await prisma.bill.findMany({
-    where: { status: { in: [BILL_STATUS.UNPAID, BILL_STATUS.PARTIALLY_PAID] } },
+    where: { status: { in: [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID] } },
     include: { payments: { select: { amount: true } }, supplier: { select: { id: true, name: true } } },
   });
 

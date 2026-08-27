@@ -7,6 +7,7 @@ import { formatINR, formatDate, PAYMENT_METHOD_LABEL } from "@/lib/finance";
 import { DataTable } from "@/components/DataTable";
 
 interface Cat { id: string; key: string; label: string; }
+interface SiteOption { id: string; address: string | null; companyName: string | null; order: { orderNumber: string; customer: { name: string } }; }
 interface ExpenseRow {
   id: string;
   description: string;
@@ -14,6 +15,11 @@ interface ExpenseRow {
   expenseDate: string;
   method: string;
   category: { id: string; key: string; label: string };
+  site?: { id: string; address: string | null; companyName: string | null } | null;
+}
+
+function siteLabel(s: SiteOption): string {
+  return `${s.companyName || s.address || s.id} - ${s.order.orderNumber} (${s.order.customer.name})`;
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -24,20 +30,26 @@ export default function ExpensesPage() {
 
   const [rows, setRows] = useState<ExpenseRow[]>([]);
   const [cats, setCats] = useState<Cat[]>([]);
+  const [sites, setSites] = useState<SiteOption[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [form, setForm] = useState({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash" });
+  const [form, setForm] = useState({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash", siteId: "" });
+  const [noSite, setNoSite] = useState(false);
 
   const [editId, setEditId] = useState<string | null>(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editFormError, setEditFormError] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash" });
+  const [editForm, setEditForm] = useState({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash", siteId: "" });
+  const [editNoSite, setEditNoSite] = useState(false);
 
   function load() {
     api<ExpenseRow[]>("/expenses").then(setRows).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
-    if (canManage) api<Cat[]>("/meta/expense-categories").then(setCats).catch(() => {});
+    if (canManage) {
+      api<Cat[]>("/meta/expense-categories").then(setCats).catch(() => {});
+      api<SiteOption[]>("/meta/sites").then(setSites).catch(() => {});
+    }
   }
   useEffect(load, [canManage]);
 
@@ -46,12 +58,15 @@ export default function ExpensesPage() {
     setSaving(true); setFormError(null);
     try {
       if (!form.categoryId) throw new Error("Please choose a category");
+      if (!noSite && !form.siteId) throw new Error("Please choose a site, or check \"No site / overhead\"");
       await api("/expenses", { method: "POST", body: JSON.stringify({
         categoryId: form.categoryId, description: form.description,
         amount: parseFloat(form.amount) || 0, expenseDate: new Date(form.expenseDate).toISOString(), method: form.method,
+        siteId: noSite ? undefined : form.siteId,
       }) });
       setOpen(false);
-      setForm({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash" });
+      setForm({ categoryId: "", description: "", amount: "", expenseDate: today(), method: "cash", siteId: "" });
+      setNoSite(false);
       load();
     } catch (err) { setFormError(err instanceof Error ? err.message : "Failed"); }
     finally { setSaving(false); }
@@ -70,7 +85,9 @@ export default function ExpensesPage() {
       amount: r.amount,
       expenseDate: r.expenseDate.slice(0, 10),
       method: r.method,
+      siteId: r.site?.id ?? "",
     });
+    setEditNoSite(!r.site);
     setEditId(r.id);
   }
   async function saveEdit(e: React.FormEvent) {
@@ -79,9 +96,11 @@ export default function ExpensesPage() {
     setEditSaving(true); setEditFormError(null);
     try {
       if (!editForm.categoryId) throw new Error("Please choose a category");
+      if (!editNoSite && !editForm.siteId) throw new Error("Please choose a site, or check \"No site / overhead\"");
       await api(`/expenses/${editId}`, { method: "PUT", body: JSON.stringify({
         categoryId: editForm.categoryId, description: editForm.description,
         amount: parseFloat(editForm.amount) || 0, expenseDate: new Date(editForm.expenseDate).toISOString(), method: editForm.method,
+        siteId: editNoSite ? null : editForm.siteId,
       }) });
       setEditId(null);
       load();
@@ -200,6 +219,17 @@ export default function ExpensesPage() {
                   <option value="other">Other</option>
                 </select>
               </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Site</label>
+                <select className="field w-full" disabled={noSite} value={form.siteId} onChange={(e) => setForm({ ...form, siteId: e.target.value })}>
+                  <option value="">Select a site</option>
+                  {sites.map((s) => <option key={s.id} value={s.id}>{siteLabel(s)}</option>)}
+                </select>
+                <label className="mt-2 flex items-center gap-2 text-xs text-gray-500">
+                  <input type="checkbox" checked={noSite} onChange={(e) => { setNoSite(e.target.checked); if (e.target.checked) setForm({ ...form, siteId: "" }); }} />
+                  No site / overhead
+                </label>
+              </div>
               {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
@@ -248,6 +278,17 @@ export default function ExpensesPage() {
                   <option value="cash">Cash</option>
                   <option value="other">Other</option>
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Site</label>
+                <select className="field w-full" disabled={editNoSite} value={editForm.siteId} onChange={(e) => setEditForm({ ...editForm, siteId: e.target.value })}>
+                  <option value="">Select a site</option>
+                  {sites.map((s) => <option key={s.id} value={s.id}>{siteLabel(s)}</option>)}
+                </select>
+                <label className="mt-2 flex items-center gap-2 text-xs text-gray-500">
+                  <input type="checkbox" checked={editNoSite} onChange={(e) => { setEditNoSite(e.target.checked); if (e.target.checked) setEditForm({ ...editForm, siteId: "" }); }} />
+                  No site / overhead
+                </label>
               </div>
               {editFormError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{editFormError}</p>}
               <div className="flex justify-end gap-3">

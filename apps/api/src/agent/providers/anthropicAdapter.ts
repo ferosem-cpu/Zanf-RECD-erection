@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
+import type { ExtractDocumentParams, LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
 import { ProviderCallError } from "./types";
 
 export interface AnthropicAdapterConfig {
@@ -67,6 +67,38 @@ export function createAnthropicAdapter(config: AnthropicAdapterConfig): LlmAdapt
       } catch (err) {
         throw new ProviderCallError(
           `Anthropic provider "${config.providerName}" call failed: ${(err as Error).message}`,
+          config.providerName,
+          err,
+        );
+      }
+    },
+
+    async extractDocument(params: ExtractDocumentParams): Promise<string> {
+      const isPdf = params.mimeType === "application/pdf";
+      const isImage = params.mimeType.startsWith("image/");
+      if (!isPdf && !isImage) {
+        throw new ProviderCallError(
+          `Anthropic provider "${config.providerName}" cannot read files of type "${params.mimeType}".`,
+          config.providerName,
+        );
+      }
+      try {
+        const fileBlock: Anthropic.ContentBlockParam = isPdf
+          ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: params.fileBase64 } }
+          : {
+              type: "image",
+              source: { type: "base64", media_type: params.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp", data: params.fileBase64 },
+            };
+        const response = await client.messages.create({
+          model: config.model,
+          max_tokens: 4096,
+          messages: [{ role: "user", content: [fileBlock, { type: "text", text: params.instructions }] }],
+        });
+        const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text");
+        return textBlocks.map((b) => b.text).join("\n").trim();
+      } catch (err) {
+        throw new ProviderCallError(
+          `Anthropic provider "${config.providerName}" extraction failed: ${(err as Error).message}`,
           config.providerName,
           err,
         );

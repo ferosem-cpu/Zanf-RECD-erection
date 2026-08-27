@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter, useParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
@@ -54,23 +55,6 @@ export default function PurchaseOrderDetailPage() {
     setAction(status); setMsg(null);
     try { await api(`/purchase-orders/${id}/status`, { method: "POST", body: JSON.stringify({ status }) }); setMsg(`PO ${status}.`); load(); }
     catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setAction(null); }
-  }
-
-  const [billOpen, setBillOpen] = useState(false);
-  const [bill, setBill] = useState({ billNumber: "", billDate: new Date().toISOString().slice(0, 10), dueDate: "", subtotal: "", taxAmount: "0", total: "" });
-  async function createBill(e: React.FormEvent) {
-    e.preventDefault();
-    setAction("bill"); setMsg(null);
-    try {
-      await api("/purchase-orders/bills", { method: "POST", body: JSON.stringify({
-        billNumber: bill.billNumber, supplierId: po!.supplier.id, purchaseOrderId: po!.id,
-        billDate: new Date(bill.billDate).toISOString(),
-        dueDate: bill.dueDate ? new Date(bill.dueDate).toISOString() : undefined,
-        subtotal: parseFloat(bill.subtotal) || 0, taxAmount: parseFloat(bill.taxAmount) || 0, total: parseFloat(bill.total) || 0,
-      }) });
-      setBillOpen(false); setBill({ billNumber: "", billDate: new Date().toISOString().slice(0, 10), dueDate: "", subtotal: "", taxAmount: "0", total: "" });
-      setMsg("Bill recorded."); load();
-    } catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setAction(null); }
   }
 
   // Editing - only draft POs can be edited (enforced server-side too).
@@ -185,7 +169,14 @@ export default function PurchaseOrderDetailPage() {
       <div className="card p-4">
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-sm font-semibold">Bills from supplier</h2>
-          {canManage && <button onClick={() => setBillOpen(true)} className="text-xs font-medium text-[var(--theme-accent)]">+ Record bill</button>}
+          {canManage && (
+            <Link
+              href={`/finance/vendor-invoices/new?supplierId=${po.supplier.id}&purchaseOrderId=${po.id}`}
+              className="text-xs font-medium text-[var(--theme-accent)]"
+            >
+              + Record vendor invoice
+            </Link>
+          )}
         </div>
         {po.bills.length === 0 ? (
           <p className="text-sm text-gray-400">No bills recorded yet.</p>
@@ -212,31 +203,6 @@ export default function PurchaseOrderDetailPage() {
       )}
 
       <button onClick={() => router.push(`/purchase-orders/${po.id}/print`)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Print</button>
-
-      {billOpen && (
-        <div className="modal-backdrop" onClick={() => setBillOpen(false)}>
-          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Record bill</h3>
-              <button onClick={() => setBillOpen(false)} className="text-gray-400 hover:text-gray-600">✕</button>
-            </div>
-            <form onSubmit={createBill} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input required placeholder="Bill number" className="field" value={bill.billNumber} onChange={(e) => setBill({ ...bill, billNumber: e.target.value })} />
-                <input type="date" required className="field" value={bill.billDate} onChange={(e) => setBill({ ...bill, billDate: e.target.value })} />
-                <input type="date" className="field" value={bill.dueDate} onChange={(e) => setBill({ ...bill, dueDate: e.target.value })} placeholder="Due date" />
-                <input type="number" step="0.01" placeholder="Tax amount" className="field" value={bill.taxAmount} onChange={(e) => setBill({ ...bill, taxAmount: e.target.value })} />
-                <input type="number" step="0.01" required placeholder="Subtotal" className="field" value={bill.subtotal} onChange={(e) => setBill({ ...bill, subtotal: e.target.value })} />
-                <input type="number" step="0.01" required placeholder="Total" className="field" value={bill.total} onChange={(e) => setBill({ ...bill, total: e.target.value })} />
-              </div>
-              <div className="flex justify-end gap-3">
-                <button type="button" onClick={() => setBillOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Cancel</button>
-                <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action ? "Saving…" : "Record bill"}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {editOpen && po && (
         <div className="modal-backdrop" onClick={() => setEditOpen(false)}>

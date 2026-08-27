@@ -509,3 +509,47 @@ sitesRouter.post(
     res.status(201).json(updated);
   },
 );
+
+// Per-site cost rollup for the Vendor Invoices feature: approved vendor-invoice allocations
+// + the site's expense book + its purchase orders, so cost-vs-our-invoiced-revenue is visible
+// on the site detail page. Only counts bill allocations whose bill has actually cleared
+// approval (approved/partially_paid/paid) - an unverified upload shouldn't inflate site cost.
+sitesRouter.get(
+  "/:id/costs",
+  requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, PERMISSION_KEY.VIEW_FINANCE_DASHBOARD),
+  async (req: AuthenticatedRequest, res) => {
+    const siteId = asString(req.params.id);
+    const site = await prisma.site.findUnique({ where: { id: siteId } });
+    if (!site) return res.status(404).json({ error: "Site not found" });
+
+    const [allocations, expenses, purchaseOrders] = await Promise.all([
+      prisma.billAllocation.findMany({
+        where: { siteId, bill: { status: { in: ["approved", "partially_paid", "paid"] } } },
+        include: {
+          bill: { select: { id: true, billNumber: true, status: true, billDate: true, supplier: { select: { id: true, name: true } } } },
+          invoice: { select: { id: true, invoiceNumber: true, docType: true } },
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.expense.findMany({ where: { siteId }, include: { category: { select: { label: true } } }, orderBy: { expenseDate: "desc" } }),
+      prisma.purchaseOrder.findMany({ where: { siteId }, select: { id: true, poNumber: true, status: true, total: true, orderDate: true } }),
+    ]);
+
+    const { Prisma } = await import("@prisma/client");
+    const allocationTotal = allocations.reduce((s, a) => s.plus(a.amount), new Prisma.Decimal(0));
+    const expenseTotal = expenses.reduce((s, e) => s.plus(e.amount), new Prisma.Decimal(0));
+    const poTotal = purchaseOrders.reduce((s, p) => s.plus(p.total), new Prisma.Decimal(0));
+
+    res.json({
+      billAllocations: allocations,
+      expenses,
+      purchaseOrders,
+      totals: {
+        billAllocations: allocationTotal,
+        expenses: expenseTotal,
+        purchaseOrders: poTotal,
+        grandTotal: allocationTotal.plus(expenseTotal),
+      },
+    });
+  },
+);

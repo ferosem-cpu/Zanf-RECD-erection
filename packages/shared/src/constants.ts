@@ -165,6 +165,10 @@ export const PERMISSION_KEY_FINANCE = {
   MANAGE_PURCHASE_ORDERS: "manage_purchase_orders",
   MANAGE_EXPENSES: "manage_expenses",
   VIEW_FINANCE_DASHBOARD: "view_finance_dashboard",
+  /** Upload/capture a vendor invoice (any payee) - does not permit verify/approve. */
+  RECORD_VENDOR_INVOICE: "record_vendor_invoice",
+  /** Verify, approve, or reject a vendor invoice - Finance/Management/Super Admin only. */
+  APPROVE_VENDOR_INVOICE: "approve_vendor_invoice",
 } as const;
 
 /** Merge finance permission keys into PERMISSION_KEY so they seed + type-check everywhere. */
@@ -244,13 +248,41 @@ export const PO_STATUS = {
 } as const;
 export type PoStatus = (typeof PO_STATUS)[keyof typeof PO_STATUS];
 
+/** Vendor Invoice (Bill) workflow: uploaded -> verified -> approved -> (partially_paid ->
+ * paid), plus rejected and cancelled as dead ends. Pre-workflow rows (created before this
+ * feature existed) were migrated from the old "unpaid" status to "approved". */
 export const BILL_STATUS = {
-  UNPAID: "unpaid",
+  UPLOADED: "uploaded",
+  VERIFIED: "verified",
+  APPROVED: "approved",
+  REJECTED: "rejected",
   PARTIALLY_PAID: "partially_paid",
   PAID: "paid",
   CANCELLED: "cancelled",
 } as const;
 export type BillStatus = (typeof BILL_STATUS)[keyof typeof BILL_STATUS];
+
+/** How a vendor invoice's source document was produced - drives AI-extraction confidence. */
+export const BILL_SOURCE_TYPE = {
+  PRINTED: "printed",
+  HANDWRITTEN: "handwritten",
+  DIGITAL: "digital",
+} as const;
+export type BillSourceType = (typeof BILL_SOURCE_TYPE)[keyof typeof BILL_SOURCE_TYPE];
+
+/** BillAuditLog.action keys. */
+export const BILL_AUDIT_ACTION = {
+  CREATED: "created",
+  EXTRACTED: "extracted",
+  FIELD_EDITED: "field_edited",
+  VERIFIED: "verified",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+  PAYMENT_RECORDED: "payment_recorded",
+  CANCELLED: "cancelled",
+  ALLOCATION_CHANGED: "allocation_changed",
+} as const;
+export type BillAuditAction = (typeof BILL_AUDIT_ACTION)[keyof typeof BILL_AUDIT_ACTION];
 
 export const PAYMENT_METHOD = {
   BANK_TRANSFER: "bank_transfer",

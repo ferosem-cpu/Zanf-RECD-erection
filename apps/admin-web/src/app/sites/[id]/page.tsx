@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+import { SiteCostsSection } from "@/components/SiteCostsSection";
 
 interface Lookup {
   id: string;
@@ -1057,6 +1058,8 @@ export default function SiteDetailPage() {
           {site.photos.length === 0 && <p className="text-sm text-gray-400">No photos uploaded yet.</p>}
         </div>
       </section>
+
+      <SiteCostsSection siteId={site.id} />
     </div>
   );
 }

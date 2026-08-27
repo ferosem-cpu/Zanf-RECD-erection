@@ -34,6 +34,8 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, name: "Manage suppliers, purchase orders, and bills" },
     { key: PERMISSION_KEY.MANAGE_EXPENSES, name: "Manage the expense book" },
     { key: PERMISSION_KEY.VIEW_FINANCE_DASHBOARD, name: "View finance dashboard and reports" },
+    { key: PERMISSION_KEY.RECORD_VENDOR_INVOICE, name: "Upload / capture a vendor invoice" },
+    { key: PERMISSION_KEY.APPROVE_VENDOR_INVOICE, name: "Verify, approve, or reject a vendor invoice" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -72,6 +74,7 @@ async function seedRoles() {
         PERMISSION_KEY.CHANGE_SITE_STATUS,
         PERMISSION_KEY.RESOLVE_PENDING_ACTION,
         PERMISSION_KEY.MANAGE_WORK_ORDERS,
+        PERMISSION_KEY.RECORD_VENDOR_INVOICE,
       ],
     },
     [ROLE_KEY.ERECTION_ENGINEER]: {
@@ -82,6 +85,7 @@ async function seedRoles() {
         PERMISSION_KEY.CHANGE_SITE_STATUS,
         PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS,
         PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS,
+        PERMISSION_KEY.RECORD_VENDOR_INVOICE,
       ],
     },
     [ROLE_KEY.COMMISSIONING_ENGINEER]: {
@@ -92,6 +96,7 @@ async function seedRoles() {
         PERMISSION_KEY.CHANGE_SITE_STATUS,
         PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS,
         PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS,
+        PERMISSION_KEY.RECORD_VENDOR_INVOICE,
       ],
     },
     [ROLE_KEY.SERVICE_TEAM]: {
@@ -109,6 +114,8 @@ async function seedRoles() {
         PERMISSION_KEY.MANAGE_PURCHASE_ORDERS,
         PERMISSION_KEY.MANAGE_EXPENSES,
         PERMISSION_KEY.VIEW_FINANCE_DASHBOARD,
+        PERMISSION_KEY.RECORD_VENDOR_INVOICE,
+        PERMISSION_KEY.APPROVE_VENDOR_INVOICE,
       ],
     },
     [ROLE_KEY.CUSTOMER]: {

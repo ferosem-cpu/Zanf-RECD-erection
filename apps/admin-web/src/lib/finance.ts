@@ -27,7 +27,10 @@ export const PO_STATUS_LABEL: Record<string, string> = {
 };
 
 export const BILL_STATUS_LABEL: Record<string, string> = {
-  unpaid: "Unpaid",
+  uploaded: "Uploaded",
+  verified: "Verified",
+  approved: "Approved",
+  rejected: "Rejected",
   partially_paid: "Partially Paid",
   paid: "Paid",
   cancelled: "Cancelled",
@@ -44,8 +47,8 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = {
 
 /** Tailwind status-pill modifier class for a given status key. */
 export function statusPillClass(status: string): string {
-  const paid = ["paid", "received", "accepted", "converted", "closed"];
-  const warn = ["partially_paid", "partially_received", "issued", "sent"];
+  const paid = ["paid", "received", "accepted", "converted", "closed", "approved", "verified"];
+  const warn = ["partially_paid", "partially_received", "issued", "sent", "uploaded"];
   const err = ["cancelled", "rejected", "expired", "draft", "unpaid"];
   if (paid.includes(status)) return "status-pill status-pill-success";
   if (warn.includes(status)) return "status-pill status-pill-warning";

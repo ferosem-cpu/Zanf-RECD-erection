@@ -377,16 +377,66 @@ export const purchaseOrderStatusSchema = z.object({
   status: z.enum(["issued", "partially_received", "received", "cancelled", "closed"]),
 });
 
+/** Line item on a vendor invoice - same shape as PurchaseOrderLineItem's schema, no discount. */
+export const billLineItemSchema = z.object({
+  description: z.string().min(1).max(500),
+  hsnCode: z.string().max(20).optional(),
+  quantity: z.number().positive("Quantity must be > 0"),
+  unitPrice: z.number().nonnegative("Unit price cannot be negative"),
+  taxRatePct: z.number().min(0).max(28).default(18),
+});
+
+/** A single allocation row: at least one of siteId/orderId/invoiceId is required (checked in
+ * the refine below); the API additionally validates FK existence and the sum-vs-total rule. */
+export const billAllocationSchema = z
+  .object({
+    siteId: z.string().optional(),
+    orderId: z.string().optional(),
+    invoiceId: z.string().optional(),
+    amount: z.number().positive("Allocation amount must be > 0"),
+    notes: z.string().max(1000).optional(),
+  })
+  .refine((a) => !!(a.siteId || a.orderId || a.invoiceId), {
+    message: "Each allocation needs at least one of site, order, or linked invoice",
+  });
+
 export const billCreateSchema = z.object({
   billNumber: z.string().min(1).max(100),
   supplierId: z.string().min(1),
   purchaseOrderId: z.string().optional(),
+  sourceType: z.enum(["printed", "handwritten", "digital"]).optional(),
+  attachmentUrl: z.string().max(6_000_000).optional(),
+  attachmentMimeType: z.string().max(100).optional(),
+  extractionRaw: z.unknown().optional(),
   billDate: z.string().datetime(),
   dueDate: z.string().datetime().optional(),
-  subtotal: z.number().nonnegative(),
-  taxAmount: z.number().nonnegative().default(0),
-  total: z.number().nonnegative(),
   notes: z.string().max(2000).optional(),
+  lineItems: z.array(billLineItemSchema).min(1, "At least one line item is required"),
+  allocations: z.array(billAllocationSchema).optional(),
+});
+
+export const billUpdateSchema = z.object({
+  billNumber: z.string().min(1).max(100).optional(),
+  supplierId: z.string().min(1).optional(),
+  purchaseOrderId: z.string().nullable().optional(),
+  sourceType: z.enum(["printed", "handwritten", "digital"]).optional(),
+  attachmentUrl: z.string().max(6_000_000).optional(),
+  attachmentMimeType: z.string().max(100).optional(),
+  billDate: z.string().datetime().optional(),
+  dueDate: z.string().datetime().nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  lineItems: z.array(billLineItemSchema).min(1).optional(),
+  allocations: z.array(billAllocationSchema).optional(),
+});
+
+export const billRejectSchema = z.object({
+  reason: z.string().min(1).max(1000),
+});
+
+/** POST /bills/extract request: the raw uploaded file, base64-encoded. */
+export const billExtractRequestSchema = z.object({
+  fileDataUrl: z.string().min(1),
+  mimeType: z.string().min(1),
 });
 
 export const paymentMadeCreateSchema = z.object({
@@ -404,7 +454,9 @@ export const expenseCreateSchema = z.object({
   amount: z.number().positive("Amount must be > 0"),
   expenseDate: z.string().datetime(),
   method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]),
-  siteId: z.string().optional(),
+  // Nullable (not just optional) so the edit form can explicitly clear a previously-set site
+  // via "No site / overhead" - undefined = "leave unchanged" on update, null = "clear it".
+  siteId: z.string().nullable().optional(),
   receiptUrl: z.string().max(5000).optional(),
 });
 

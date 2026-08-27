@@ -55,3 +55,19 @@ lookupsRouter.get("/document-requirement-types", async (_req, res) => {
   const types = await prisma.documentRequirementType.findMany({ orderBy: { sequenceOrder: "asc" } });
   res.json(types);
 });
+
+/** Lightweight site/order/customer list for pickers - the Vendor Invoice allocations editor
+ * (site + order + "link to my invoice" filtered by that order's customer) is the first
+ * consumer, but this is generic enough for any future site/order picker. */
+lookupsRouter.get("/sites", async (_req, res) => {
+  const sites = await prisma.site.findMany({
+    select: {
+      id: true,
+      address: true,
+      companyName: true,
+      order: { select: { id: true, orderNumber: true, customer: { select: { id: true, name: true } } } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json(sites);
+});

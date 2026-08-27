@@ -94,6 +94,9 @@ model User {
   paymentsReceived     PaymentReceived[]  @relation("PaymentReceivedRecorder")
   purchaseOrdersCreated PurchaseOrder[]  @relation("PurchaseOrderCreator")
   billsRecorded        Bill[]             @relation("BillRecorder")
+  billsVerified        Bill[]             @relation("BillVerifier")
+  billsApproved        Bill[]             @relation("BillApprover")
+  billAuditLogs        BillAuditLog[]     @relation("BillAuditActor")
   paymentsMade         PaymentMade[]      @relation("PaymentMadeRecorder")
   expensesRecorded     Expense[]          @relation("ExpenseRecorder")
   invoiceEdits         InvoiceEditLog[]   @relation("InvoiceEditor")
@@ -262,6 +265,7 @@ model Order {
   /// these are units 2+. A physically separate delivery/site instead gets its own sibling
   /// Order+Site row (see Site's own doc comment).
   lineItems OrderLineItem[]
+  billAllocations BillAllocation[]
 }
 
 /// A second (or third...) RECD product added to an existing order/site, for when multiple
@@ -335,6 +339,7 @@ model Site {
   contacts        SiteContact[]
   documentRequirements SiteDocumentRequirement[]
   recdDelivery    RecdDelivery?
+  billAllocations BillAllocation[]
 }
 
 // ---------------------------------------------------------------------------
@@ -819,6 +824,7 @@ model Invoice {
   lineItems InvoiceLineItem[]
   payments  PaymentReceived[]
   editLogs  InvoiceEditLog[]
+  billAllocations BillAllocation[]
 }
 
 /// Audit trail for edits made to an invoice after it has already been issued/paid.
@@ -910,8 +916,10 @@ model PurchaseOrderLineItem {
   sortOrder       Int           @default(0)
 }
 
-/// A bill received FROM a supplier (their invoice to us). billNumber is the
-/// supplier's own number - unique per supplier, not globally.
+/// A bill received FROM a supplier (their invoice to us) - "Vendor Invoice" in the UI.
+/// billNumber is the supplier's own number - unique per supplier, not globally. Covers both
+/// goods suppliers and erection vendors (via Supplier.vendorId) - see docs/HANDOVER.md's
+/// Vendor Invoice (Payables) section for the full workflow.
 model Bill {
   id              String         @id @default(cuid())
   billNumber      String
@@ -919,8 +927,9 @@ model Bill {
   supplier        Supplier       @relation(fields: [supplierId], references: [id])
   purchaseOrderId String?
   purchaseOrder   PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
-  /// unpaid | partially_paid | paid | cancelled  (BILL_STATUS in shared)
-  status          String         @default("unpaid")
+  /// uploaded | verified | approved | rejected | partially_paid | paid | cancelled
+  /// (BILL_STATUS in shared). Existing pre-workflow rows were migrated unpaid -> approved.
+  status          String         @default("uploaded")
   billDate        DateTime
   dueDate         DateTime?
   subtotal        Decimal        @db.Decimal(12, 2)
@@ -931,9 +940,79 @@ model Bill {
   recordedBy      User           @relation("BillRecorder", fields: [recordedById], references: [id])
   createdAt       DateTime       @default(now())
 
-  payments PaymentMade[]
+  /// printed | handwritten | digital - how the source document was produced (informs the
+  /// AI extraction confidence and whether OCR/handwriting parsing was involved).
+  sourceType         String?
+  /// base64 data-URL of the uploaded scan/photo, same convention as Expense.receiptUrl -
+  /// client enforces a ~2-4MB cap and downscales images before upload.
+  attachmentUrl      String?
+  attachmentMimeType String?
+  /// Raw structured output from the AI extraction step (POST /bills/extract), kept for audit
+  /// even after the human reviews/corrects the form - never auto-saved as the bill itself.
+  extractionRaw      Json?
+  verifiedById       String?
+  verifiedBy         User?     @relation("BillVerifier", fields: [verifiedById], references: [id])
+  verifiedAt         DateTime?
+  approvedById       String?
+  approvedBy         User?     @relation("BillApprover", fields: [approvedById], references: [id])
+  approvedAt         DateTime?
+  rejectedReason     String?
+
+  payments    PaymentMade[]
+  lineItems   BillLineItem[]
+  allocations BillAllocation[]
+  auditLogs   BillAuditLog[]
 
   @@unique([supplierId, billNumber])
+}
+
+/// Line items on a vendor invoice - mirrors PurchaseOrderLineItem.
+model BillLineItem {
+  id         String  @id @default(cuid())
+  billId     String
+  bill       Bill    @relation(fields: [billId], references: [id], onDelete: Cascade)
+  description String
+  hsnCode    String?
+  quantity   Decimal @db.Decimal(10, 2)
+  unitPrice  Decimal @db.Decimal(12, 2)
+  taxRatePct Decimal @db.Decimal(5, 2) @default(18)
+  lineTotal  Decimal @db.Decimal(12, 2)
+  sortOrder  Int     @default(0)
+}
+
+/// Splits a vendor invoice's amount across one or more sites/orders for job-costing, and can
+/// optionally tag one of OUR OWN issued Invoices the cost relates to (e.g. a subcontract
+/// erection bill against the same job we invoiced the customer for). At least one of
+/// site/order/invoice is required (enforced in the API); site/order are derivable from the
+/// invoice's own links when only invoiceId is set, and are still stored directly here so
+/// costing queries don't need to join through Invoice every time.
+model BillAllocation {
+  id        String   @id @default(cuid())
+  billId    String
+  bill      Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  siteId    String?
+  site      Site?    @relation(fields: [siteId], references: [id])
+  orderId   String?
+  order     Order?   @relation(fields: [orderId], references: [id])
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
+  amount    Decimal  @db.Decimal(12, 2)
+  notes     String?
+  createdAt DateTime @default(now())
+}
+
+/// Audit trail for the vendor invoice workflow - pattern-matches InvoiceEditLog. One row per
+/// meaningful event (created / extracted / field_edited / verified / approved / rejected /
+/// payment_recorded / cancelled / allocation_changed - see BILL_AUDIT_ACTION in shared).
+model BillAuditLog {
+  id        String   @id @default(cuid())
+  billId    String
+  bill      Bill     @relation(fields: [billId], references: [id], onDelete: Cascade)
+  actorId   String
+  actor     User     @relation("BillAuditActor", fields: [actorId], references: [id])
+  action    String
+  summary   String
+  createdAt DateTime @default(now())
 }
 
 model PaymentMade {

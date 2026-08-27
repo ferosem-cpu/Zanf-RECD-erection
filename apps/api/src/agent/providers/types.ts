@@ -42,8 +42,24 @@ export interface SendMessageResult {
   toolCalls: UnifiedToolCall[];
 }
 
+export interface ExtractDocumentParams {
+  /** Plain-text instructions telling the model what to extract and the JSON shape to return. */
+  instructions: string;
+  /** Base64-encoded file bytes (no data: URL prefix). */
+  fileBase64: string;
+  /** e.g. "image/jpeg", "image/png", "application/pdf". */
+  mimeType: string;
+}
+
 export interface LlmAdapter {
   sendMessage(params: SendMessageParams): Promise<SendMessageResult>;
+  /** Optional: a single-turn multimodal call (image/PDF in, raw text out) used by the
+   * Vendor Invoice "Extract with AI" flow. Not every adapter/provider combination can
+   * support every mimeType (e.g. most OpenAI-compatible third-party endpoints don't accept
+   * PDFs) - such adapters should throw a ProviderCallError for unsupported input rather than
+   * silently mishandling it, so the caller can fall back to the next provider or degrade to
+   * manual entry. Adapters that don't implement this at all simply omit the method. */
+  extractDocument?(params: ExtractDocumentParams): Promise<string>;
 }
 
 /** Thrown by an adapter for errors that should trigger fallback to the next configured
