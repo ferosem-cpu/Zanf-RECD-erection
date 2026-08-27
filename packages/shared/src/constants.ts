@@ -284,6 +284,27 @@ export const BILL_AUDIT_ACTION = {
 } as const;
 export type BillAuditAction = (typeof BILL_AUDIT_ACTION)[keyof typeof BILL_AUDIT_ACTION];
 
+/** CustomerPurchaseOrder.status - a PO a customer sends TO us, the mirror of PurchaseOrder.
+ * "invoiced" just reflects invoiceId being set, not a workflow gate - recording/linking a
+ * customer PO is always optional, never required to create or invoice an order. */
+export const CUSTOMER_PO_STATUS = {
+  OPEN: "open",
+  INVOICED: "invoiced",
+  CANCELLED: "cancelled",
+} as const;
+export type CustomerPoStatus = (typeof CUSTOMER_PO_STATUS)[keyof typeof CUSTOMER_PO_STATUS];
+
+/** CustomerPurchaseOrderAuditLog.action keys. */
+export const CUSTOMER_PO_AUDIT_ACTION = {
+  CREATED: "created",
+  EXTRACTED: "extracted",
+  FIELD_EDITED: "field_edited",
+  LINKED_TO_ORDER: "linked_to_order",
+  LINKED_TO_INVOICE: "linked_to_invoice",
+  CANCELLED: "cancelled",
+} as const;
+export type CustomerPoAuditAction = (typeof CUSTOMER_PO_AUDIT_ACTION)[keyof typeof CUSTOMER_PO_AUDIT_ACTION];
+
 export const PAYMENT_METHOD = {
   BANK_TRANSFER: "bank_transfer",
   UPI: "upi",

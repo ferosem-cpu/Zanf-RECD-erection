@@ -6,7 +6,7 @@
  */
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
-import { FINANCE_DOC_TYPE, INVOICE_STATUS, BILL_STATUS, BILL_AUDIT_ACTION } from "@recd/shared";
+import { FINANCE_DOC_TYPE, INVOICE_STATUS, BILL_STATUS, BILL_AUDIT_ACTION, CUSTOMER_PO_STATUS, CUSTOMER_PO_AUDIT_ACTION } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requireAgentAccess, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
@@ -18,6 +18,7 @@ import { createQuotationRecord } from "./quotations";
 import { createPurchaseOrderRecord } from "./purchase-orders";
 import { createComplaintRecord } from "./complaints";
 import { mapBillLine, type BillLineInput } from "./bills";
+import { computeCustomerPoTotals } from "./customer-purchase-orders";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { extractGenericDocument } from "../agent/documentExtraction";
 import { ExtractionUnavailableError } from "../agent/billExtraction";
@@ -343,6 +344,49 @@ async function executeConfirmedAction(
         return created;
       });
       return bill.id;
+    }
+    case "create_customer_po": {
+      // Mirrors POST /customer-purchase-orders exactly (routes/customer-purchase-orders.ts).
+      // Recording one is always optional - this just gives it the same audit-log convention
+      // as every other confirmed write action.
+      const lineItems = (input.lineItems as BillLineInput[]) ?? [];
+      const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+      const totals = computeCustomerPoTotals(lineItems, company?.state);
+      const invoiceId = input.invoiceId ? String(input.invoiceId) : undefined;
+
+      const po = await prisma.$transaction(async (tx) => {
+        const created = await tx.customerPurchaseOrder.create({
+          data: {
+            poNumber: String(input.poNumber),
+            customerId: String(input.customerId),
+            orderId: input.orderId ? String(input.orderId) : undefined,
+            invoiceId,
+            status: invoiceId ? CUSTOMER_PO_STATUS.INVOICED : CUSTOMER_PO_STATUS.OPEN,
+            poDate: new Date(String(input.poDate)),
+            placeOfSupply: (input.placeOfSupply as string | null) ?? undefined,
+            workLocation: (input.workLocation as string | null) ?? undefined,
+            scopeOfWork: (input.scopeOfWork as string | null) ?? undefined,
+            paymentDueDate: input.paymentDueDate ? new Date(String(input.paymentDueDate)) : null,
+            customerRefCode: (input.customerRefCode as string | null) ?? undefined,
+            notes: (input.notes as string | null) ?? undefined,
+            subtotal: totals.subtotal,
+            taxAmount: totals.taxAmount,
+            total: totals.total,
+            recordedById: userId,
+            lineItems: { create: lineItems.map((l, i) => mapBillLine(l, i)) },
+          },
+        });
+        await tx.customerPurchaseOrderAuditLog.create({
+          data: {
+            customerPurchaseOrderId: created.id,
+            actorId: userId,
+            action: CUSTOMER_PO_AUDIT_ACTION.CREATED,
+            summary: `Recorded via the AI assistant; ${lineItems.length} line item(s), total Rs ${totals.total.toFixed(2)}`,
+          },
+        });
+        return created;
+      });
+      return po.id;
     }
     case "create_saved_item": {
       const item = await prisma.savedLineItem.create({

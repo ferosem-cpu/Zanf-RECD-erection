@@ -440,6 +440,58 @@ export const billExtractRequestSchema = z.object({
   mimeType: z.string().min(1),
 });
 
+export const customerPurchaseOrderLineItemSchema = z.object({
+  description: z.string().min(1).max(500),
+  hsnCode: z.string().max(20).optional(),
+  quantity: z.number().positive("Quantity must be > 0"),
+  unitPrice: z.number().nonnegative("Unit price cannot be negative"),
+  taxRatePct: z.number().min(0).max(28).default(18),
+});
+
+export const customerPurchaseOrderCreateSchema = z.object({
+  poNumber: z.string().min(1).max(100),
+  poDate: z.string().datetime(),
+  customerId: z.string().min(1),
+  orderId: z.string().optional(),
+  invoiceId: z.string().optional(),
+  placeOfSupply: z.string().max(100).optional(),
+  workLocation: z.string().max(200).optional(),
+  scopeOfWork: z.string().max(1000).optional(),
+  paymentDueDate: z.string().datetime().optional(),
+  customerRefCode: z.string().max(100).optional(),
+  notes: z.string().max(2000).optional(),
+  sourceType: z.enum(["printed", "handwritten", "digital"]).optional(),
+  attachmentUrl: z.string().max(6_000_000).optional(),
+  attachmentMimeType: z.string().max(100).optional(),
+  extractionRaw: z.unknown().optional(),
+  lineItems: z.array(customerPurchaseOrderLineItemSchema).min(1, "At least one line item is required"),
+});
+
+export const customerPurchaseOrderUpdateSchema = z.object({
+  poNumber: z.string().min(1).max(100).optional(),
+  poDate: z.string().datetime().optional(),
+  customerId: z.string().min(1).optional(),
+  orderId: z.string().nullable().optional(),
+  invoiceId: z.string().nullable().optional(),
+  placeOfSupply: z.string().max(100).nullable().optional(),
+  workLocation: z.string().max(200).nullable().optional(),
+  scopeOfWork: z.string().max(1000).nullable().optional(),
+  paymentDueDate: z.string().datetime().nullable().optional(),
+  customerRefCode: z.string().max(100).nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
+  sourceType: z.enum(["printed", "handwritten", "digital"]).optional(),
+  attachmentUrl: z.string().max(6_000_000).optional(),
+  attachmentMimeType: z.string().max(100).optional(),
+  lineItems: z.array(customerPurchaseOrderLineItemSchema).min(1).optional(),
+  status: z.enum(["open", "invoiced", "cancelled"]).optional(),
+});
+
+/** POST /customer-purchase-orders/extract request: the raw uploaded file, base64-encoded. */
+export const customerPurchaseOrderExtractRequestSchema = z.object({
+  fileDataUrl: z.string().min(1),
+  mimeType: z.string().min(1),
+});
+
 export const paymentMadeCreateSchema = z.object({
   billId: z.string().optional(),
   amount: z.number().positive("Amount must be > 0"),

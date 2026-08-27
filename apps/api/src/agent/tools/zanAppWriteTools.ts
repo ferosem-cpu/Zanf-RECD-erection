@@ -11,6 +11,7 @@ import { prisma } from "../../lib/prisma";
 import { computeDocumentTotals } from "../../services/taxCalc";
 import { assertOwnSite } from "../../routes/complaints";
 import { computeBillTotals } from "../../routes/bills";
+import { computeCustomerPoTotals } from "../../routes/customer-purchase-orders";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
@@ -959,6 +960,182 @@ const createVendorInvoiceTool: AgentTool = {
   },
 };
 
+interface CustomerPoLineItemInput {
+  description: string;
+  hsnCode?: string;
+  quantity: number;
+  unitPrice: number;
+  taxRatePct?: number;
+}
+
+const createCustomerPoTool: AgentTool = {
+  name: "create_customer_po",
+  description:
+    "Propose recording a Customer Purchase Order - a PO a CUSTOMER sent TO us (the mirror of " +
+    "create_purchase_order, which is a PO we send to a supplier), most often from a photo or " +
+    "PDF the user attached in this chat. This is entirely optional record-keeping - many " +
+    "customers confirm work by email or verbally instead of a formal PO, so never suggest this " +
+    "is required before an order can be created or invoiced. This does NOT record it " +
+    "immediately - it prepares it and shows the user a confirm card in the chat; only THEY can " +
+    "approve it by clicking Confirm. If the user attached a document, use the AI-extracted " +
+    "fields/text already folded into their message to fill this in - don't ask them to retype " +
+    "what was already read, but do double-check anything the extraction flagged as unsure " +
+    "before proposing it. Resolve the customer the normal way (search/match by name) rather " +
+    "than trusting a raw name string blindly - the customer issuing the PO is usually named at " +
+    "the top of the document, NOT in any 'Vendor'/'Vendor Details' section (that's us).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      customerId: { type: "string", description: "Customer id, if already known (e.g. from a prior search)." },
+      customerName: {
+        type: "string",
+        description: "Customer name to look up if customerId isn't known (e.g. read off the attached PO). Provide one of customerId or customerName.",
+      },
+      orderId: { type: "string", description: "Optional - an existing order/job this PO is for, if already resolved (e.g. via search_orders_and_sites)." },
+      invoiceId: { type: "string", description: "Optional - an existing invoice already issued against this PO, if already resolved." },
+      poNumber: { type: "string", description: "The customer's own PO number, as printed/written on the document." },
+      poDate: { type: "string", description: "ISO date (YYYY-MM-DD) the PO was issued. Defaults to today if omitted." },
+      placeOfSupply: { type: "string", description: "State/place of supply, if printed, e.g. '33-TAMIL NADU'." },
+      workLocation: { type: "string", description: "Site/work location exactly as printed on the PO (e.g. a site name or code) - kept verbatim even if it doesn't exactly match one of our own site names." },
+      scopeOfWork: { type: "string", description: "Short description of the work/scope, if stated." },
+      paymentDueDate: { type: "string", description: "ISO date (YYYY-MM-DD) payment is due by, if a 'payment by' date is printed." },
+      customerRefCode: { type: "string", description: "The customer's own reference/vendor code for us, if printed (e.g. a vendor empanelment code)." },
+      lineItems: {
+        type: "array",
+        description: "At least one line item. If the source document only gave a total with no itemized breakdown, use a single line item describing the whole scope of work.",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            hsnCode: { type: "string", description: "HSN/SAC code, if known - never guess, leave it out if not stated." },
+            quantity: { type: "number" },
+            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax." },
+            taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
+          },
+          required: ["description", "quantity", "unitPrice"],
+        },
+      },
+      notes: { type: "string", description: "Anything worth a human's attention - e.g. that this was read from a handwritten/attached document, or fields you weren't fully sure about." },
+    },
+    required: ["lineItems", "poNumber"],
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("customer purchase orders");
+    if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
+
+    const customerId = input.customerId ? String(input.customerId) : null;
+    const customerName = input.customerName ? String(input.customerName) : null;
+    const orderId = input.orderId ? String(input.orderId) : null;
+    const invoiceId = input.invoiceId ? String(input.invoiceId) : null;
+    const poNumber = String(input.poNumber ?? "").trim();
+    const poDateStr = input.poDate ? String(input.poDate) : new Date().toISOString().slice(0, 10);
+    const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as CustomerPoLineItemInput[]) : [];
+    const notes = input.notes ? String(input.notes) : null;
+
+    if (!customerId && !customerName) return { error: "Provide either customerId or customerName." };
+    if (!poNumber) return { error: "poNumber is required - the customer's own PO number as printed/written on the document." };
+    if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
+    for (const [i, li] of lineItemsRaw.entries()) {
+      if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
+      if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
+    }
+
+    let customer = customerId ? await prisma.customer.findUnique({ where: { id: customerId } }) : null;
+    if (!customer && customerName) {
+      const matches = await prisma.customer.findMany({
+        where: { name: { contains: customerName, mode: "insensitive" } },
+        take: 5,
+      });
+      if (matches.length === 1) {
+        customer = matches[0];
+      } else if (matches.length > 1) {
+        return {
+          error: `Multiple customers match "${customerName}": ${matches
+            .map((c) => `${c.name} (id: ${c.id})`)
+            .join(", ")}. Ask the user which one, then retry with the exact customerId.`,
+        };
+      } else {
+        const allCustomers = await prisma.customer.findMany({ select: { name: true }, take: 20 });
+        return {
+          error: `No customer matching "${customerName}". Existing customers: ${allCustomers.map((c) => c.name).join(", ") || "(none yet)"}. Ask the user which one, or point them to Customers > New customer to add this one first (this chat can't create customers).`,
+        };
+      }
+    }
+    if (!customer) return { error: `No customer found with id ${customerId}.` };
+
+    if (orderId) {
+      const order = await prisma.order.findUnique({ where: { id: orderId } });
+      if (!order) return { error: `No order found with id ${orderId}.` };
+      if (order.customerId !== customer.id) return { error: "That order belongs to a different customer." };
+    }
+    if (invoiceId) {
+      const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+      if (!invoice) return { error: `No invoice found with id ${invoiceId}.` };
+      if (invoice.customerId !== customer.id) return { error: "That invoice belongs to a different customer." };
+    }
+
+    const normalizedLines = lineItemsRaw.map((li) => ({
+      description: li.description,
+      hsnCode: li.hsnCode ?? undefined,
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      taxRatePct: li.taxRatePct ?? 18,
+    }));
+
+    const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+    const totals = computeCustomerPoTotals(normalizedLines, company?.state);
+
+    const preview = {
+      customer: customer.name,
+      orderId,
+      invoiceId,
+      poNumber,
+      lineItems: normalizedLines.map((l) => ({ ...l, lineTotal: l.quantity * l.unitPrice })),
+      subtotal: Number(totals.subtotal),
+      taxAmount: Number(totals.taxAmount),
+      total: Number(totals.total),
+      poDate: poDateStr,
+      placeOfSupply: input.placeOfSupply ? String(input.placeOfSupply) : undefined,
+      workLocation: input.workLocation ? String(input.workLocation) : undefined,
+      scopeOfWork: input.scopeOfWork ? String(input.scopeOfWork) : undefined,
+      paymentDueDate: input.paymentDueDate ? String(input.paymentDueDate) : undefined,
+      customerRefCode: input.customerRefCode ? String(input.customerRefCode) : undefined,
+      notes,
+    };
+
+    const pending = await prisma.agentPendingAction.create({
+      data: {
+        conversationId: auth.conversationId,
+        toolName: "create_customer_po",
+        input: {
+          customerId: customer.id,
+          orderId,
+          invoiceId,
+          poNumber,
+          lineItems: normalizedLines,
+          poDate: poDateStr,
+          placeOfSupply: preview.placeOfSupply,
+          workLocation: preview.workLocation,
+          scopeOfWork: preview.scopeOfWork,
+          paymentDueDate: preview.paymentDueDate,
+          customerRefCode: preview.customerRefCode,
+          notes,
+        },
+        preview,
+        createdById: auth.userId,
+      },
+    });
+
+    return {
+      status: "pending_confirmation",
+      actionId: pending.id,
+      preview,
+      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. Do not tell the user it has been recorded yet.",
+    };
+  },
+};
+
 function hasAny(auth: { permissions: Set<string> }, keys: string[]): boolean {
   return keys.some((k) => auth.permissions.has(k));
 }
@@ -972,4 +1149,5 @@ export const zanAppWriteTools: AgentTool[] = [
   createComplaintTool,
   createSiteStatusUpdateTool,
   createVendorInvoiceTool,
+  createCustomerPoTool,
 ];

@@ -105,6 +105,8 @@ model User {
   agentLlmProvidersCreated AgentLlmProvider[] @relation("AgentLlmProviderCreator")
   agentConversations       AgentConversation[] @relation("AgentConversationUser")
   agentPendingActionsCreated AgentPendingAction[] @relation("AgentPendingActionCreator")
+  customerPurchaseOrdersRecorded CustomerPurchaseOrder[]        @relation("CustomerPurchaseOrderRecorder")
+  customerPurchaseOrderAuditLogs CustomerPurchaseOrderAuditLog[] @relation("CustomerPurchaseOrderAuditActor")
 }
 
 model OtpCode {
@@ -141,6 +143,7 @@ model Customer {
   invoices   Invoice[]
   productPrices    CustomerProductPrice[]
   savedItemPrices  CustomerSavedItemPrice[]
+  purchaseOrders   CustomerPurchaseOrder[]
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -266,6 +269,7 @@ model Order {
   /// Order+Site row (see Site's own doc comment).
   lineItems OrderLineItem[]
   billAllocations BillAllocation[]
+  customerPurchaseOrders CustomerPurchaseOrder[]
 }
 
 /// A second (or third...) RECD product added to an existing order/site, for when multiple
@@ -826,6 +830,7 @@ model Invoice {
   payments  PaymentReceived[]
   editLogs  InvoiceEditLog[]
   billAllocations BillAllocation[]
+  customerPurchaseOrders CustomerPurchaseOrder[]
 }
 
 /// Audit trail for edits made to an invoice after it has already been issued/paid.
@@ -1127,4 +1132,83 @@ model AgentPendingAction {
   resolvedAt     DateTime?
 
   @@index([conversationId])
+}
+
+// ---------------------------------------------------------------------------
+// Customer purchase orders (sales-side) - the mirror image of PurchaseOrder, which we send
+// to suppliers. Recording one is always optional (many customers confirm work by email or
+// verbally instead of a formal PO), but when one exists this is where it's tracked end to
+// end: the scanned document itself, which Order/site it's for, and which Invoice we issued
+// against it - so the whole thread (PO received -> job -> invoice sent -> payment received)
+// is visible from one place. Payment itself is never duplicated here; once invoiceId is set,
+// Invoice.payments (PaymentReceived) already has that.
+// ---------------------------------------------------------------------------
+
+model CustomerPurchaseOrder {
+  id             String    @id @default(cuid())
+  poNumber       String
+  poDate         DateTime
+  customerId     String
+  customer       Customer  @relation(fields: [customerId], references: [id])
+  orderId        String?
+  order          Order?    @relation(fields: [orderId], references: [id])
+  invoiceId      String?
+  invoice        Invoice?  @relation(fields: [invoiceId], references: [id])
+  /// open | invoiced | cancelled (CUSTOMER_PO_STATUS in shared). "invoiced" just reflects
+  /// invoiceId being set, not a workflow gate - recording/linking is always optional.
+  status         String    @default("open")
+  subtotal       Decimal   @db.Decimal(12, 2)
+  taxAmount      Decimal   @db.Decimal(12, 2) @default(0)
+  total          Decimal   @db.Decimal(12, 2)
+  placeOfSupply  String?
+  /// Free-text site/work-location exactly as printed on the customer's PO (e.g. "AAI-TRZ") -
+  /// kept verbatim even after orderId is linked, since it's what the customer actually wrote
+  /// and may not match our own Site naming.
+  workLocation   String?
+  scopeOfWork    String?
+  paymentDueDate DateTime?
+  /// The customer's own reference/vendor code for us on this PO, if printed (e.g. a vendor
+  /// empanelment code) - purely informational, never used to look anything up.
+  customerRefCode String?
+  notes          String?
+  /// printed | handwritten | digital - same convention as Bill.sourceType.
+  sourceType         String?
+  /// base64 data-URL of the uploaded scan/photo/PDF, same convention as Bill.attachmentUrl.
+  attachmentUrl      String?
+  attachmentMimeType String?
+  /// Raw structured output from the AI extraction step, kept for audit - never auto-saved.
+  extractionRaw      Json?
+  recordedById   String
+  recordedBy     User      @relation("CustomerPurchaseOrderRecorder", fields: [recordedById], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  lineItems CustomerPurchaseOrderLineItem[]
+  auditLogs CustomerPurchaseOrderAuditLog[]
+}
+
+/// Line items on a customer PO, when it itemizes (mirrors PurchaseOrderLineItem/BillLineItem).
+model CustomerPurchaseOrderLineItem {
+  id                      String                @id @default(cuid())
+  customerPurchaseOrderId String
+  customerPurchaseOrder   CustomerPurchaseOrder @relation(fields: [customerPurchaseOrderId], references: [id], onDelete: Cascade)
+  description             String
+  hsnCode                 String?
+  quantity                Decimal               @db.Decimal(10, 2)
+  unitPrice               Decimal               @db.Decimal(12, 2)
+  taxRatePct              Decimal               @db.Decimal(5, 2) @default(18)
+  lineTotal               Decimal               @db.Decimal(12, 2)
+  sortOrder               Int                   @default(0)
+}
+
+/// Audit trail for the customer PO record - pattern-matches BillAuditLog.
+model CustomerPurchaseOrderAuditLog {
+  id                      String                @id @default(cuid())
+  customerPurchaseOrderId String
+  customerPurchaseOrder   CustomerPurchaseOrder @relation(fields: [customerPurchaseOrderId], references: [id], onDelete: Cascade)
+  actorId                 String
+  actor                   User                  @relation("CustomerPurchaseOrderAuditActor", fields: [actorId], references: [id])
+  action                  String
+  summary                 String
+  createdAt               DateTime              @default(now())
 }

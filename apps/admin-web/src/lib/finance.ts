@@ -36,6 +36,12 @@ export const BILL_STATUS_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+export const CUSTOMER_PO_STATUS_LABEL: Record<string, string> = {
+  open: "Open",
+  invoiced: "Invoiced",
+  cancelled: "Cancelled",
+};
+
 export const PAYMENT_METHOD_LABEL: Record<string, string> = {
   bank_transfer: "Bank Transfer",
   upi: "UPI",
@@ -47,8 +53,8 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = {
 
 /** Tailwind status-pill modifier class for a given status key. */
 export function statusPillClass(status: string): string {
-  const paid = ["paid", "received", "accepted", "converted", "closed", "approved", "verified"];
-  const warn = ["partially_paid", "partially_received", "issued", "sent", "uploaded"];
+  const paid = ["paid", "received", "accepted", "converted", "closed", "approved", "verified", "invoiced"];
+  const warn = ["partially_paid", "partially_received", "issued", "sent", "uploaded", "open"];
   const err = ["cancelled", "rejected", "expired", "draft", "unpaid"];
   if (paid.includes(status)) return "status-pill status-pill-success";
   if (warn.includes(status)) return "status-pill status-pill-warning";
