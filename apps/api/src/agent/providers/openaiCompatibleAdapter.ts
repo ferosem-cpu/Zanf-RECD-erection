@@ -41,6 +41,55 @@ function toOpenAIMessages(
   return result;
 }
 
+function isGeminiBaseUrl(baseUrl: string | undefined): boolean {
+  return !!baseUrl && baseUrl.includes("generativelanguage.googleapis.com");
+}
+
+/** Google's real Generative Language REST API (as opposed to the OpenAI-compatibility shim
+ * this adapter otherwise speaks) accepts a PDF directly as inline base64 data - up to 20MB,
+ * no separate upload step needed for a file this size. Used only as extractDocument's escape
+ * hatch for non-image files on a Gemini-configured provider; sendMessage keeps going through
+ * the OpenAI-compatible endpoint above unchanged, so normal chat behavior is untouched. */
+async function extractDocumentViaNativeGemini(
+  config: OpenAICompatibleAdapterConfig,
+  params: ExtractDocumentParams,
+): Promise<string> {
+  const modelPath = config.model.replace(/^models\//, "");
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelPath}:generateContent`;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: params.instructions }, { inline_data: { mime_type: params.mimeType, data: params.fileBase64 } }],
+          },
+        ],
+      }),
+    });
+  } catch (err) {
+    throw new ProviderCallError(
+      `Provider "${config.providerName}" extraction failed: ${(err as Error).message}`,
+      config.providerName,
+      err,
+    );
+  }
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => "");
+    throw new ProviderCallError(
+      `Provider "${config.providerName}" extraction failed: ${response.status} ${response.statusText} ${bodyText}`.trim(),
+      config.providerName,
+    );
+  }
+  const data = (await response.json()) as {
+    candidates?: { content?: { parts?: { text?: string }[] } }[];
+  };
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  return text.trim();
+}
+
 export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterConfig): LlmAdapter {
   const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseUrl });
 
@@ -98,10 +147,16 @@ export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterCon
     async extractDocument(params: ExtractDocumentParams): Promise<string> {
       // Most OpenAI-compatible third-party endpoints (Groq/Together/OpenRouter/etc) accept
       // vision input as an image_url data: URI but do not accept raw PDF bytes the way the
-      // real OpenAI API's file/vision handling does - fail fast here so the caller falls
-      // back to another provider (typically Anthropic, which handles PDFs directly) instead
-      // of silently sending bytes the model can't read.
+      // real OpenAI API's file/vision handling does. Google's endpoint is the one exception
+      // this app knows how to work around: Gemini's own native API (not the OpenAI-compat
+      // shim this adapter otherwise talks to) DOES read PDFs directly, so a non-image file
+      // on a Gemini-configured provider is routed to that native endpoint instead of failing.
+      // Every other OpenAI-compatible provider still fails fast on non-image input so the
+      // caller falls back to another configured provider (typically Anthropic).
       if (!params.mimeType.startsWith("image/")) {
+        if (isGeminiBaseUrl(config.baseUrl)) {
+          return extractDocumentViaNativeGemini(config, params);
+        }
         throw new ProviderCallError(
           `Provider "${config.providerName}" only supports image extraction, not "${params.mimeType}".`,
           config.providerName,
