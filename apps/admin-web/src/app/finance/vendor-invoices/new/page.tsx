@@ -101,7 +101,14 @@ export default function NewVendorInvoicePage() {
         setExtractNote(res.error || "AI extraction isn't available right now - please fill in the details manually.");
       } else {
         applyExtraction(res.extraction);
-        setSupplierCandidates(res.supplierCandidates ?? []);
+        const candidates = res.supplierCandidates ?? [];
+        setSupplierCandidates(candidates);
+        // No fuzzy match against existing suppliers/vendors means this is very likely a payee
+        // we haven't seen before - jump straight to "New" so the name/GSTIN the AI already
+        // read off the scan shows up pre-filled instead of a human retyping it.
+        if (candidates.length === 0 && res.extraction.supplierNameGuess) {
+          setSupplierMode("new");
+        }
         if (res.extraction.confidence === "low") {
           setExtractNote("The AI wasn't fully confident reading this document (especially if handwritten) - please double-check every field before saving.");
         }
@@ -116,6 +123,16 @@ export default function NewVendorInvoicePage() {
 
   function applyExtraction(ex: ExtractedBill) {
     setExtraction(ex);
+    // Carry the raw supplier name/GSTIN reading into the "New supplier" fields too - if this
+    // payee doesn't fuzzy-match anything we already have on file, the human shouldn't have to
+    // retype what the AI already read off the scan; they still review/confirm before saving.
+    if (ex.supplierNameGuess || ex.gstinGuess) {
+      setNewSupplier((prev) => ({
+        ...prev,
+        name: ex.supplierNameGuess ?? prev.name,
+        gstin: ex.gstinGuess ?? prev.gstin,
+      }));
+    }
     if (ex.billNumber) setBillNumber(ex.billNumber);
     if (ex.billDate) setBillDate(ex.billDate.slice(0, 10));
     if (ex.dueDate) setDueDate(ex.dueDate.slice(0, 10));
@@ -330,6 +347,15 @@ export default function NewVendorInvoicePage() {
                         </button>
                       ))}
                     </div>
+                  )}
+                  {!supplierId && supplierCandidates.length === 0 && extraction?.supplierNameGuess && (
+                    <p className="mt-2 text-xs text-gray-400">
+                      AI read the payee as &quot;{extraction.supplierNameGuess}&quot;{extraction.gstinGuess ? ` (GSTIN ${extraction.gstinGuess})` : ""} - none of that matched an
+                      existing supplier or vendor.{" "}
+                      <button type="button" onClick={() => setSupplierMode("new")} className="font-medium text-[var(--theme-accent)] hover:underline">
+                        Add as a new supplier
+                      </button>
+                    </p>
                   )}
                 </>
               )}
