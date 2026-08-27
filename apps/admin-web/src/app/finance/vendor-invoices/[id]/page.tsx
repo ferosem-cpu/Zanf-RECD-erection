@@ -19,7 +19,7 @@ interface BillDetail {
   id: string; billNumber: string; status: string; billDate: string; dueDate?: string | null;
   sourceType?: string | null; attachmentUrl?: string | null; attachmentMimeType?: string | null;
   subtotal: string; taxAmount: string; total: string; notes?: string | null; rejectedReason?: string | null;
-  supplier: { id: string; name: string; gstin?: string | null; state?: string | null; address?: string | null; contactName?: string | null; contactPhone?: string | null; contactEmail?: string | null };
+  supplier: { id: string; name: string; gstin?: string | null; pan?: string | null; state?: string | null; address?: string | null; contactName?: string | null; contactPhone?: string | null; contactEmail?: string | null };
   purchaseOrder?: { id: string; poNumber: string } | null;
   lineItems: LineItem[];
   allocations: Allocation[];
@@ -136,6 +136,7 @@ export default function VendorInvoiceDetailPage() {
             {bill.sourceType && <Row label="Source" value={bill.sourceType} />}
             {bill.purchaseOrder && <Row label="Purchase order" value={bill.purchaseOrder.poNumber} />}
             <Row label="Supplier GSTIN" value={bill.supplier.gstin ?? "-"} />
+            {bill.supplier.pan && <Row label="Supplier PAN" value={bill.supplier.pan} />}
           </div>
 
           <div className="card overflow-hidden">

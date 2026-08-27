@@ -19,6 +19,7 @@ export interface ExtractedLineItem {
 export interface ExtractedBill {
   supplierNameGuess?: string;
   gstinGuess?: string;
+  panGuess?: string;
   billNumber?: string;
   billDate?: string; // ISO date, best effort
   dueDate?: string;
@@ -48,6 +49,7 @@ const INSTRUCTIONS = `You are extracting structured data from a photo or scan of
 {
   "supplierNameGuess": string | null,
   "gstinGuess": string | null,
+  "panGuess": string | null,  // PAN, if separately printed/written on the invoice (not just derivable from the GSTIN)
   "billNumber": string | null,
   "billDate": string | null,   // ISO 8601 date (YYYY-MM-DD), your best reading of the invoice date
   "dueDate": string | null,    // ISO 8601 date, if a due/payment date is printed
@@ -108,6 +110,7 @@ export async function extractBillFromFile(fileBase64: string, mimeType: string):
       return {
         supplierNameGuess: obj.supplierNameGuess ? String(obj.supplierNameGuess) : undefined,
         gstinGuess: obj.gstinGuess ? String(obj.gstinGuess) : undefined,
+        panGuess: obj.panGuess ? String(obj.panGuess) : undefined,
         billNumber: obj.billNumber ? String(obj.billNumber) : undefined,
         billDate: obj.billDate ? String(obj.billDate) : undefined,
         dueDate: obj.dueDate ? String(obj.dueDate) : undefined,

@@ -6,13 +6,13 @@ import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { captureFile, type CapturedFile } from "@/lib/fileCapture";
 
-interface Supplier { id: string; name: string; gstin?: string | null; state?: string | null; vendorId?: string | null; }
+interface Supplier { id: string; name: string; gstin?: string | null; pan?: string | null; state?: string | null; vendorId?: string | null; }
 interface Vendor { id: string; name: string; status: string; }
 interface SiteOption { id: string; address: string | null; companyName: string | null; order: { id: string; orderNumber: string; customer: { id: string; name: string } }; }
 interface InvoiceOption { id: string; invoiceNumber: string; docType: string; customerId: string; }
 interface ExtractedLineItem { description: string; hsnCode?: string; quantity?: number; unitPrice?: number; taxRatePct?: number; }
 interface ExtractedBill {
-  supplierNameGuess?: string; gstinGuess?: string; billNumber?: string; billDate?: string; dueDate?: string;
+  supplierNameGuess?: string; gstinGuess?: string; panGuess?: string; billNumber?: string; billDate?: string; dueDate?: string;
   sourceTypeGuess?: string; confidence?: string; lineItems: ExtractedLineItem[]; subtotal?: number; taxAmount?: number; total?: number; notes?: string;
 }
 interface SupplierCandidate { id: string; name: string; gstin?: string | null; source: "supplier" | "vendor"; score: number; }
@@ -50,7 +50,7 @@ export default function NewVendorInvoicePage() {
   const [supplierId, setSupplierId] = useState(prefillSupplierId);
   const [supplierMode, setSupplierMode] = useState<"existing" | "vendor" | "new">("existing");
   const [vendorPickId, setVendorPickId] = useState("");
-  const [newSupplier, setNewSupplier] = useState({ name: "", gstin: "", state: "", contactName: "", contactPhone: "" });
+  const [newSupplier, setNewSupplier] = useState({ name: "", gstin: "", pan: "", state: "", contactName: "", contactPhone: "" });
   const [billNumber, setBillNumber] = useState("");
   const [billDate, setBillDate] = useState(today());
   const [dueDate, setDueDate] = useState("");
@@ -126,11 +126,12 @@ export default function NewVendorInvoicePage() {
     // Carry the raw supplier name/GSTIN reading into the "New supplier" fields too - if this
     // payee doesn't fuzzy-match anything we already have on file, the human shouldn't have to
     // retype what the AI already read off the scan; they still review/confirm before saving.
-    if (ex.supplierNameGuess || ex.gstinGuess) {
+    if (ex.supplierNameGuess || ex.gstinGuess || ex.panGuess) {
       setNewSupplier((prev) => ({
         ...prev,
         name: ex.supplierNameGuess ?? prev.name,
         gstin: ex.gstinGuess ?? prev.gstin,
+        pan: ex.panGuess ?? prev.pan,
       }));
     }
     if (ex.billNumber) setBillNumber(ex.billNumber);
@@ -350,7 +351,9 @@ export default function NewVendorInvoicePage() {
                   )}
                   {!supplierId && supplierCandidates.length === 0 && extraction?.supplierNameGuess && (
                     <p className="mt-2 text-xs text-gray-400">
-                      AI read the payee as &quot;{extraction.supplierNameGuess}&quot;{extraction.gstinGuess ? ` (GSTIN ${extraction.gstinGuess})` : ""} - none of that matched an
+                      AI read the payee as &quot;{extraction.supplierNameGuess}&quot;
+                      {extraction.gstinGuess ? ` (GSTIN ${extraction.gstinGuess})` : ""}
+                      {extraction.panGuess ? ` (PAN ${extraction.panGuess})` : ""} - none of that matched an
                       existing supplier or vendor.{" "}
                       <button type="button" onClick={() => setSupplierMode("new")} className="font-medium text-[var(--theme-accent)] hover:underline">
                         Add as a new supplier
@@ -375,6 +378,9 @@ export default function NewVendorInvoicePage() {
                   <input placeholder="Supplier name" className="field w-full" value={newSupplier.name} onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })} />
                   <div className="grid grid-cols-2 gap-2">
                     <input placeholder="GSTIN" className="field" value={newSupplier.gstin} onChange={(e) => setNewSupplier({ ...newSupplier, gstin: e.target.value })} />
+                    <input placeholder="PAN" className="field" value={newSupplier.pan} onChange={(e) => setNewSupplier({ ...newSupplier, pan: e.target.value })} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
                     <input placeholder="State" className="field" value={newSupplier.state} onChange={(e) => setNewSupplier({ ...newSupplier, state: e.target.value })} />
                   </div>
                   <div className="grid grid-cols-2 gap-2">

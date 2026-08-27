@@ -29,7 +29,7 @@ export default function PurchaseOrdersPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [supplierId, setSupplierId] = useState("");
   const [newSupplierOpen, setNewSupplierOpen] = useState(false);
-  const [newSupplier, setNewSupplier] = useState({ name: "", gstin: "", state: "", contactName: "", contactPhone: "" });
+  const [newSupplier, setNewSupplier] = useState({ name: "", gstin: "", pan: "", state: "", contactName: "", contactPhone: "" });
   const [lines, setLines] = useState([{ description: "", hsnCode: "", quantity: "1", unitPrice: "", taxRatePct: "18" }]);
 
   function load() {
@@ -67,7 +67,7 @@ export default function PurchaseOrdersPage() {
       setSuppliers((prev) => [...prev, s]);
       setSupplierId(s.id);
       setNewSupplierOpen(false);
-      setNewSupplier({ name: "", gstin: "", state: "", contactName: "", contactPhone: "" });
+      setNewSupplier({ name: "", gstin: "", pan: "", state: "", contactName: "", contactPhone: "" });
     } catch (err) { setFormError(err instanceof Error ? err.message : "Failed"); }
   }
 
@@ -142,6 +142,9 @@ export default function PurchaseOrdersPage() {
                     <input required placeholder="Supplier name" className="field w-full" value={newSupplier.name} onChange={(e) => setNewSupplier({ ...newSupplier, name: e.target.value })} />
                     <div className="grid grid-cols-2 gap-2">
                       <input placeholder="GSTIN" className="field" value={newSupplier.gstin} onChange={(e) => setNewSupplier({ ...newSupplier, gstin: e.target.value })} />
+                      <input placeholder="PAN" className="field" value={newSupplier.pan} onChange={(e) => setNewSupplier({ ...newSupplier, pan: e.target.value })} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
                       <input placeholder="State" className="field" value={newSupplier.state} onChange={(e) => setNewSupplier({ ...newSupplier, state: e.target.value })} />
                     </div>
                     <div className="grid grid-cols-2 gap-2">

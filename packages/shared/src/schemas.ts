@@ -351,6 +351,7 @@ export const paymentUpdateSchema = paymentCreateSchema.partial();
 export const supplierCreateSchema = z.object({
   name: z.string().min(1),
   gstin: z.string().max(20).optional(),
+  pan: z.string().max(20).optional(),
   state: z.string().max(100).optional(),
   address: z.string().max(1000).optional(),
   contactName: z.string().max(200).optional(),

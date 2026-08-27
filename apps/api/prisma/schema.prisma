@@ -728,6 +728,7 @@ model Supplier {
   id           String   @id @default(cuid())
   name         String
   gstin        String?
+  pan          String?
   state        String?
   address      String?
   contactName  String?

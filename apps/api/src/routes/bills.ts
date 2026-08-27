@@ -90,7 +90,7 @@ const allocationDetail = {
 };
 
 const billDetailInclude = {
-  supplier: { select: { id: true, name: true, gstin: true, state: true, address: true, contactName: true, contactPhone: true, contactEmail: true, vendorId: true } },
+  supplier: { select: { id: true, name: true, gstin: true, pan: true, state: true, address: true, contactName: true, contactPhone: true, contactEmail: true, vendorId: true } },
   purchaseOrder: { select: { id: true, poNumber: true } },
   lineItems: { orderBy: { sortOrder: "asc" as const } },
   allocations: { include: allocationDetail, orderBy: { createdAt: "asc" as const } },
