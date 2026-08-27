@@ -594,7 +594,7 @@ export default function AgentChatBubble() {
             {error && <p className="text-xs text-red-500">{error}</p>}
           </div>
 
-          <div className="border-t border-gray-100 p-3 flex items-end gap-2">
+          <div className="border-t border-gray-100 p-3 flex items-center gap-2">
             <div className="relative flex-1">
               <textarea
                 ref={textareaRef}
@@ -619,7 +619,7 @@ export default function AgentChatBubble() {
                   type="button"
                   onClick={toggleMic}
                   disabled={sending}
-                  className={`absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full text-white shadow-sm transition disabled:opacity-50 ${
+                  className={`absolute top-1/2 right-1.5 -translate-y-1/2 flex h-7 w-7 items-center justify-center rounded-full text-white shadow-sm transition disabled:opacity-50 ${
                     listening
                       ? "bg-gradient-to-br from-red-500 to-rose-600 animate-pulse"
                       : "bg-gradient-to-br from-emerald-500 to-green-600 hover:brightness-105"
@@ -627,11 +627,11 @@ export default function AgentChatBubble() {
                   aria-label={listening ? "Stop voice input" : "Speak instead of typing"}
                   title={listening ? "Stop voice input" : "Speak instead of typing"}
                 >
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true" className="block" style={{ transform: "translateY(1px)" }}>
-                    <rect x="9" y="2" width="6" height="11" rx="3" fill="currentColor" />
-                    <path d="M6 10a6 6 0 0 0 12 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    <line x1="12" y1="18" x2="12" y2="20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    <line x1="9" y1="20.5" x2="15" y2="20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true" className="block">
+                    <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" />
+                    <path d="M6 11a6 6 0 0 0 12 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    <line x1="12" y1="19" x2="12" y2="21.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    <line x1="9" y1="21.5" x2="15" y2="21.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                   </svg>
                 </button>
               )}
