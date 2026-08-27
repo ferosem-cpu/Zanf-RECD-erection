@@ -8,7 +8,7 @@ import type { AgentTool, AgentAuthContext } from "./types";
 
 const DOC_TYPES = [
   "customer", "vendor", "quotation", "invoice", "purchase_order",
-  "expense", "order", "work_order", "complaint",
+  "expense", "order", "work_order", "complaint", "product",
 ] as const;
 type DocType = (typeof DOC_TYPES)[number];
 
@@ -111,6 +111,9 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
           assignedTo: { select: { name: true } }, createdBy: { select: { name: true } },
         },
       });
+    case "product":
+      if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("products");
+      return prisma.product.findUnique({ where: { id } });
     case "complaint":
       if (
         !auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) &&

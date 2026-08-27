@@ -705,6 +705,108 @@ const createSavedItemTool: AgentTool = {
   },
 };
 
+const createSiteStatusUpdateTool: AgentTool = {
+  name: "create_site_status_update",
+  description:
+    "PROPOSE a new SITC timeline entry (progress note) on a site - this is what shows up as " +
+    "'Post a status update' in the app, and is the only way to add one; the search/detail " +
+    "tools are read-only. Resolve siteId first with search_orders_and_sites (use the site's " +
+    "own \"id\" field, not the order's id). stageKey sets which SITC stage this update reflects " +
+    "and moves the site's current stage to it - reuse the site's own current stage key (from " +
+    "search_orders_and_sites/get_document_detail) to log a note without moving it forward, or " +
+    "give the next stage key once that step has actually been reached; in sequence: " +
+    "order_received, dispatched, delivered_unloading, measuring, measurement_done, " +
+    "structure_building, structure_completed, installing, testing, commissioning, " +
+    "commissioned, customer_signoff. statusKey flags why/how; common keys: pending (default - " +
+    "general progress note, no stage change implied), done (a step just completed), " +
+    "postpone_to_tomorrow, material_not_arrived, awaiting_scaffolding_materials. Both lists are " +
+    "admin-editable - if either key is rejected, the error names the current valid set, relay " +
+    "it to the user rather than guessing again. This does NOT post the update immediately - it " +
+    "prepares it and shows the user a confirm card in the chat; only THEY can approve it by " +
+    "clicking Confirm. After calling this, tell the user you've prepared it for their review - " +
+    "never say the update has been posted.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      siteId: { type: "string", description: "Site id, from search_orders_and_sites' site.id field (not the order id)." },
+      stageKey: {
+        type: "string",
+        description: "Which SITC stage this update reflects, e.g. 'structure_building'. Reuse the site's current stage key to log a note without changing stage.",
+      },
+      statusKey: {
+        type: "string",
+        description: "Status flag for this update, e.g. 'pending', 'done', 'postpone_to_tomorrow'.",
+      },
+      comment: { type: "string", description: "The free-text note itself, e.g. 'Civil work completed, team visiting for installation tomorrow.'" },
+    },
+    required: ["siteId", "stageKey", "statusKey", "comment"],
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.CHANGE_SITE_STATUS)) return forbidden("site status updates");
+    if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
+
+    const siteId = String(input.siteId ?? "").trim();
+    if (!siteId) return { error: "siteId is required." };
+    const comment = String(input.comment ?? "").trim();
+    if (!comment) return { error: "comment is required." };
+
+    const site = await prisma.site.findUnique({
+      where: { id: siteId },
+      include: { order: { select: { orderNumber: true } } },
+    });
+    if (!site) return { error: `No site found with id ${siteId}. Use search_orders_and_sites first.` };
+    // Vendor isolation, mirroring POST /sites/:id/stage-events: an erection vendor's engineers
+    // can only post updates against sites assigned to their own vendor.
+    if (auth.vendorId && site.vendorId !== auth.vendorId) {
+      return { error: "You don't have permission to post updates for this site." };
+    }
+
+    const stageKey = String(input.stageKey ?? "").trim();
+    const statusKey = String(input.statusKey ?? "").trim();
+    const [stage, status] = await Promise.all([
+      prisma.stageDefinition.findUnique({ where: { key: stageKey } }),
+      prisma.statusOption.findUnique({ where: { domain_key: { domain: "site_stage", key: statusKey } } }),
+    ]);
+    if (!stage) {
+      const valid = await prisma.stageDefinition.findMany({ orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } });
+      return { error: `Unknown stageKey "${stageKey}". Valid stages: ${valid.map((s) => `${s.key} (${s.label})`).join(", ")}` };
+    }
+    if (!status) {
+      const valid = await prisma.statusOption.findMany({
+        where: { domain: "site_stage" },
+        orderBy: { sequenceOrder: "asc" },
+        select: { key: true, label: true },
+      });
+      return { error: `Unknown statusKey "${statusKey}". Valid statuses: ${valid.map((s) => `${s.key} (${s.label})`).join(", ")}` };
+    }
+
+    const preview = {
+      site: site.companyName ?? site.address,
+      orderNumber: site.order.orderNumber,
+      stage: stage.label,
+      status: status.label,
+      comment,
+    };
+
+    const pending = await prisma.agentPendingAction.create({
+      data: {
+        conversationId: auth.conversationId,
+        toolName: "create_site_status_update",
+        input: { siteId, stageDefinitionId: stage.id, statusOptionId: status.id, comment },
+        preview,
+        createdById: auth.userId,
+      },
+    });
+
+    return {
+      status: "pending_confirmation",
+      actionId: pending.id,
+      preview,
+      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. Do not tell the user it has been posted yet.",
+    };
+  },
+};
+
 function hasAny(auth: { permissions: Set<string> }, keys: string[]): boolean {
   return keys.some((k) => auth.permissions.has(k));
 }
@@ -716,4 +818,5 @@ export const zanAppWriteTools: AgentTool[] = [
   createInvoiceTool,
   createSavedItemTool,
   createComplaintTool,
+  createSiteStatusUpdateTool,
 ];

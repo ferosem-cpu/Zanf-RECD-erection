@@ -456,6 +456,48 @@ const getCustomerPricing: AgentTool = {
   },
 };
 
+const searchProducts: AgentTool = {
+  name: "search_products",
+  description:
+    "Search the RECD product catalog by name, model, or rating spec (e.g. 'RECD-500', '500', " +
+    "'625 kVA'). Returns id, name, model, rating spec, capacity (kVA), warranty, shape, " +
+    "dimensions, and weight (weightKg) - this is the only tool that has weight/dimensions/shape, " +
+    "so use it directly for any question about a product's specs instead of assuming the data " +
+    "doesn't exist. Omit the query to list the whole catalog.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Name, model, or rating spec to search for (partial match). Omit to list all products.",
+      },
+    },
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("products");
+    const query = input.query ? String(input.query) : undefined;
+    const products = await prisma.product.findMany({
+      where: query
+        ? {
+            OR: [
+              { name: { contains: query, mode: "insensitive" } },
+              { model: { contains: query, mode: "insensitive" } },
+              { ratingSpec: { contains: query, mode: "insensitive" } },
+            ],
+          }
+        : undefined,
+      orderBy: { model: "asc" },
+      take: RESULT_LIMIT,
+    });
+    return products.map((p) => ({
+      id: p.id, name: p.name, model: p.model, ratingSpec: p.ratingSpec,
+      capacityKva: num(p.capacityKva), warrantyMonths: p.warrantyMonths,
+      shape: p.shape, dimensions: p.dimensions, weightKg: num(p.weightKg),
+      silencerType: p.silencerType,
+    }));
+  },
+};
+
 export const zanAppReadTools: AgentTool[] = [
   searchCustomers,
   searchVendors,
@@ -467,5 +509,6 @@ export const zanAppReadTools: AgentTool[] = [
   searchWorkOrders,
   searchComplaints,
   searchSavedItems,
+  searchProducts,
   getCustomerPricing,
 ];

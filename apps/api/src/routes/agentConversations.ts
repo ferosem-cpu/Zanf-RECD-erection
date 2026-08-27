@@ -8,7 +8,7 @@ import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import { FINANCE_DOC_TYPE, INVOICE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
-import { authenticate, type AuthenticatedRequest } from "../middleware/auth";
+import { authenticate, requireAgentAccess, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
 import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { allTools } from "../agent/tools/registry";
@@ -17,6 +17,7 @@ import { nextDocumentNumber } from "../services/documentNumber";
 import { createQuotationRecord } from "./quotations";
 import { createPurchaseOrderRecord } from "./purchase-orders";
 import { createComplaintRecord } from "./complaints";
+import { send as sendNotification } from "../services/notifications/notificationService";
 import type { UnifiedMessage } from "../agent/providers/types";
 
 export const agentConversationsRouter = Router();
@@ -26,7 +27,7 @@ function deriveTitle(firstUserMessage: string): string {
   return trimmed.length > 60 ? `${trimmed.slice(0, 60)}...` : trimmed || "New conversation";
 }
 
-agentConversationsRouter.get("/conversations", authenticate, async (req: AuthenticatedRequest, res) => {
+agentConversationsRouter.get("/conversations", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const rows = await prisma.agentConversation.findMany({
     where: { userId: req.auth!.userId },
     select: { id: true, title: true, createdAt: true, updatedAt: true },
@@ -35,14 +36,14 @@ agentConversationsRouter.get("/conversations", authenticate, async (req: Authent
   res.json({ conversations: rows });
 });
 
-agentConversationsRouter.post("/conversations", authenticate, async (req: AuthenticatedRequest, res) => {
+agentConversationsRouter.post("/conversations", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const row = await prisma.agentConversation.create({
     data: { userId: req.auth!.userId, messages: [] },
   });
   res.status(201).json({ id: row.id, title: row.title, messages: [], createdAt: row.createdAt, updatedAt: row.updatedAt });
 });
 
-agentConversationsRouter.get("/conversations/:id", authenticate, async (req: AuthenticatedRequest, res) => {
+agentConversationsRouter.get("/conversations/:id", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const row = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
   if (!row || row.userId !== req.auth!.userId) {
     return res.status(404).json({ error: "Conversation not found" });
@@ -50,7 +51,7 @@ agentConversationsRouter.get("/conversations/:id", authenticate, async (req: Aut
   res.json({ id: row.id, title: row.title, messages: row.messages, createdAt: row.createdAt, updatedAt: row.updatedAt });
 });
 
-agentConversationsRouter.delete("/conversations/:id", authenticate, async (req: AuthenticatedRequest, res) => {
+agentConversationsRouter.delete("/conversations/:id", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const row = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
   if (!row || row.userId !== req.auth!.userId) {
     return res.status(404).json({ error: "Conversation not found" });
@@ -59,7 +60,7 @@ agentConversationsRouter.delete("/conversations/:id", authenticate, async (req: 
   res.status(204).send();
 });
 
-agentConversationsRouter.post("/conversations/:id/messages", authenticate, async (req: AuthenticatedRequest, res) => {
+agentConversationsRouter.post("/conversations/:id/messages", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const { message } = req.body as { message?: string };
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "message (string) is required" });
@@ -263,6 +264,53 @@ async function executeConfirmedAction(
       );
       return complaint.id;
     }
+    case "create_site_status_update": {
+      // Mirrors POST /sites/:id/stage-events exactly (routes/sites.ts) - same transaction
+      // (stage-event row + site.currentStageId move) and same customer notification.
+      const site = await prisma.site.findUnique({
+        where: { id: String(input.siteId) },
+        include: { order: { include: { product: true, lineItems: { include: { product: true } } } } },
+      });
+      if (!site) throw new Error("Site not found - it may have been deleted since this update was proposed.");
+
+      const [event] = await prisma.$transaction([
+        prisma.siteStageEvent.create({
+          data: {
+            siteId: site.id,
+            stageDefinitionId: String(input.stageDefinitionId),
+            statusOptionId: String(input.statusOptionId),
+            comment: String(input.comment),
+            createdById: userId,
+          },
+          include: { stageDefinition: true, statusOption: true },
+        }),
+        prisma.site.update({ where: { id: site.id }, data: { currentStageId: String(input.stageDefinitionId) } }),
+      ]);
+
+      const customerContact = await prisma.user.findFirst({ where: { customerId: site.order.customerId } });
+      if (customerContact) {
+        const recdUnits = [
+          `${site.order.product.name} (${site.order.product.model})${site.order.quantity > 1 ? ` x${site.order.quantity}` : ""}`,
+          ...site.order.lineItems.map(
+            (li) => `${li.product.name} (${li.product.model})${li.quantity > 1 ? ` x${li.quantity}` : ""}`,
+          ),
+        ];
+        await sendNotification({
+          recipientId: customerContact.id,
+          templateKey: "site_stage_updated",
+          data: {
+            stage: event.stageDefinition.label,
+            status: event.statusOption.label,
+            comment: event.comment,
+            orderNumber: site.order.orderNumber,
+            address: site.address,
+            companyName: site.companyName,
+            recdUnits,
+          },
+        });
+      }
+      return event.id;
+    }
     default:
       throw new Error(`Don't know how to execute confirmed action for tool "${toolName}".`);
   }
@@ -345,10 +393,10 @@ async function handleResolveAction(
   }
 }
 
-agentConversationsRouter.post("/conversations/:id/actions/:actionId/confirm", authenticate, (req: AuthenticatedRequest, res) =>
+agentConversationsRouter.post("/conversations/:id/actions/:actionId/confirm", authenticate, requireAgentAccess, (req: AuthenticatedRequest, res) =>
   handleResolveAction(req, res, "confirmed"),
 );
 
-agentConversationsRouter.post("/conversations/:id/actions/:actionId/reject", authenticate, (req: AuthenticatedRequest, res) =>
+agentConversationsRouter.post("/conversations/:id/actions/:actionId/reject", authenticate, requireAgentAccess, (req: AuthenticatedRequest, res) =>
   handleResolveAction(req, res, "rejected"),
 );
