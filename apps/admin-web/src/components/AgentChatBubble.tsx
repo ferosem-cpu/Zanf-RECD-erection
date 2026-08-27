@@ -151,6 +151,11 @@ export default function AgentChatBubble() {
   const [micSupported, setMicSupported] = useState(false);
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  // Accumulates the transcript while listening (continuous mode keeps the mic open across
+  // pauses in speech) - deliberately NOT written into the input box until the user clicks the
+  // mic again to stop, so a mid-sentence pause never cuts them off or dumps a half-sentence in.
+  const pendingTranscriptRef = useRef("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
@@ -171,8 +176,21 @@ export default function AgentChatBubble() {
     };
   }, []);
 
+  // Auto-grow the textarea with its content (capped so a long message can't swallow the whole
+  // panel - it scrolls internally past that) instead of a fixed-height box the user has to
+  // scroll sideways/inside just to re-read what they typed.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+  }, [input]);
+
   function toggleMic() {
     if (listening) {
+      // Manual stop is the ONLY way this ends while the user is still mid-sentence - stop()
+      // triggers onend below, which is where the accumulated transcript actually lands in the
+      // input box.
       recognitionRef.current?.stop();
       return;
     }
@@ -180,15 +198,24 @@ export default function AgentChatBubble() {
     if (!Ctor) return;
     const recognition = new Ctor();
     recognition.lang = "en-IN";
-    recognition.continuous = false;
+    // continuous:true keeps listening across pauses in speech instead of auto-stopping after
+    // the first one - the whole point of this control being a manual toggle rather than a
+    // push-to-talk button.
+    recognition.continuous = true;
     recognition.interimResults = false;
+    pendingTranscriptRef.current = "";
     recognition.onresult = (event) => {
       let transcript = "";
       for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0].transcript;
-      setInput((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+      pendingTranscriptRef.current = transcript;
     };
     recognition.onerror = () => setListening(false);
-    recognition.onend = () => setListening(false);
+    recognition.onend = () => {
+      setListening(false);
+      const transcript = pendingTranscriptRef.current.trim();
+      pendingTranscriptRef.current = "";
+      if (transcript) setInput((prev) => (prev.trim() ? `${prev.trim()} ${transcript}` : transcript));
+    };
     recognitionRef.current = recognition;
     recognition.start();
     setListening(true);
@@ -567,36 +594,57 @@ export default function AgentChatBubble() {
             {error && <p className="text-xs text-red-500">{error}</p>}
           </div>
 
-          <div className="border-t border-gray-100 p-3 flex gap-2">
-            <input
-              className="field flex-1 text-sm"
-              placeholder={listening ? "Listening…" : "Type a message…"}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-              disabled={sending}
-            />
-            {micSupported && (
-              <button
-                type="button"
-                onClick={toggleMic}
+          <div className="border-t border-gray-100 p-3 flex items-end gap-2">
+            <div className="relative flex-1">
+              <textarea
+                ref={textareaRef}
+                rows={1}
+                className={`field w-full text-sm resize-none leading-snug overflow-y-auto ${micSupported ? "pr-9" : ""}`}
+                style={{ maxHeight: 120 }}
+                placeholder={listening ? "Listening…" : "Type a message…"}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                  }
+                }}
                 disabled={sending}
-                className={`px-3 py-2 rounded-lg text-sm border disabled:opacity-50 ${
-                  listening ? "bg-red-500 border-red-500 text-white animate-pulse" : "border-gray-300 text-gray-500 hover:text-gray-700"
-                }`}
-                aria-label={listening ? "Stop voice input" : "Speak instead of typing"}
-                title={listening ? "Stop voice input" : "Speak instead of typing"}
-              >
-                🎤
-              </button>
-            )}
-            <button className="btn-primary px-3 py-2 text-sm" onClick={send} disabled={sending || !input.trim()}>
-              Send
+              />
+              {micSupported && (
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  disabled={sending}
+                  className={`absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full text-white shadow-sm transition disabled:opacity-50 ${
+                    listening
+                      ? "bg-gradient-to-br from-red-500 to-rose-600 animate-pulse"
+                      : "bg-gradient-to-br from-emerald-500 to-green-600 hover:brightness-105"
+                  }`}
+                  aria-label={listening ? "Stop voice input" : "Speak instead of typing"}
+                  title={listening ? "Stop voice input" : "Speak instead of typing"}
+                >
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+                    <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" />
+                    <path d="M6 11a6 6 0 0 0 12 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    <line x1="12" y1="19" x2="12" y2="21.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    <line x1="9" y1="21.5" x2="15" y2="21.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={send}
+              disabled={sending || !input.trim()}
+              aria-label="Send"
+              title="Send"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm transition hover:brightness-105 disabled:opacity-40 disabled:hover:brightness-100"
+            >
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">
+                <path d="M4 12l14-7-4 7 4 7-14-7z" fill="currentColor" />
+              </svg>
             </button>
           </div>
         </div>
