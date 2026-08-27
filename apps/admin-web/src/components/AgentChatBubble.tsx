@@ -599,8 +599,10 @@ export default function AgentChatBubble() {
               <textarea
                 ref={textareaRef}
                 rows={1}
-                className={`field w-full text-sm resize-none leading-snug overflow-y-auto ${micSupported ? "pr-9" : ""}`}
-                style={{ maxHeight: 120 }}
+                className={`field w-full text-sm resize-none leading-snug overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${
+                  micSupported ? "pr-9" : ""
+                }`}
+                style={{ maxHeight: 120, msOverflowStyle: "none" }}
                 placeholder={listening ? "Listening…" : "Type a message…"}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -642,8 +644,8 @@ export default function AgentChatBubble() {
               title="Send"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm transition hover:brightness-105 disabled:opacity-40 disabled:hover:brightness-100"
             >
-              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true">
-                <path d="M4 12l14-7-4 7 4 7-14-7z" fill="currentColor" />
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+                <path d="M5 5l14 7-14 7V5z" fill="currentColor" />
               </svg>
             </button>
           </div>
