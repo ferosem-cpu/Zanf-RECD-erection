@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ROLE_KEY } from "@recd/shared";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+import { captureFile } from "@/lib/fileCapture";
 
 /**
  * Minimal typing for the Web Speech API's SpeechRecognition - not in TypeScript's default DOM
@@ -148,6 +149,15 @@ export default function AgentChatBubble() {
   // for an actionId means "not touched yet, treat every line as checked" (the default).
   const [checkedLines, setCheckedLines] = useState<Record<string, boolean[]>>({});
 
+  // Attachment staged for the next send - captured client-side via fileCapture.ts (the same
+  // downscale/compress-to-JPEG-or-passthrough-PDF pattern the Vendor Invoice upload flow
+  // uses), then sent as base64 alongside the message text for the backend to run through the
+  // same one-shot AI extraction and fold into the conversation. Cleared once sent.
+  const [attachedFile, setAttachedFile] = useState<{ dataUrl: string; mimeType: string; fileName: string } | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [micSupported, setMicSupported] = useState(false);
   const [listening, setListening] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -283,18 +293,45 @@ export default function AgentChatBubble() {
     }
   }
 
+  async function onFileSelected(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    setAttachError(null);
+    setAttaching(true);
+    try {
+      const captured = await captureFile(file);
+      setAttachedFile({ dataUrl: captured.dataUrl, mimeType: captured.mimeType, fileName: file.name });
+    } catch (err) {
+      setAttachError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAttaching(false);
+    }
+  }
+
   async function send() {
     const text = input.trim();
-    if (!text || sending) return;
+    const attachment = attachedFile;
+    if ((!text && !attachment) || sending) return;
     setInput("");
+    setAttachedFile(null);
+    setAttachError(null);
     setError(null);
-    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", content: text || (attachment ? `📎 ${attachment.fileName}` : "") },
+    ]);
     setSending(true);
     try {
       const id = await ensureConversation();
       const result = await api<{ reply: string; messages: StoredMessage[] }>(`/agent/conversations/${id}/messages`, {
         method: "POST",
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: text,
+          attachment: attachment
+            ? { fileBase64: attachment.dataUrl.slice(attachment.dataUrl.indexOf(",") + 1), mimeType: attachment.mimeType, fileName: attachment.fileName }
+            : undefined,
+        }),
       });
       setMessages(result.messages ?? []);
       loadConversations();
@@ -594,7 +631,47 @@ export default function AgentChatBubble() {
             {error && <p className="text-xs text-red-500">{error}</p>}
           </div>
 
+          {(attachedFile || attaching || attachError) && (
+            <div className="px-3 pt-2 flex items-center gap-2">
+              {attaching ? (
+                <span className="text-xs text-gray-400">Reading file…</span>
+              ) : attachedFile ? (
+                <span className="flex items-center gap-1.5 rounded-full bg-gray-100 pl-2.5 pr-1.5 py-1 text-xs text-gray-700">
+                  📎 {attachedFile.fileName}
+                  <button
+                    type="button"
+                    onClick={() => setAttachedFile(null)}
+                    className="flex h-4 w-4 items-center justify-center rounded-full text-gray-400 hover:bg-gray-200 hover:text-gray-600"
+                    aria-label="Remove attachment"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ) : (
+                <span className="text-xs text-red-500">{attachError}</span>
+              )}
+            </div>
+          )}
           <div className="border-t border-gray-100 p-3 flex items-center gap-2">
+            <input ref={fileInputRef} type="file" accept="image/*,.pdf" hidden onChange={onFileSelected} />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={sending || attaching}
+              aria-label="Attach a document"
+              title="Attach a document"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-40"
+            >
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" aria-hidden="true" className="block">
+                <path
+                  d="M17.5 8.5 9.9 16a3 3 0 1 1-4.2-4.2l7.6-7.6a4.5 4.5 0 1 1 6.4 6.4L11.3 19a6 6 0 0 1-8.5-8.5L11 2.5"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
             <div className="relative flex-1">
               <textarea
                 ref={textareaRef}
@@ -603,7 +680,7 @@ export default function AgentChatBubble() {
                   micSupported ? "pr-9" : ""
                 }`}
                 style={{ maxHeight: 120, msOverflowStyle: "none" }}
-                placeholder={listening ? "Listening…" : "Type a message…"}
+                placeholder={listening ? "Listening…" : attachedFile ? "Add a note (optional)…" : "Type a message…"}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -639,7 +716,7 @@ export default function AgentChatBubble() {
             <button
               type="button"
               onClick={send}
-              disabled={sending || !input.trim()}
+              disabled={sending || (!input.trim() && !attachedFile)}
               aria-label="Send"
               title="Send"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm transition hover:brightness-105 disabled:opacity-40 disabled:hover:brightness-100"

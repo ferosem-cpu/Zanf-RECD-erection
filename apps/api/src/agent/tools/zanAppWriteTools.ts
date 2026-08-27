@@ -10,6 +10,7 @@ import { PERMISSION_KEY, PAYMENT_METHOD, INVOICE_DOC_TYPE, COMPLAINT_CATEGORY } 
 import { prisma } from "../../lib/prisma";
 import { computeDocumentTotals } from "../../services/taxCalc";
 import { assertOwnSite } from "../../routes/complaints";
+import { computeBillTotals } from "../../routes/bills";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
@@ -807,6 +808,157 @@ const createSiteStatusUpdateTool: AgentTool = {
   },
 };
 
+interface BillLineItemInput {
+  description: string;
+  hsnCode?: string;
+  quantity: number;
+  unitPrice: number;
+  taxRatePct?: number;
+}
+
+const createVendorInvoiceTool: AgentTool = {
+  name: "create_vendor_invoice",
+  description:
+    "Propose recording a new vendor invoice / supplier bill (payable) - e.g. from a photo or " +
+    "PDF the user attached in this chat. This does NOT create it immediately - it prepares it " +
+    "and shows the user a confirm card in the chat; only THEY can approve it by clicking " +
+    "Confirm. Once confirmed, it's created with status 'uploaded', same starting point as the " +
+    "normal Record Vendor Invoice flow - a human still needs to verify and approve it from the " +
+    "Finance > Vendor Invoices page before it can be paid. If the user attached a document, use " +
+    "the AI-extracted fields/text already folded into their message to fill this in - don't ask " +
+    "them to retype what was already read from the attachment, but do double-check anything the " +
+    "extraction flagged as low-confidence or illegible (e.g. handwritten totals) before proposing " +
+    "it, and mention what you're unsure about.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      supplierId: { type: "string", description: "Supplier id, if already known (e.g. from a prior search)." },
+      supplierName: {
+        type: "string",
+        description: "Supplier name to look up if supplierId isn't known (e.g. read off the attached invoice). Provide one of supplierId or supplierName.",
+      },
+      purchaseOrderId: { type: "string", description: "Optional - an existing purchase order this bill is against." },
+      billNumber: { type: "string", description: "The supplier's own invoice/bill number, as printed/written on the document." },
+      billDate: { type: "string", description: "ISO date (YYYY-MM-DD) the bill was issued. Defaults to today if omitted." },
+      dueDate: { type: "string", description: "ISO date (YYYY-MM-DD) payment is due by, if known." },
+      lineItems: {
+        type: "array",
+        description: "At least one line item. If the source document only gave a total with no itemized breakdown, use a single line item describing the whole bill.",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            hsnCode: { type: "string", description: "HSN/SAC code, if known - never guess, leave it out if not stated." },
+            quantity: { type: "number" },
+            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax." },
+            taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
+          },
+          required: ["description", "quantity", "unitPrice"],
+        },
+      },
+      notes: { type: "string", description: "Anything worth a human's attention - e.g. that this was read from a handwritten/attached document, or fields you weren't fully sure about." },
+    },
+    required: ["lineItems", "billNumber"],
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.RECORD_VENDOR_INVOICE)) return forbidden("vendor invoices");
+    if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
+
+    const supplierId = input.supplierId ? String(input.supplierId) : null;
+    const supplierName = input.supplierName ? String(input.supplierName) : null;
+    const purchaseOrderId = input.purchaseOrderId ? String(input.purchaseOrderId) : null;
+    const billNumber = String(input.billNumber ?? "").trim();
+    const billDateStr = input.billDate ? String(input.billDate) : new Date().toISOString().slice(0, 10);
+    const dueDateStr = input.dueDate ? String(input.dueDate) : null;
+    const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as BillLineItemInput[]) : [];
+    const notes = input.notes ? String(input.notes) : null;
+
+    if (!supplierId && !supplierName) return { error: "Provide either supplierId or supplierName." };
+    if (!billNumber) return { error: "billNumber is required - the supplier's own invoice number as printed/written on the document." };
+    if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
+    for (const [i, li] of lineItemsRaw.entries()) {
+      if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
+      if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
+    }
+
+    let supplier = supplierId ? await prisma.supplier.findUnique({ where: { id: supplierId } }) : null;
+    if (!supplier && supplierName) {
+      const matches = await prisma.supplier.findMany({
+        where: { name: { contains: supplierName, mode: "insensitive" } },
+        take: 5,
+      });
+      if (matches.length === 1) {
+        supplier = matches[0];
+      } else if (matches.length > 1) {
+        return {
+          error: `Multiple suppliers match "${supplierName}": ${matches
+            .map((s) => `${s.name} (id: ${s.id})`)
+            .join(", ")}. Ask the user which one, then retry with the exact supplierId.`,
+        };
+      } else {
+        const allSuppliers = await prisma.supplier.findMany({ select: { name: true }, take: 20 });
+        return {
+          error: `No supplier matching "${supplierName}". Existing suppliers: ${allSuppliers.map((s) => s.name).join(", ") || "(none yet)"}. Ask the user which one, or offer to add a new supplier first (this chat can't create suppliers - point them to Purchase Orders > New supplier).`,
+        };
+      }
+    }
+    if (!supplier) return { error: `No supplier found with id ${supplierId}.` };
+
+    if (purchaseOrderId) {
+      const po = await prisma.purchaseOrder.findUnique({ where: { id: purchaseOrderId } });
+      if (!po) return { error: `No purchase order found with id ${purchaseOrderId}.` };
+      if (po.supplierId !== supplier.id) return { error: "That purchase order belongs to a different supplier." };
+    }
+
+    const existingSameNumber = await prisma.bill.findUnique({
+      where: { supplierId_billNumber: { supplierId: supplier.id, billNumber } },
+    });
+    if (existingSameNumber) return { error: `A bill numbered "${billNumber}" already exists for ${supplier.name}.` };
+
+    const normalizedLines = lineItemsRaw.map((li) => ({
+      description: li.description,
+      hsnCode: li.hsnCode ?? undefined,
+      quantity: li.quantity,
+      unitPrice: li.unitPrice,
+      taxRatePct: li.taxRatePct ?? 18,
+    }));
+
+    const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+    const totals = computeBillTotals(normalizedLines, company?.state);
+
+    const preview = {
+      supplier: supplier.name,
+      purchaseOrderId,
+      billNumber,
+      lineItems: normalizedLines.map((l) => ({ ...l, lineTotal: l.quantity * l.unitPrice })),
+      subtotal: Number(totals.subtotal),
+      taxAmount: Number(totals.taxAmount),
+      total: Number(totals.total),
+      billDate: billDateStr,
+      dueDate: dueDateStr,
+      notes,
+    };
+
+    const pending = await prisma.agentPendingAction.create({
+      data: {
+        conversationId: auth.conversationId,
+        toolName: "create_vendor_invoice",
+        input: { supplierId: supplier.id, purchaseOrderId, billNumber, lineItems: normalizedLines, billDate: billDateStr, dueDate: dueDateStr, notes },
+        preview,
+        createdById: auth.userId,
+      },
+    });
+
+    return {
+      status: "pending_confirmation",
+      actionId: pending.id,
+      preview,
+      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. Do not tell the user it has been recorded yet - and once confirmed, it still needs a human to verify/approve it from Finance > Vendor Invoices before it can be paid.",
+    };
+  },
+};
+
 function hasAny(auth: { permissions: Set<string> }, keys: string[]): boolean {
   return keys.some((k) => auth.permissions.has(k));
 }
@@ -819,4 +971,5 @@ export const zanAppWriteTools: AgentTool[] = [
   createSavedItemTool,
   createComplaintTool,
   createSiteStatusUpdateTool,
+  createVendorInvoiceTool,
 ];

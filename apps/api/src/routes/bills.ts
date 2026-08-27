@@ -28,10 +28,10 @@ billsRouter.use(authenticate);
 const CAPTURE = [PERMISSION_KEY.RECORD_VENDOR_INVOICE, PERMISSION_KEY.APPROVE_VENDOR_INVOICE];
 const APPROVE = PERMISSION_KEY.APPROVE_VENDOR_INVOICE;
 
-type BillLineInput = { description: string; hsnCode?: string | null; quantity: number; unitPrice: number; taxRatePct: number };
+export type BillLineInput = { description: string; hsnCode?: string | null; quantity: number; unitPrice: number; taxRatePct: number };
 type BillAllocationInput = { siteId?: string | null; orderId?: string | null; invoiceId?: string | null; amount: number; notes?: string | null };
 
-function mapBillLine(line: BillLineInput, sortOrder: number) {
+export function mapBillLine(line: BillLineInput, sortOrder: number) {
   return {
     description: line.description,
     hsnCode: line.hsnCode ?? undefined,
@@ -43,7 +43,7 @@ function mapBillLine(line: BillLineInput, sortOrder: number) {
   };
 }
 
-function computeBillTotals(lineItems: BillLineInput[], companyState?: string | null) {
+export function computeBillTotals(lineItems: BillLineInput[], companyState?: string | null) {
   const totals = computeDocumentTotals(
     lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
     companyState,

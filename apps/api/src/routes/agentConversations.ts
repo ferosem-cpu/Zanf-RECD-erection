@@ -6,7 +6,7 @@
  */
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
-import { FINANCE_DOC_TYPE, INVOICE_STATUS } from "@recd/shared";
+import { FINANCE_DOC_TYPE, INVOICE_STATUS, BILL_STATUS, BILL_AUDIT_ACTION } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requireAgentAccess, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
@@ -17,7 +17,10 @@ import { nextDocumentNumber } from "../services/documentNumber";
 import { createQuotationRecord } from "./quotations";
 import { createPurchaseOrderRecord } from "./purchase-orders";
 import { createComplaintRecord } from "./complaints";
+import { mapBillLine, type BillLineInput } from "./bills";
 import { send as sendNotification } from "../services/notifications/notificationService";
+import { extractGenericDocument } from "../agent/documentExtraction";
+import { ExtractionUnavailableError } from "../agent/billExtraction";
 import type { UnifiedMessage } from "../agent/providers/types";
 
 export const agentConversationsRouter = Router();
@@ -60,10 +63,63 @@ agentConversationsRouter.delete("/conversations/:id", authenticate, requireAgent
   res.status(204).send();
 });
 
+interface ChatAttachment {
+  fileBase64: string;
+  mimeType: string;
+  fileName: string;
+}
+
+/** Reads whatever the user attached (via extractGenericDocument, the same one-shot
+ * multimodal capability the Vendor Invoice "Extract with AI" flow uses) and folds the
+ * result into the plain-text user message, since the general chat loop's UnifiedMessage
+ * type is text-only (see providers/types.ts) - there's no separate image/PDF content-block
+ * support in the multi-turn format. This keeps the whole feature to "compose a smarter user
+ * message" rather than a much larger change to every adapter's multi-turn message shape.
+ * Never throws - an extraction failure is folded into the composed text instead, so the
+ * conversation degrades to "couldn't read the attachment" rather than a 500. */
+async function composeMessageWithAttachment(message: string, attachment: ChatAttachment): Promise<string> {
+  const trimmedMessage = message.trim();
+  let extractionText: string;
+  try {
+    const extraction = await extractGenericDocument(attachment.fileBase64, attachment.mimeType);
+    const fieldLines = Object.entries(extraction.fields)
+      .map(([k, v]) => `- ${k}: ${v}`)
+      .join("\n");
+    extractionText = [
+      extraction.documentType ? `Document type (AI guess): ${extraction.documentType}` : null,
+      extraction.summary ? `Summary: ${extraction.summary}` : null,
+      fieldLines ? `Extracted fields:\n${fieldLines}` : null,
+      extraction.rawText ? `Raw text read from the document:\n${extraction.rawText}` : null,
+    ]
+      .filter(Boolean)
+      .join("\n\n") || "(The AI could not read any specific fields from this document.)";
+  } catch (err) {
+    extractionText =
+      err instanceof ExtractionUnavailableError
+        ? `Could not read this document: ${err.message}`
+        : `Could not read this document: ${(err as Error).message}`;
+  }
+
+  return [
+    `[User attached a document: "${attachment.fileName}" (${attachment.mimeType})]`,
+    extractionText,
+    trimmedMessage || "Please look at the attached document and help with it (extract the details, and use them to prepare whatever record fits, if I ask).",
+  ].join("\n\n");
+}
+
 agentConversationsRouter.post("/conversations/:id/messages", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
-  const { message } = req.body as { message?: string };
-  if (!message || typeof message !== "string") {
+  const { message, attachment } = req.body as { message?: string; attachment?: ChatAttachment };
+  if ((!message || typeof message !== "string") && !attachment) {
     return res.status(400).json({ error: "message (string) is required" });
+  }
+  if (attachment) {
+    if (!attachment.fileBase64 || !attachment.mimeType || !attachment.fileName) {
+      return res.status(400).json({ error: "attachment requires fileBase64, mimeType and fileName" });
+    }
+    const approxBytes = (attachment.fileBase64.length * 3) / 4;
+    if (approxBytes > 4_500_000) {
+      return res.status(400).json({ error: "Attached file is too large (max ~4MB). Please compress or crop it and try again." });
+    }
   }
 
   const row = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
@@ -71,8 +127,12 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
     return res.status(404).json({ error: "Conversation not found" });
   }
 
+  const effectiveMessage = attachment
+    ? await composeMessageWithAttachment(message ?? "", attachment)
+    : (message as string);
+
   const priorHistory = (row.messages as unknown as UnifiedMessage[]) ?? [];
-  const newHistory: UnifiedMessage[] = [...priorHistory, { role: "user", content: message }];
+  const newHistory: UnifiedMessage[] = [...priorHistory, { role: "user", content: effectiveMessage }];
 
   try {
     const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
@@ -87,7 +147,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
       where: { id: row.id },
       data: {
         messages: result.history as unknown as object,
-        title: row.title ?? deriveTitle(message),
+        title: row.title ?? deriveTitle(message?.trim() || (attachment ? `Attached: ${attachment.fileName}` : "New conversation")),
       },
     });
 
@@ -240,6 +300,49 @@ async function executeConfirmedAction(
         },
       });
       return invoice.id;
+    }
+    case "create_vendor_invoice": {
+      // Mirrors POST /bills exactly (routes/bills.ts) - created as status "uploaded", no
+      // allocations (the agent doesn't propose those), same audit-log convention. A human
+      // still verifies/approves it from Finance > Vendor Invoices before it can be paid.
+      const lineItems = (input.lineItems as BillLineInput[]) ?? [];
+      const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+      const totals = computeDocumentTotals(
+        lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
+        company?.state,
+        company?.state,
+      );
+      const taxAmount = totals.cgstAmount.plus(totals.sgstAmount).plus(totals.igstAmount);
+
+      const bill = await prisma.$transaction(async (tx) => {
+        const created = await tx.bill.create({
+          data: {
+            billNumber: String(input.billNumber),
+            supplierId: String(input.supplierId),
+            purchaseOrderId: input.purchaseOrderId ? String(input.purchaseOrderId) : undefined,
+            status: BILL_STATUS.UPLOADED,
+            sourceType: "digital",
+            billDate: new Date(String(input.billDate)),
+            dueDate: input.dueDate ? new Date(String(input.dueDate)) : null,
+            subtotal: totals.subtotal,
+            taxAmount,
+            total: totals.total,
+            notes: (input.notes as string | null) ?? undefined,
+            recordedById: userId,
+            lineItems: { create: lineItems.map((l, i) => mapBillLine(l, i)) },
+          },
+        });
+        await tx.billAuditLog.create({
+          data: {
+            billId: created.id,
+            actorId: userId,
+            action: BILL_AUDIT_ACTION.CREATED,
+            summary: `Recorded via the AI assistant; ${lineItems.length} line item(s), total Rs ${totals.total.toFixed(2)}`,
+          },
+        });
+        return created;
+      });
+      return bill.id;
     }
     case "create_saved_item": {
       const item = await prisma.savedLineItem.create({
