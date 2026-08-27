@@ -627,11 +627,11 @@ export default function AgentChatBubble() {
                   aria-label={listening ? "Stop voice input" : "Speak instead of typing"}
                   title={listening ? "Stop voice input" : "Speak instead of typing"}
                 >
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
-                    <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor" />
-                    <path d="M6 11a6 6 0 0 0 12 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    <line x1="12" y1="19" x2="12" y2="21.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                    <line x1="9" y1="21.5" x2="15" y2="21.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true" className="block" style={{ transform: "translateY(1px)" }}>
+                    <rect x="9" y="2" width="6" height="11" rx="3" fill="currentColor" />
+                    <path d="M6 10a6 6 0 0 0 12 0" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    <line x1="12" y1="18" x2="12" y2="20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                    <line x1="9" y1="20.5" x2="15" y2="20.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                   </svg>
                 </button>
               )}
@@ -644,7 +644,7 @@ export default function AgentChatBubble() {
               title="Send"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-sm transition hover:brightness-105 disabled:opacity-40 disabled:hover:brightness-100"
             >
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true" className="block">
                 <path d="M5 5l14 7-14 7V5z" fill="currentColor" />
               </svg>
             </button>
