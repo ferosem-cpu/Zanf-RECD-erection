@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, INVOICE_STATUS, BILL_STATUS } from "@recd/shared";
+import { PERMISSION_KEY, INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
@@ -16,17 +16,22 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  // Receivables: issued + partially_paid invoices.
+  // Receivables: issued + partially_paid invoices, net of any ISSUED credit notes against them.
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
-    include: { payments: { select: { amount: true } } },
+    include: {
+      payments: { select: { amount: true } },
+      creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
+    },
   });
   let outstandingReceivables = zero;
   let overdueCount = 0;
   let overdueValue = zero;
   for (const inv of invoices) {
     const paid = inv.payments.reduce((s, p) => s.plus(D(p.amount)), zero);
-    const balance = D(inv.total).minus(paid);
+    const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(D(cn.total)), zero);
+    const netTotal = D(inv.total).minus(cnTotal);
+    const balance = (netTotal.isNegative() ? zero : netTotal).minus(paid);
     outstandingReceivables = outstandingReceivables.plus(balance);
     if (inv.dueDate && inv.dueDate.getTime() < now.getTime()) {
       overdueCount += 1;
@@ -64,13 +69,19 @@ financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_
   const now = new Date();
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
-    include: { payments: { select: { amount: true } }, customer: { select: { id: true, name: true } } },
+    include: {
+      payments: { select: { amount: true } },
+      creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
+      customer: { select: { id: true, name: true } },
+    },
   });
 
   const byCustomer = new Map<string, any>();
   for (const inv of invoices) {
     const paid = inv.payments.reduce((s, p) => s.plus(D(p.amount)), new Prisma.Decimal(0));
-    const balance = D(inv.total).minus(paid);
+    const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(D(cn.total)), new Prisma.Decimal(0));
+    const netTotal = D(inv.total).minus(cnTotal);
+    const balance = (netTotal.isNegative() ? new Prisma.Decimal(0) : netTotal).minus(paid);
     if (balance.lte(0)) continue;
     const anchor = inv.dueDate ?? inv.issueDate;
     const days = Math.floor((now.getTime() - anchor.getTime()) / 86_400_000);

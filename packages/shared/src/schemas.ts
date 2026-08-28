@@ -340,6 +340,34 @@ export const invoiceCancelSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
+export const creditNoteCreateSchema = z.object({
+  invoiceId: z.string().min(1),
+  reason: z.enum(["return", "rate_difference", "deficiency", "post_sale_discount", "other"]),
+  issueDate: z.string().datetime().optional(),
+  notes: z.string().max(2000).optional(),
+  lineItems: z.array(lineItemSchema).min(1, "At least one line item is required"),
+});
+
+export const creditNoteUpdateSchema = creditNoteCreateSchema.partial().extend({
+  lineItems: z.array(lineItemSchema).min(1).optional(),
+});
+
+export const creditNoteCancelSchema = z.object({
+  reason: z.string().min(1).max(500),
+});
+
+export const debitNoteCreateSchema = z.object({
+  supplierId: z.string().min(1),
+  billId: z.string().optional(),
+  noteNumber: z.string().min(1).max(100),
+  reason: z.string().min(1).max(500),
+  noteDate: z.string().datetime().optional(),
+  amount: z.number().positive("Amount must be > 0"),
+  notes: z.string().max(1000).optional(),
+});
+
+export const debitNoteUpdateSchema = debitNoteCreateSchema.partial();
+
 export const paymentCreateSchema = z.object({
   amount: z.number().positive("Amount must be > 0"),
   method: z.enum(["bank_transfer", "upi", "cheque", "cash", "tds", "other"]),

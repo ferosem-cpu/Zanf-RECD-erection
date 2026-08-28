@@ -23,6 +23,7 @@ import { customerPurchaseOrdersRouter } from "./routes/customer-purchase-orders"
 import { expensesRouter } from "./routes/expenses";
 import { financeDashboardRouter } from "./routes/financeDashboard";
 import { ledgersRouter } from "./routes/ledgers";
+import { creditNotesRouter, debitNotesRouter } from "./routes/credit-notes";
 import { workOrdersRouter } from "./routes/workOrders";
 import { agentTestRouter } from "./routes/agentTest";
 import { agentProvidersRouter } from "./routes/agentProviders";
@@ -59,6 +60,8 @@ app.use("/customer-purchase-orders", customerPurchaseOrdersRouter);
 app.use("/expenses", expensesRouter);
 app.use("/finance", financeDashboardRouter);
 app.use("/ledgers", ledgersRouter);
+app.use("/credit-notes", creditNotesRouter);
+app.use("/debit-notes", debitNotesRouter);
 app.use("/work-orders", workOrdersRouter);
 app.use("/agent", agentTestRouter);
 app.use("/agent", agentProvidersRouter);

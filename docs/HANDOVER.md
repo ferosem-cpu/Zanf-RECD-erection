@@ -387,11 +387,15 @@ same session:
 
 ## Current open items (as of 2026-08-28)
 
-- **Accounting-Lite Phase A (party ledgers) shipped but not click-tested
-  live** — see Changelog. Owed: real Finance-user walkthrough of
-  `/finance/ledgers`. Phases B (Credit/Debit notes), C (payment
-  allocation/advances/TDS), D (GST exports) from
-  `docs/ACCOUNTING_LITE_PLAN.md` are not started yet.
+- **Accounting-Lite Phase A (party ledgers) and Phase B (Credit/Debit
+  notes) shipped but not click-tested live** — see Changelog. Owed: real
+  Finance-user walkthrough of `/finance/ledgers`, `/finance/credit-notes`,
+  and `/finance/debit-notes` (draft a CN against a real issued tax invoice,
+  issue it, confirm the invoice's balance/status update and the ledger
+  shows the credit movement). Phases C (payment allocation/advances/TDS)
+  and D (GST exports) from `docs/ACCOUNTING_LITE_PLAN.md` are not started
+  yet. The in-app AI assistant still has no tool to read ledgers or credit
+  notes — deliberately deferred by the user to after all four phases.
 - **Every `DataTable` page has a Print button** (2026-08-20) — prints only
   the currently-filtered rows/visible columns with a full letterhead. Not yet
   click-tested live by the user (standing "agent can't log into admin-web"
@@ -486,6 +490,61 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Feature: Accounting-Lite Phase B — Credit/Debit notes (2026-08-28)
+Second phase of `docs/ACCOUNTING_LITE_PLAN.md`, built immediately after
+Phase A per the user's explicit "move on to B" instruction (in-app-agent
+tool access for ledgers/credit-notes deliberately deferred to after all
+phases). **Schema**: new `CreditNote`/`CreditNoteLineItem` models (own
+gap-free `CRN/2026-27/0001` sequence via `DocumentSequence`, independent
+counter from invoices/quotations/POs) and a `DebitNote` model (internal
+only — free-text `noteNumber`, no statutory sequence, no issue/draft
+lifecycle); `Invoice.creditNotes` back-relation added
+(`add_credit_debit_notes` migration, diffed clean against both local and
+production schemas — no drift). **New permission** `manage_credit_notes`,
+seeded for Finance/Management/Owner-Admin/Super Admin (production grant via
+direct SQL through Supabase MCP, same reasoning as Phase A's
+`view_ledgers` — additive-only, didn't re-run the full seed against prod).
+**Shared**: `CREDIT_NOTE_STATUS` (draft/issued/cancelled), `CREDIT_NOTE_REASON`
+(return/rate_difference/deficiency/post_sale_discount/other),
+`FINANCE_DOC_TYPE.CREDIT_NOTE` + `CRN` prefix in `documentNumber.ts`'s
+maps, `creditNoteCreateSchema`/`creditNoteUpdateSchema`/`creditNoteCancelSchema`
+(reusing the existing `lineItemSchema`), `debitNoteCreateSchema`/
+`debitNoteUpdateSchema`. **Backend**: `apps/api/src/routes/credit-notes.ts`
+— `credit-notes` sub-resource (list/create-draft/get/update-draft/delete-draft/
+issue/cancel, gated on `manage_credit_notes`) plus a `debit-notes`
+sub-resource (plain CRUD, no issue step); a credit note's total is validated
+against its invoice's total at both draft-save time (early feedback,
+counting all non-cancelled CNs) and issue time (authoritative check,
+counting only other ISSUED CNs). **Settlement math extended, not
+replaced**: `invoices.ts`'s existing `deriveInvoiceStatus(total, paid)`
+helper is now always called with a NET total — `netInvoiceTotal(total,
+issuedCreditNoteTotal)`, both now exported — so an invoice's status
+(issued/partially_paid/paid) and outstanding balance account for issued
+CNs everywhere status is derived (GET list/detail, PUT edit, payment
+create/edit/delete) without changing what's stored on `Invoice.total`
+itself; `financeDashboard.ts`'s `/summary` and `/reports/receivables` net
+out issued CN totals the same way. **`ledger.ts` extended** at the exact
+spot Phase A's code comment flagged: issued credit notes are now a
+`credit_note` movement type in `buildCustomerLedger`, reducing the running
+balance like a payment. **Frontend**: `/finance/credit-notes` (list +
+create-draft modal, issue/cancel/delete actions, deep-linkable via
+`?invoice=<id>`) and `/finance/debit-notes` (lighter list + create form,
+per the plan's reduced priority for this piece); `invoices/[id]` gained an
+issued-CN list, a "Credit notes issued" KPI, and a "Create credit note"
+button (tax invoices only, issued/partially_paid/paid); `Nav.tsx` gained
+Credit Notes and Debit Notes links. **Verification**: `tsc --noEmit` clean
+on both apps, `next build` clean (all new routes compiled), full manual
+`zan-app-api` deploy dance run (build took ~50 min this run, well over the
+usual ~14-20 min — CPU/memory kept climbing the whole time so it was
+verified alive via `Get-Process` polling rather than assumed hung; no root
+cause investigated, noted here in case it recurs), new route's code
+confirmed present in the build output before deploying, `@recd/shared`
+patched into the same 3 spots as Phase A, `/health` → 200 and
+`/credit-notes`, `/debit-notes`, `/ledgers/customer/:id` → 401 (not 404)
+confirmed live in production. **Not yet done**: real click-through by a
+Finance user (see Current open items) and the in-app-agent tool wiring
+(explicitly deferred to the end of all phases).
 
 ### Feature: Accounting-Lite Phase A — party ledger statements (2026-08-28)
 First phase of `docs/ACCOUNTING_LITE_PLAN.md` (read-only, zero behavior

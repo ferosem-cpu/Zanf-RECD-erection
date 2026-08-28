@@ -4,11 +4,13 @@ import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
-import { formatINR, formatDate, INVOICE_STATUS_LABEL, PAYMENT_METHOD_LABEL, statusPillClass } from "@/lib/finance";
+import Link from "next/link";
+import { formatINR, formatDate, INVOICE_STATUS_LABEL, PAYMENT_METHOD_LABEL, CREDIT_NOTE_REASON_LABEL, statusPillClass } from "@/lib/finance";
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string; lineTotal: string; }
 interface Payment { id: string; amount: string; method: string; reference?: string | null; receivedDate: string; notes?: string | null; }
 interface EditLog { id: string; summary: string; editedAt: string; editedBy: { name: string } }
+interface CreditNoteSummary { id: string; noteNumber: string; total: string; issueDate: string; reason: string; }
 interface InvoiceDetail {
   id: string;
   invoiceNumber: string;
@@ -24,6 +26,8 @@ interface InvoiceDetail {
   igstAmount: string;
   total: string;
   amountPaid: string;
+  creditNoteTotal: string;
+  netTotal: string;
   balance: string;
   overdue: boolean;
   notes?: string | null;
@@ -32,6 +36,7 @@ interface InvoiceDetail {
   customer: { id: string; name: string };
   lineItems: LineItem[];
   payments: Payment[];
+  creditNotes: CreditNoteSummary[];
   editLogs: EditLog[];
 }
 interface Customer { id: string; name: string; state?: string | null; }
@@ -41,6 +46,7 @@ export default function InvoiceDetailPage() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_invoices");
   const canRecord = hasPermission("record_payments");
+  const canManageCreditNotes = hasPermission("manage_credit_notes");
 
   const [inv, setInv] = useState<InvoiceDetail | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -274,6 +280,9 @@ export default function InvoiceDetailPage() {
         <Kpi label="Paid" value={formatINR(inv.amountPaid)} />
         <Kpi label="Balance" value={formatINR(inv.balance)} accent />
         <Kpi label="Due" value={inv.dueDate ? formatDate(inv.dueDate) : "—"} />
+        {Number(inv.creditNoteTotal) > 0 && (
+          <Kpi label="Credit notes issued" value={`- ${formatINR(inv.creditNoteTotal)}`} />
+        )}
       </div>
 
       <div className="card overflow-hidden">
@@ -344,6 +353,26 @@ export default function InvoiceDetailPage() {
         )}
       </div>
 
+      {inv.creditNotes.length > 0 && (
+        <div className="card p-4">
+          <h2 className="text-sm font-semibold mb-2">Credit notes issued</h2>
+          <div className="space-y-2 text-sm">
+            {inv.creditNotes.map((cn) => (
+              <div key={cn.id} className="flex justify-between items-center border-b pb-2 last:border-b-0 last:pb-0 gap-3">
+                <div>
+                  <Link href="/finance/credit-notes" className="font-mono text-xs font-semibold text-[var(--theme-accent)] hover:underline">{cn.noteNumber}</Link>
+                  <span className="text-gray-500 ml-2">{CREDIT_NOTE_REASON_LABEL[cn.reason] ?? cn.reason}</span>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-gray-500">{formatDate(cn.issueDate)}</span>
+                  <span className="font-medium">{formatINR(cn.total)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {inv.editLogs.length > 0 && (
         <div className="card p-4">
           <h2 className="text-sm font-semibold mb-2">Edit history</h2>
@@ -372,6 +401,9 @@ export default function InvoiceDetailPage() {
       )}
       {canManage && inv.status !== "cancelled" && (
         <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" onClick={openEdit}>Edit invoice</button>
+      )}
+      {canManageCreditNotes && inv.docType === "tax_invoice" && (inv.status === "issued" || inv.status === "partially_paid" || inv.status === "paid") && (
+        <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" onClick={() => router.push(`/finance/credit-notes?invoice=${inv.id}`)}>Create credit note</button>
       )}
 
       <button onClick={() => router.push(`/invoices/${inv.id}/print`)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Print</button>

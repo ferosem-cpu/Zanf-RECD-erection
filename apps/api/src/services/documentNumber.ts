@@ -6,6 +6,7 @@ const PREFIX_MAP: Record<FinanceDocType, string> = {
   [FINANCE_DOC_TYPE.PROFORMA]: "PI",
   [FINANCE_DOC_TYPE.TAX_INVOICE]: "INV",
   [FINANCE_DOC_TYPE.PURCHASE_ORDER]: "PO",
+  [FINANCE_DOC_TYPE.CREDIT_NOTE]: "CRN",
 };
 
 /**
@@ -21,6 +22,7 @@ const SEQUENCE_KEY: Record<FinanceDocType, string> = {
   [FINANCE_DOC_TYPE.PROFORMA]: "invoice",
   [FINANCE_DOC_TYPE.TAX_INVOICE]: "invoice",
   [FINANCE_DOC_TYPE.PURCHASE_ORDER]: FINANCE_DOC_TYPE.PURCHASE_ORDER,
+  [FINANCE_DOC_TYPE.CREDIT_NOTE]: FINANCE_DOC_TYPE.CREDIT_NOTE,
 };
 
 /** Indian fiscal year: April–March. A date in Jan 2027 → "2026-27". */

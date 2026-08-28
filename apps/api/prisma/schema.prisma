@@ -100,6 +100,8 @@ model User {
   paymentsMade         PaymentMade[]      @relation("PaymentMadeRecorder")
   expensesRecorded     Expense[]          @relation("ExpenseRecorder")
   invoiceEdits         InvoiceEditLog[]   @relation("InvoiceEditor")
+  creditNotesCreated   CreditNote[]       @relation("CreditNoteCreator")
+  debitNotesCreated    DebitNote[]        @relation("DebitNoteCreator")
   workOrdersAssigned   WorkOrder[]        @relation("WorkOrderAssignee")
   workOrdersCreated    WorkOrder[]        @relation("WorkOrderCreator")
   agentLlmProvidersCreated AgentLlmProvider[] @relation("AgentLlmProviderCreator")
@@ -149,6 +151,7 @@ model Customer {
   productPrices    CustomerProductPrice[]
   savedItemPrices  CustomerSavedItemPrice[]
   purchaseOrders   CustomerPurchaseOrder[]
+  creditNotes      CreditNote[]
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -203,6 +206,7 @@ model Product {
   orderLineItems     OrderLineItem[]
   customerPrices     CustomerProductPrice[]
   workOrderProducts  WorkOrderProduct[]
+  creditNoteLineItems CreditNoteLineItem[]
 }
 
 /// A customer-specific negotiated price for a Product, overriding no company-wide default
@@ -754,6 +758,7 @@ model Supplier {
   purchaseOrders PurchaseOrder[]
   bills          Bill[]
   paymentsMade   PaymentMade[]
+  debitNotes     DebitNote[]
 }
 
 model Quotation {
@@ -839,6 +844,7 @@ model Invoice {
   editLogs  InvoiceEditLog[]
   billAllocations BillAllocation[]
   customerPurchaseOrders CustomerPurchaseOrder[]
+  creditNotes CreditNote[]
 }
 
 /// Audit trail for edits made to an invoice after it has already been issued/paid.
@@ -884,6 +890,74 @@ model PaymentReceived {
   notes        String?
   recordedById String
   recordedBy   User     @relation("PaymentReceivedRecorder", fields: [recordedById], references: [id])
+  createdAt    DateTime @default(now())
+}
+
+/// Statutory GST credit note against an issued tax invoice (return, rate correction,
+/// deficiency in service, post-sale discount). Has its own gap-free sequence (CRN/...),
+/// independent of the invoice counter. Reduces the invoice's net outstanding once issued;
+/// draft credit notes have no accounting effect (mirrors Invoice's draft/issued split).
+model CreditNote {
+  id           String    @id @default(cuid())
+  noteNumber   String    @unique            // CRN/2026-27/0001
+  invoiceId    String
+  invoice      Invoice   @relation(fields: [invoiceId], references: [id])
+  customerId   String
+  customer     Customer  @relation(fields: [customerId], references: [id])
+  /// draft | issued | cancelled  (CREDIT_NOTE_STATUS in shared)
+  status       String    @default("draft")
+  /// return | rate_difference | deficiency | post_sale_discount | other  (CREDIT_NOTE_REASON in shared)
+  reason       String
+  issueDate    DateTime
+  placeOfSupply String?
+  subtotal     Decimal   @db.Decimal(12, 2)
+  cgstAmount   Decimal   @db.Decimal(12, 2) @default(0)
+  sgstAmount   Decimal   @db.Decimal(12, 2) @default(0)
+  igstAmount   Decimal   @db.Decimal(12, 2) @default(0)
+  total        Decimal   @db.Decimal(12, 2)
+  notes        String?
+  createdById  String
+  createdBy    User      @relation("CreditNoteCreator", fields: [createdById], references: [id])
+  cancelledAt  DateTime?
+  cancelReason String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  lineItems CreditNoteLineItem[]
+}
+
+model CreditNoteLineItem {
+  id           String     @id @default(cuid())
+  creditNoteId String
+  creditNote   CreditNote @relation(fields: [creditNoteId], references: [id], onDelete: Cascade)
+  productId    String?
+  product      Product?   @relation(fields: [productId], references: [id])
+  description  String
+  hsnCode      String?
+  quantity     Decimal    @db.Decimal(10, 2)
+  unitPrice    Decimal    @db.Decimal(12, 2)
+  discountPct  Decimal    @db.Decimal(5, 2)  @default(0)
+  taxRatePct   Decimal    @db.Decimal(5, 2)  @default(18)
+  lineTotal    Decimal    @db.Decimal(12, 2)
+  sortOrder    Int        @default(0)
+}
+
+/// Internal-only debit note (e.g. debiting a supplier for a shortfall/rejection). No
+/// statutory numbering requirement like CreditNote - free-text noteNumber, no issue/draft
+/// lifecycle, no ledger sequence.
+model DebitNote {
+  id           String   @id @default(cuid())
+  noteNumber   String   // free text, e.g. "DN-2026-001"
+  supplierId   String
+  supplier     Supplier @relation(fields: [supplierId], references: [id])
+  billId       String?
+  bill         Bill?    @relation(fields: [billId], references: [id])
+  reason       String
+  noteDate     DateTime
+  amount       Decimal  @db.Decimal(12, 2)
+  notes        String?
+  createdById  String
+  createdBy    User     @relation("DebitNoteCreator", fields: [createdById], references: [id])
   createdAt    DateTime @default(now())
 }
 
@@ -976,6 +1050,7 @@ model Bill {
   lineItems   BillLineItem[]
   allocations BillAllocation[]
   auditLogs   BillAuditLog[]
+  debitNotes  DebitNote[]
 
   @@unique([supplierId, billNumber])
 }

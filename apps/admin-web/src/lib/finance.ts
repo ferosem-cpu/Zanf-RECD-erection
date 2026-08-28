@@ -36,6 +36,20 @@ export const BILL_STATUS_LABEL: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+export const CREDIT_NOTE_STATUS_LABEL: Record<string, string> = {
+  draft: "Draft",
+  issued: "Issued",
+  cancelled: "Cancelled",
+};
+
+export const CREDIT_NOTE_REASON_LABEL: Record<string, string> = {
+  return: "Return",
+  rate_difference: "Rate Difference",
+  deficiency: "Deficiency in Service",
+  post_sale_discount: "Post-Sale Discount",
+  other: "Other",
+};
+
 export const CUSTOMER_PO_STATUS_LABEL: Record<string, string> = {
   open: "Open",
   invoiced: "Invoiced",

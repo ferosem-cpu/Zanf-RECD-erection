@@ -37,6 +37,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.RECORD_VENDOR_INVOICE, name: "Upload / capture a vendor invoice" },
     { key: PERMISSION_KEY.APPROVE_VENDOR_INVOICE, name: "Verify, approve, or reject a vendor invoice" },
     { key: PERMISSION_KEY.VIEW_LEDGERS, name: "View party ledger statements, TDS report, and GST exports" },
+    { key: PERMISSION_KEY.MANAGE_CREDIT_NOTES, name: "Create, issue, and cancel credit notes and debit notes" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -118,6 +119,7 @@ async function seedRoles() {
         PERMISSION_KEY.RECORD_VENDOR_INVOICE,
         PERMISSION_KEY.APPROVE_VENDOR_INVOICE,
         PERMISSION_KEY.VIEW_LEDGERS,
+        PERMISSION_KEY.MANAGE_CREDIT_NOTES,
       ],
     },
     [ROLE_KEY.CUSTOMER]: {

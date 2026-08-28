@@ -185,6 +185,24 @@ const financeLinks = [
       </svg>
     ),
   },
+  {
+    href: "/finance/credit-notes",
+    label: "Credit Notes",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 14.25l6-6m-8.25 5.25a8.25 8.25 0 1116.5 0 8.25 8.25 0 01-16.5 0z" />
+      </svg>
+    ),
+  },
+  {
+    href: "/finance/debit-notes",
+    label: "Debit Notes",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 14.25l-6-6m8.25 5.25a8.25 8.25 0 11-16.5 0 8.25 8.25 0 0116.5 0z" />
+      </svg>
+    ),
+  },
 ];
 
 const phase2Links = [
@@ -237,6 +255,8 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/expenses": ["manage_expenses"],
   "/finance/customer-pricing": ["manage_quotations", "manage_invoices"],
   "/finance/ledgers": ["view_ledgers"],
+  "/finance/credit-notes": ["manage_credit_notes"],
+  "/finance/debit-notes": ["manage_credit_notes"],
   "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
 };
 

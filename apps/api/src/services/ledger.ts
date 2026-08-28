@@ -1,12 +1,12 @@
 import { Prisma } from "@prisma/client";
-import { INVOICE_STATUS, BILL_STATUS } from "@recd/shared";
+import { INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 
 const D = (n: number | string | Prisma.Decimal): Prisma.Decimal =>
   n instanceof Prisma.Decimal ? n : new Prisma.Decimal(String(n));
 const ZERO = new Prisma.Decimal(0);
 
-export type LedgerEntryType = "opening_balance" | "invoice" | "payment" | "bill" | "payment_made";
+export type LedgerEntryType = "opening_balance" | "invoice" | "payment" | "credit_note" | "bill" | "payment_made";
 
 export interface LedgerEntry {
   date: Date;
@@ -121,6 +121,12 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
     where: { invoice: { customerId } },
     select: { id: true, amount: true, receivedDate: true, invoice: { select: { invoiceNumber: true } } },
   });
+  // Issued credit notes reduce what the customer owes - a credit movement, same direction
+  // as a payment. Draft/cancelled notes have no accounting effect (see credit-notes.ts).
+  const creditNotes = await prisma.creditNote.findMany({
+    where: { customerId, status: CREDIT_NOTE_STATUS.ISSUED },
+    select: { id: true, noteNumber: true, issueDate: true, total: true },
+  });
 
   const movements: RawMovement[] = [
     ...invoices.map((inv): RawMovement => ({
@@ -138,6 +144,14 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
       refId: p.id,
       debit: ZERO,
       credit: D(p.amount),
+    })),
+    ...creditNotes.map((cn): RawMovement => ({
+      date: cn.issueDate,
+      type: "credit_note",
+      refNumber: cn.noteNumber,
+      refId: cn.id,
+      debit: ZERO,
+      credit: D(cn.total),
     })),
   ];
 

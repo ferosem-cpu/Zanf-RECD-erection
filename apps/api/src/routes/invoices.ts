@@ -5,6 +5,7 @@ import {
   INVOICE_STATUS,
   PAYMENT_METHOD,
   FINANCE_DOC_TYPE,
+  CREDIT_NOTE_STATUS,
   invoiceCreateSchema,
   invoiceUpdateSchema,
   invoiceCancelSchema,
@@ -35,12 +36,33 @@ async function invoiceSummary(tx: Prisma.TransactionClient, id: string) {
       quotation: { select: { id: true, quoteNumber: true } },
       lineItems: { orderBy: { sortOrder: "asc" } },
       payments: true,
+      creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, orderBy: { issueDate: "desc" } },
       editLogs: { orderBy: { editedAt: "desc" }, include: { editedBy: { select: { name: true } } } },
     },
   });
 }
 
-function deriveInvoiceStatus(total: Prisma.Decimal, paid: Prisma.Decimal): string {
+// Invoice status/outstanding math is always computed against the NET total - the invoice's
+// own total minus any ISSUED credit notes against it (draft/cancelled CNs have no effect,
+// same convention as Invoice's own draft/cancelled states). This is the one extension point
+// Phase A's ledger.ts already anticipated; nothing here changes what's stored on Invoice
+// itself (total/status stay the gross document total + payment-derived status) - callers
+// that need the net figure compute it via netInvoiceTotal() below rather than mutating total.
+export async function issuedCreditNoteTotal(tx: Prisma.TransactionClient, invoiceId: string): Promise<Prisma.Decimal> {
+  const notes = await tx.creditNote.findMany({
+    where: { invoiceId, status: CREDIT_NOTE_STATUS.ISSUED },
+    select: { total: true },
+  });
+  return notes.reduce((s, n) => s.plus(n.total), new Prisma.Decimal(0));
+}
+
+export function netInvoiceTotal(total: Prisma.Decimal, creditNoteTotal: Prisma.Decimal): Prisma.Decimal {
+  const net = total.minus(creditNoteTotal);
+  return net.isNegative() ? new Prisma.Decimal(0) : net;
+}
+
+export function deriveInvoiceStatus(total: Prisma.Decimal, paid: Prisma.Decimal): string {
+  if (total.isZero()) return INVOICE_STATUS.PAID;
   if (paid.isZero()) return INVOICE_STATUS.ISSUED;
   if (paid.greaterThanOrEqualTo(total)) return INVOICE_STATUS.PAID;
   return INVOICE_STATUS.PARTIALLY_PAID;
@@ -57,6 +79,7 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
     include: {
       customer: { select: { id: true, name: true } },
       payments: { select: { amount: true } },
+      creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
     },
     // Sort by invoice number (ascending) so the list follows the actual document sequence
     // (0001, 0002, ...) instead of createdAt - invoices entered together in one batch (e.g.
@@ -70,7 +93,9 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
   const now = new Date();
   const rows = invoices.map((inv) => {
     const paid = inv.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-    const balance = new Prisma.Decimal(inv.total).minus(paid);
+    const creditNoteTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+    const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), creditNoteTotal);
+    const balance = netTotal.minus(paid);
     const overdue =
       (inv.status === INVOICE_STATUS.ISSUED || inv.status === INVOICE_STATUS.PARTIALLY_PAID) &&
       !!inv.dueDate &&
@@ -79,9 +104,12 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
       ...inv,
       invoiceNumber: inv.status === INVOICE_STATUS.DRAFT ? `DRAFT-${inv.id}` : inv.invoiceNumber,
       amountPaid: paid,
+      creditNoteTotal,
+      netTotal,
       balance,
       overdue,
       payments: undefined,
+      creditNotes: undefined,
     };
   });
   res.json(rows);
@@ -147,6 +175,8 @@ invoicesRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
     return res.status(404).json({ error: "Invoice not found" });
   }
   const paid = inv.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+  const creditNoteTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+  const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), creditNoteTotal);
   const now = new Date();
   const overdue =
     (inv.status === INVOICE_STATUS.ISSUED || inv.status === INVOICE_STATUS.PARTIALLY_PAID) &&
@@ -156,7 +186,9 @@ invoicesRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
     ...inv,
     invoiceNumber: inv.status === INVOICE_STATUS.DRAFT ? `DRAFT-${inv.id}` : inv.invoiceNumber,
     amountPaid: paid,
-    balance: new Prisma.Decimal(inv.total).minus(paid),
+    creditNoteTotal,
+    netTotal,
+    balance: netTotal.minus(paid),
     overdue,
     payments: inv.payments.map((p) => ({
       id: p.id,
@@ -177,7 +209,12 @@ invoicesRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
 
   const existing = await prisma.invoice.findUnique({
     where: { id },
-    include: { lineItems: { orderBy: { sortOrder: "asc" } }, payments: { select: { amount: true } }, customer: { select: { name: true } } },
+    include: {
+      lineItems: { orderBy: { sortOrder: "asc" } },
+      payments: { select: { amount: true } },
+      creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
+      customer: { select: { name: true } },
+    },
   });
   if (!existing) return res.status(404).json({ error: "Invoice not found" });
   // Cancelled invoices are a dead end (no payments allowed against them either); everything
@@ -255,7 +292,8 @@ invoicesRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
       // status the same way a new payment would, rather than leaving a stale "paid" status
       // on an invoice whose corrected total is no longer fully covered.
       const paidSoFar = existing.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-      updateData.status = deriveInvoiceStatus(totals.total, paidSoFar);
+      const cnTotal = existing.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+      updateData.status = deriveInvoiceStatus(netInvoiceTotal(totals.total, cnTotal), paidSoFar);
     }
 
     const updated = await tx.invoice.update({ where: { id }, data: updateData, include: { lineItems: true } });
@@ -383,7 +421,11 @@ invoicesRouter.post(
 
     const existing = await prisma.invoice.findUnique({
       where: { id },
-      include: { payments: true, customer: { select: { id: true, name: true, contacts: { select: { id: true } } } } },
+      include: {
+        payments: true,
+        creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
+        customer: { select: { id: true, name: true, contacts: { select: { id: true } } } },
+      },
     });
     if (!existing) return res.status(404).json({ error: "Invoice not found" });
     if (existing.status === INVOICE_STATUS.CANCELLED) {
@@ -393,7 +435,9 @@ invoicesRouter.post(
       return res.status(400).json({ error: "Issue the invoice before recording a payment against it" });
     }
     const paidBefore = existing.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-    const outstanding = new Prisma.Decimal(existing.total).minus(paidBefore);
+    const cnTotal = existing.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+    const netTotal = netInvoiceTotal(new Prisma.Decimal(existing.total), cnTotal);
+    const outstanding = netTotal.minus(paidBefore);
     const amount = new Prisma.Decimal(String(data.amount));
     if (amount.greaterThan(outstanding)) {
       return res.status(400).json({ error: "Payment exceeds the outstanding balance" });
@@ -418,7 +462,7 @@ invoicesRouter.post(
       });
 
       const newPaid = paidBefore.plus(amount);
-      const newStatus = deriveInvoiceStatus(new Prisma.Decimal(inv.total), newPaid);
+      const newStatus = deriveInvoiceStatus(netTotal, newPaid);
       const updated = await tx.invoice.update({
         where: { id: inv.id },
         data: { status: newStatus },
@@ -432,7 +476,7 @@ invoicesRouter.post(
           await send({
             recipientId: contact.id,
             templateKey: "payment_received",
-            data: { invoiceNumber: updated.invoiceNumber, amount: amount.toString(), balance: new Prisma.Decimal(inv.total).minus(newPaid).toString() },
+            data: { invoiceNumber: updated.invoiceNumber, amount: amount.toString(), balance: netTotal.minus(newPaid).toString() },
           });
         } catch (err) {
           console.error("Notification failed", err);
@@ -468,7 +512,10 @@ invoicesRouter.put(
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
     const data = parsed.data;
 
-    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { payments: true } });
+    const invoice = await prisma.invoice.findUnique({
+      where: { id },
+      include: { payments: true, creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } } },
+    });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
     if (invoice.status === INVOICE_STATUS.CANCELLED) {
       return res.status(400).json({ error: "Cannot edit payments on a cancelled invoice" });
@@ -478,8 +525,10 @@ invoicesRouter.put(
 
     const otherPaid = invoice.payments.filter((p) => p.id !== paymentId).reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
     const newAmount = data.amount !== undefined ? new Prisma.Decimal(String(data.amount)) : new Prisma.Decimal(payment.amount);
-    if (otherPaid.plus(newAmount).greaterThan(new Prisma.Decimal(invoice.total))) {
-      return res.status(400).json({ error: "This amount would exceed the invoice total" });
+    const cnTotal = invoice.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+    const netTotal = netInvoiceTotal(new Prisma.Decimal(invoice.total), cnTotal);
+    if (otherPaid.plus(newAmount).greaterThan(netTotal)) {
+      return res.status(400).json({ error: "This amount would exceed the invoice's net outstanding total" });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
@@ -494,7 +543,7 @@ invoicesRouter.put(
         },
       });
 
-      const newStatus = deriveInvoiceStatus(new Prisma.Decimal(invoice.total), otherPaid.plus(newAmount));
+      const newStatus = deriveInvoiceStatus(netTotal, otherPaid.plus(newAmount));
       const updatedInvoice = await tx.invoice.update({ where: { id }, data: { status: newStatus } });
 
       const changes: string[] = [];
@@ -529,16 +578,21 @@ invoicesRouter.delete(
     const id = asString(req.params.id);
     const paymentId = asString(req.params.paymentId);
 
-    const invoice = await prisma.invoice.findUnique({ where: { id }, include: { payments: true } });
+    const invoice = await prisma.invoice.findUnique({
+      where: { id },
+      include: { payments: true, creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } } },
+    });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
     const payment = invoice.payments.find((p) => p.id === paymentId);
     if (!payment) return res.status(404).json({ error: "Payment not found" });
 
     const remainingPaid = invoice.payments.filter((p) => p.id !== paymentId).reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+    const cnTotal = invoice.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+    const netTotal = netInvoiceTotal(new Prisma.Decimal(invoice.total), cnTotal);
 
     const updated = await prisma.$transaction(async (tx) => {
       await tx.paymentReceived.delete({ where: { id: paymentId } });
-      const newStatus = deriveInvoiceStatus(new Prisma.Decimal(invoice.total), remainingPaid);
+      const newStatus = deriveInvoiceStatus(netTotal, remainingPaid);
       const updatedInvoice = await tx.invoice.update({ where: { id }, data: { status: newStatus } });
       await tx.invoiceEditLog.create({
         data: {

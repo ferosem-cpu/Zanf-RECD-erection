@@ -171,6 +171,8 @@ export const PERMISSION_KEY_FINANCE = {
   APPROVE_VENDOR_INVOICE: "approve_vendor_invoice",
   /** Party ledger statements (customer/supplier running balance), TDS report, GST exports. */
   VIEW_LEDGERS: "view_ledgers",
+  /** Create/issue/cancel Credit Notes and Debit Notes. */
+  MANAGE_CREDIT_NOTES: "manage_credit_notes",
 } as const;
 
 /** Merge finance permission keys into PERMISSION_KEY so they seed + type-check everywhere. */
@@ -239,6 +241,27 @@ export const INVOICE_STATUS = {
   CANCELLED: "cancelled",
 } as const;
 export type InvoiceStatus = (typeof INVOICE_STATUS)[keyof typeof INVOICE_STATUS];
+
+/** CreditNote.status - mirrors Invoice's draft/issued split. Draft has no accounting
+ * effect; issued reduces the invoice's net outstanding; cancelled is a dead end (issue a
+ * fresh one instead of un-cancelling, same convention as Invoice cancellation). */
+export const CREDIT_NOTE_STATUS = {
+  DRAFT: "draft",
+  ISSUED: "issued",
+  CANCELLED: "cancelled",
+} as const;
+export type CreditNoteStatus = (typeof CREDIT_NOTE_STATUS)[keyof typeof CREDIT_NOTE_STATUS];
+
+/** Why a credit note was raised against an invoice - printed on the document, drives no
+ * branching logic today but keeps GST-audit reasoning on file. */
+export const CREDIT_NOTE_REASON = {
+  RETURN: "return",
+  RATE_DIFFERENCE: "rate_difference",
+  DEFICIENCY: "deficiency",
+  POST_SALE_DISCOUNT: "post_sale_discount",
+  OTHER: "other",
+} as const;
+export type CreditNoteReason = (typeof CREDIT_NOTE_REASON)[keyof typeof CREDIT_NOTE_REASON];
 
 export const PO_STATUS = {
   DRAFT: "draft",
@@ -327,6 +350,7 @@ export const FINANCE_DOC_TYPE = {
   PROFORMA: "proforma",
   TAX_INVOICE: "tax_invoice",
   PURCHASE_ORDER: "purchase_order",
+  CREDIT_NOTE: "credit_note",
 } as const;
 export type FinanceDocType = (typeof FINANCE_DOC_TYPE)[keyof typeof FINANCE_DOC_TYPE];
 
