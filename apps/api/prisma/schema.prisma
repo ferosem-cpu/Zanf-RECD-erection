@@ -280,6 +280,7 @@ model Order {
   lineItems OrderLineItem[]
   billAllocations BillAllocation[]
   customerPurchaseOrders CustomerPurchaseOrder[]
+  paymentOrderTags PaymentOrderTag[]
 }
 
 /// A second (or third...) RECD product added to an existing order/site, for when multiple
@@ -1156,6 +1157,24 @@ model PaymentMade {
   recordedById String
   recordedBy   User      @relation("PaymentMadeRecorder", fields: [recordedById], references: [id])
   createdAt    DateTime  @default(now())
+
+  orderTags PaymentOrderTag[]
+}
+
+/// Optional tag linking a vendor payment/advance to the order(s) the work was for. Lets an
+/// untagged-by-default advance (see PaymentMade) be earmarked at record time so it can later be
+/// visually matched against bills for the same order (via BillAllocation.orderId) when applying
+/// it - the apply action itself stays a manual click, this just makes the right advance easy to
+/// find. A payment can be tagged to more than one order (e.g. one advance covering two orders).
+model PaymentOrderTag {
+  id            String      @id @default(cuid())
+  paymentMadeId String
+  paymentMade   PaymentMade @relation(fields: [paymentMadeId], references: [id], onDelete: Cascade)
+  orderId       String
+  order         Order       @relation(fields: [orderId], references: [id])
+  createdAt     DateTime    @default(now())
+
+  @@unique([paymentMadeId, orderId])
 }
 
 /// Lookup table (data-not-code): expense categories are seeded rows so new

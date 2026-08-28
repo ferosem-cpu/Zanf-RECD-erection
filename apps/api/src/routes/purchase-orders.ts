@@ -51,6 +51,7 @@ purchaseOrdersRouter.get(
     const id = asString(req.params.id);
     const advances = await prisma.paymentMade.findMany({
       where: { supplierId: id, billId: null },
+      include: { orderTags: { include: { order: { select: { id: true, orderNumber: true } } } } },
       orderBy: { paidDate: "desc" },
     });
     res.json(advances);

@@ -8,6 +8,7 @@ import { formatINR, formatDate, PAYMENT_METHOD_LABEL } from "@/lib/finance";
 import { DataTable } from "@/components/DataTable";
 
 interface Supplier { id: string; name: string; }
+interface SiteOption { id: string; address: string | null; companyName: string | null; order: { id: string; orderNumber: string; customer: { id: string; name: string } } }
 interface OpenBill {
   id: string;
   billNumber: string;
@@ -16,6 +17,7 @@ interface OpenBill {
   total: string;
   amountPaid: string;
   balance: string;
+  allocations?: { order: { id: string; orderNumber: string } | null }[];
 }
 interface PaymentMadeRow {
   id: string;
@@ -26,6 +28,14 @@ interface PaymentMadeRow {
   notes?: string | null;
   supplier: { id: string; name: string };
   bill: { id: string; billNumber: string } | null;
+  orderTags: { id: string; order: { id: string; orderNumber: string } }[];
+}
+
+/** Bill option label annotated with its own allocated order number(s), if any, so the admin
+ * can visually match a tagged advance against the bill it's actually for. */
+function billOrderLabel(b: OpenBill) {
+  const orderNumbers = Array.from(new Set((b.allocations ?? []).map((a) => a.order?.orderNumber).filter((v): v is string => !!v)));
+  return orderNumbers.length ? ` · Order ${orderNumbers.join(", ")}` : "";
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -36,6 +46,7 @@ export default function VendorPaymentsPage() {
 
   const [rows, setRows] = useState<PaymentMadeRow[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [sites, setSites] = useState<SiteOption[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const [open, setOpen] = useState(false);
@@ -49,6 +60,12 @@ export default function VendorPaymentsPage() {
   const [reference, setReference] = useState("");
   const [paidDate, setPaidDate] = useState(today());
   const [notes, setNotes] = useState("");
+  // Optional order tag(s): which order(s) this payment/advance is for, so it's easy to find
+  // and manually match against a bill for the same order later. Picked by site (the same
+  // picker pattern as the vendor-invoice allocations editor) since orders aren't otherwise
+  // browsable from here.
+  const [orderTagIds, setOrderTagIds] = useState<string[]>([]);
+  const [orderTagToAdd, setOrderTagToAdd] = useState("");
 
   // Apply-advance mini modal
   const [applyFor, setApplyFor] = useState<PaymentMadeRow | null>(null);
@@ -61,6 +78,7 @@ export default function VendorPaymentsPage() {
   function load() {
     api<PaymentMadeRow[]>("/bills/payments").then(setRows).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
     api<Supplier[]>("/purchase-orders/suppliers").then(setSuppliers).catch(() => {});
+    api<SiteOption[]>("/meta/sites").then(setSites).catch(() => {});
   }
   useEffect(load, []);
 
@@ -74,7 +92,21 @@ export default function VendorPaymentsPage() {
     setReference("");
     setPaidDate(today());
     setNotes("");
+    setOrderTagIds([]);
+    setOrderTagToAdd("");
     setOpen(true);
+  }
+
+  function addOrderTag() {
+    if (!orderTagToAdd || orderTagIds.includes(orderTagToAdd)) return;
+    setOrderTagIds([...orderTagIds, orderTagToAdd]);
+    setOrderTagToAdd("");
+  }
+  function removeOrderTag(orderId: string) {
+    setOrderTagIds(orderTagIds.filter((id) => id !== orderId));
+  }
+  function orderNumberFor(orderId: string) {
+    return sites.find((s) => s.order.id === orderId)?.order.orderNumber ?? orderId;
   }
 
   async function pickSupplier(id: string) {
@@ -104,6 +136,7 @@ export default function VendorPaymentsPage() {
           reference: reference || undefined,
           paidDate: paidDate ? new Date(paidDate).toISOString() : undefined,
           notes: notes || undefined,
+          orderIds: orderTagIds.length ? orderTagIds : undefined,
         }),
       });
       setOpen(false);
@@ -184,6 +217,19 @@ export default function VendorPaymentsPage() {
               ),
           },
           {
+            key: "orderTags",
+            label: "Order tag(s)",
+            accessor: (r) => r.orderTags.map((t) => t.order.orderNumber).join(", "),
+            render: (r) =>
+              r.orderTags.length ? (
+                <div className="flex flex-wrap gap-1">
+                  {r.orderTags.map((t) => (
+                    <span key={t.id} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{t.order.orderNumber}</span>
+                  ))}
+                </div>
+              ) : <span className="text-gray-300">—</span>,
+          },
+          {
             key: "actions",
             label: "",
             accessor: () => "",
@@ -214,6 +260,12 @@ export default function VendorPaymentsPage() {
                     <span className="label">Applied to</span>
                     <span className="value">{r.bill ? r.bill.billNumber : <span className="font-medium text-amber-600">Standing advance</span>}</span>
                   </div>
+                  {r.orderTags.length > 0 && (
+                    <div className="data-card-row">
+                      <span className="label">Order tag(s)</span>
+                      <span className="value">{r.orderTags.map((t) => t.order.orderNumber).join(", ")}</span>
+                    </div>
+                  )}
                   {!r.bill && canRecord && (
                     <button onClick={() => openApply(r)} className="mt-2 text-xs font-medium text-[var(--theme-accent)] hover:underline">Apply to a bill</button>
                   )}
@@ -247,12 +299,35 @@ export default function VendorPaymentsPage() {
                   <select className="field w-full" value={billId} onChange={(e) => setBillId(e.target.value)}>
                     <option value="">No bill - hold as advance</option>
                     {openBills.map((b) => (
-                      <option key={b.id} value={b.id}>{b.billNumber} · outstanding {formatINR(b.balance)}</option>
+                      <option key={b.id} value={b.id}>{b.billNumber} · outstanding {formatINR(b.balance)}{billOrderLabel(b)}</option>
                     ))}
                   </select>
                   {openBills.length === 0 && <p className="mt-1 text-xs text-gray-400">No open bills for this supplier - the full amount will be held as an advance.</p>}
                 </div>
               )}
+
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Order tag(s) (optional - which order this payment is for, so it&apos;s easy to match against that order&apos;s bill later)</label>
+                <div className="flex gap-2">
+                  <select className="field flex-1" value={orderTagToAdd} onChange={(e) => setOrderTagToAdd(e.target.value)}>
+                    <option value="">Choose an order…</option>
+                    {sites.filter((s) => !orderTagIds.includes(s.order.id)).map((s) => (
+                      <option key={s.order.id} value={s.order.id}>{s.order.orderNumber} · {s.order.customer.name}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={addOrderTag} disabled={!orderTagToAdd} className="rounded-lg border border-gray-300 px-3 py-2 text-sm disabled:opacity-40">+ Add</button>
+                </div>
+                {orderTagIds.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {orderTagIds.map((id) => (
+                      <span key={id} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
+                        {orderNumberFor(id)}
+                        <button type="button" onClick={() => removeOrderTag(id)} className="text-gray-400 hover:text-gray-600">✕</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -317,16 +392,25 @@ export default function VendorPaymentsPage() {
               <h3 className="text-lg font-semibold">Apply advance to a bill</h3>
               <button onClick={() => setApplyFor(null)} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
-            <p className="mb-3 text-sm text-gray-500">
+            <p className="mb-1 text-sm text-gray-500">
               {applyFor.supplier.name} has a standing advance of {formatINR(applyFor.amount)}.
             </p>
+            {applyFor.orderTags.length > 0 && (
+              <p className="mb-3 text-xs text-gray-500">
+                Tagged for order{applyFor.orderTags.length > 1 ? "s" : ""}: {" "}
+                {applyFor.orderTags.map((t) => (
+                  <span key={t.id} className="mr-1 rounded-full bg-gray-100 px-2 py-0.5 font-medium text-gray-700">{t.order.orderNumber}</span>
+                ))}
+                — look for a bill against the same order below.
+              </p>
+            )}
             <form onSubmit={submitApply} className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Bill</label>
                 <select required className="field w-full" value={applyBillId} onChange={(e) => setApplyBillId(e.target.value)}>
                   <option value="">Choose…</option>
                   {applyBills.map((b) => (
-                    <option key={b.id} value={b.id}>{b.billNumber} · outstanding {formatINR(b.balance)}</option>
+                    <option key={b.id} value={b.id}>{b.billNumber} · outstanding {formatINR(b.balance)}{billOrderLabel(b)}</option>
                   ))}
                 </select>
                 {applyBills.length === 0 && <p className="mt-1 text-xs text-gray-400">No open bills for this supplier yet.</p>}

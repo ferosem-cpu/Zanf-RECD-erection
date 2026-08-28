@@ -449,20 +449,16 @@ same session:
   invoice detail page never got the "show issued credit notes + net
   outstanding / Create credit note button" the plan called for back in
   Phase B — credit notes only surface via `/finance/credit-notes` today.
-- **Vendor advances (pay a supplier without a bill) are fully built; not yet
-  deployed or click-tested** (2026-08-28) — see Changelog. Backend: `POST
-  /bills/payments` (general endpoint, supports a pure advance or an
-  over-payment that auto-splits into one), `POST /bills/:id/apply-advance`,
-  `GET /bills/payments`, `GET /purchase-orders/suppliers/:id/advances` — all
-  verified by hitting the real dev server over HTTP, not deployed yet (owed:
-  the manual API deploy dance). Frontend: new `/finance/vendor-payments`
-  page and its `Nav.tsx` link — `tsc --noEmit`/`next build` clean, not yet
-  pushed. Owed once deployed: a real Finance-user walkthrough (record a pure
-  advance, record an over-payment and confirm the split, apply an advance to
-  a bill). Also note: applying an advance only works from the new Vendor
-  Payments page today — the bill detail page itself still has no
-  credit/advance section, the vendor-side counterpart of the Phase B gap
-  noted below.
+- **Vendor advances (pay a supplier without a bill), and optional order-ID
+  tagging on them, are both built and deployed** (2026-08-28) — see
+  Changelog (two entries). Verified by hitting the real dev server over
+  HTTP; not yet click-tested by a real Finance user. Owed: a real
+  Finance-user walkthrough (record a pure advance, record an over-payment
+  and confirm the split, tag an advance to an order, apply an advance to a
+  bill and see the order tags line up). Also note: applying an advance only
+  works from the `/finance/vendor-payments` page today — the bill detail
+  page itself still has no credit/advance section, the vendor-side
+  counterpart of the Phase B gap noted below.
 - **The in-app AI assistant now has read access to the whole Accounting-
   Lite module** (2026-08-28) — see Changelog. Three new tools:
   `get_customer_ledger`, `search_credit_notes`, `get_customer_advances`,
@@ -569,6 +565,58 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Feature: Order-ID tagging on vendor advances (2026-08-28)
+Follow-on to vendor advances (below), raised by the user working through the real end-to-end
+flow: assign a vendor to work on one or more order IDs, pay them an advance, then when their
+invoice(s) for that work arrive later, find and apply the right advance against the right
+order's bill(s). Before this, an advance only remembered *who* it was paid to, not *what work*
+it was for - fine when a supplier has one open job, ambiguous the moment they have several.
+
+Two product decisions were confirmed with the user before building: tagging an advance to
+order(s) is **optional** (an untagged general advance is still fully supported, unchanged from
+before), and applying a tagged advance to a bill stays a **manual click** - this feature only
+makes the right advance easier to *find*, it does not auto-apply anything.
+
+**Schema** (new migration - the only migration in this whole session's work, everything else
+was migration-free): a new join table, `PaymentOrderTag` (`paymentMadeId`, `orderId`, unique on
+the pair), cascade-deletes with its `PaymentMade` row. `PaymentMade` and `Order` both gained the
+obvious back-relations. Applied to the local dev DB via `prisma migrate deploy` against a
+hand-written migration file (`prisma migrate dev` itself doesn't work in this non-interactive
+shell - worked around by generating the SQL with `prisma migrate diff --from-schema-datasource
+... --to-schema-datamodel ...` and hand-placing it under `prisma/migrations/<timestamp>_.../
+migration.sql` in the standard naming convention, then `migrate deploy` + `generate`).
+
+**Backend**: `paymentMadeGeneralCreateSchema` (`packages/shared/src/schemas.ts`) gained an
+optional `orderIds: string[]`. `POST /bills/payments` (`apps/api/src/routes/bills.ts`)
+validates every ID actually resolves to an `Order` (400 if not) and creates a `PaymentOrderTag`
+row for each one on whichever `PaymentMade` row is the actual advance (`billId: null`) -
+pure-advance case, and the auto-split-off advance portion of an over-payment case. A bill
+payment that fully consumes the amount (no advance created) has nothing to tag. `GET
+/bills/payments`, `GET /purchase-orders/suppliers/:id/advances`, and the create response all
+now `include` `orderTags: { order: { id, orderNumber } }`. No changes needed to `POST /:id/
+apply-advance` - applying a whole advance updates the existing `PaymentMade` row in place
+(same id), so its order tags travel with it automatically; applying part of one creates a new
+bill-linked row but deliberately does *not* copy the tags onto it (the tags exist to help
+*find* an advance before it's applied - once applied, the bill's own allocation already carries
+the order link, and copying tags forward would just be display noise on payment history rows).
+
+**Frontend** (`apps/admin-web/src/app/finance/vendor-payments/page.tsx`): the "Record vendor
+payment" modal gained an "Order tag(s)" picker - add one or more orders (browsed by site, via
+the existing `/meta/sites` lookup, same picker pattern as the vendor-invoice allocations
+editor) as removable chips; entirely optional, no default selection. The bill dropdown in both
+that modal and the "Apply advance to a bill" mini-modal now appends each bill's own allocated
+order number(s) to its label (e.g. "INV-042 · outstanding Rs 5,000 · Order ORD-2026-0001"), and
+the apply modal additionally shows the advance's own order tags up top - so matching an advance
+to the right bill is a glance at two labels, not a guess. The main payments table and its
+mobile card view both gained an "Order tag(s)" column/row.
+
+**Verified** against the real local dev API (not mocks): created a tagged pure advance over
+HTTP, confirmed the tag round-trips through the create response, `GET /bills/payments`, and
+`GET /purchase-orders/suppliers/:id/advances`; confirmed an unresolvable order ID is rejected
+with 400. `tsc --noEmit` clean on both `apps/api` and `apps/admin-web`. Deployed: `admin-web`
+via git push (auto-deploy), `apps/api` via the manual Vercel deploy dance - this time including
+running the new migration against the production Supabase database before the code deploy.
 
 ### Feature: Vendor advances - pay a supplier without a bill (2026-08-28)
 Found while answering "how do I input an advance paid to a vendor": that feature simply didn't

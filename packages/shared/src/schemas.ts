@@ -579,9 +579,15 @@ export const paymentMadeCreateSchema = z.object({
  * nested under at POST /bills/:id/payments) and billId is optional - omit it entirely to
  * record a pure advance, or pass it with an amount larger than the bill's outstanding
  * balance and the server splits the excess into an advance automatically.
+ *
+ * orderIds is an optional list of Order IDs the payment is earmarked for (e.g. an advance
+ * paid to a vendor for work on one or more specific orders). Purely a discovery aid - it
+ * does not restrict which bill the advance can later be applied to - so the admin can spot
+ * the right advance later by matching order tags against a bill's own order allocation.
  */
 export const paymentMadeGeneralCreateSchema = paymentMadeCreateSchema.extend({
   supplierId: z.string().min(1),
+  orderIds: z.array(z.string().min(1)).optional(),
 });
 
 /** POST /bills/:id/apply-advance: apply part or all of an existing unallocated PaymentMade

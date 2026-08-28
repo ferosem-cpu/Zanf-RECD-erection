@@ -239,6 +239,7 @@ billsRouter.get("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS, P
     include: {
       supplier: { select: { id: true, name: true } },
       bill: { select: { id: true, billNumber: true } },
+      orderTags: { include: { order: { select: { id: true, orderNumber: true } } } },
     },
     orderBy: { paidDate: "desc" },
   });
@@ -467,6 +468,14 @@ billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
   const supplier = await prisma.supplier.findUnique({ where: { id: data.supplierId }, select: { id: true } });
   if (!supplier) return res.status(404).json({ error: "Supplier not found" });
 
+  // Order tagging is optional and purely a discovery aid (see paymentMadeGeneralCreateSchema's
+  // doc comment) - validate the IDs exist so a typo doesn't silently create a dangling tag.
+  const orderIds = Array.from(new Set(data.orderIds ?? []));
+  if (orderIds.length) {
+    const orders = await prisma.order.findMany({ where: { id: { in: orderIds } }, select: { id: true } });
+    if (orders.length !== orderIds.length) return res.status(400).json({ error: "One or more order IDs were not found" });
+  }
+
   const amount = new Prisma.Decimal(String(data.amount));
   const paidDate = data.paidDate ? new Date(data.paidDate) : new Date();
 
@@ -481,7 +490,9 @@ billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
         paidDate,
         notes: data.notes,
         recordedById: req.auth!.userId,
+        orderTags: orderIds.length ? { create: orderIds.map((orderId) => ({ orderId })) } : undefined,
       },
+      include: { orderTags: { include: { order: { select: { id: true, orderNumber: true } } } } },
     });
     return res.status(201).json(created);
   }
@@ -523,6 +534,7 @@ billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
           paidDate,
           notes: data.notes ? `${data.notes} (advance)` : "Advance (paid alongside a bill payment)",
           recordedById: req.auth!.userId,
+          orderTags: orderIds.length ? { create: orderIds.map((orderId) => ({ orderId })) } : undefined,
         },
       });
     }
