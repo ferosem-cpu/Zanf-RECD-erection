@@ -387,6 +387,11 @@ same session:
 
 ## Current open items (as of 2026-08-28)
 
+- **Accounting-Lite Phase A (party ledgers) shipped but not click-tested
+  live** — see Changelog. Owed: real Finance-user walkthrough of
+  `/finance/ledgers`. Phases B (Credit/Debit notes), C (payment
+  allocation/advances/TDS), D (GST exports) from
+  `docs/ACCOUNTING_LITE_PLAN.md` are not started yet.
 - **Every `DataTable` page has a Print button** (2026-08-20) — prints only
   the currently-filtered rows/visible columns with a full letterhead. Not yet
   click-tested live by the user (standing "agent can't log into admin-web"
@@ -481,6 +486,47 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Feature: Accounting-Lite Phase A — party ledger statements (2026-08-28)
+First phase of `docs/ACCOUNTING_LITE_PLAN.md` (read-only, zero behavior
+change to anything existing, shipped alone per the plan's phase order).
+**Schema**: `Customer.openingBalance`/`openingBalanceDate` and
+`Supplier.openingBalance`/`openingBalanceDate` added
+(`add_ledger_opening_balances` migration) — anchors a party's running
+balance without needing historical invoice/payment data entry; both default
+to 0 so this is fully additive. **New permission** `view_ledgers`
+(`PERMISSION_KEY_FINANCE`), seeded for Finance/Management/Owner-Admin/Super
+Admin (added directly to production `Permission`/`RolePermission` via
+Supabase MCP, since `seed.ts`'s upsert pattern is additive but re-running
+the whole seed against prod risks touching demo data — didn't do that).
+**New backend**: `apps/api/src/services/ledger.ts` (`buildCustomerLedger`/
+`buildSupplierLedger` — pure query composition, no new tables; merges
+opening balance + issued invoices/payments-received (customer side) or
+approved bills/payments-made (supplier side) into a date-ordered,
+running-balance statement computed over full history then sliced to
+`[from, to]`) and `apps/api/src/routes/ledgers.ts` → `GET
+/ledgers/customer/:id` / `GET /ledgers/supplier/:id`, both `?from=&to=`.
+`GET /customers` and `GET /purchase-orders/suppliers` now also accept
+`view_ledgers` (previously gated to `manage_orders`/`manage_purchase_orders`
+etc.) so a Finance-only ledger user can populate the party picker.
+**New frontend**: `/finance/ledgers` (party-type toggle, party picker, date
+range, statement table with running balance, Print + Export CSV via the
+existing `ReportChrome`) — reads `?customer=<id>`/`?supplier=<id>` to
+deep-link from a party's own page; wired into `Nav.tsx`'s Finance section.
+Customer detail page (`/customers/[id]`) got a "Ledger" quick-link.
+**Explicitly deferred to later phases** (per the plan): Credit/Debit notes
+(Phase B) aren't in the ledger yet — `ledger.ts` has a natural extension
+point (add a `credit_note` movement type) once `CreditNote` exists.
+`PaymentReceived` doesn't yet carry `customerId`/`tdsAmount` (Phase C) — the
+customer ledger currently joins payments through `invoice.customerId`,
+which is correct today (every payment still requires an invoice) but will
+need to switch to the direct FK once advances/TDS land.
+Verified: `tsc --noEmit` clean both apps, `next build` clean (`/finance/ledgers`
+built as a static route), production migration + permission grants applied
+via Supabase MCP and spot-checked. **Not yet click-tested live** (standing
+"agent can't log into admin-web" restriction) — owed: open `/finance/ledgers`
+as a real Finance user, pick a customer with real invoices/payments, confirm
+the running balance and Print/CSV export actually work.
 
 ### Feature: Customer Purchase Orders, plus native Gemini PDF extraction (2026-08-28)
 **Customer Purchase Orders** — mirror-image of the existing outbound

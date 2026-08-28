@@ -20,7 +20,7 @@ export const purchaseOrdersRouter = Router();
 purchaseOrdersRouter.use(authenticate);
 
 // --- Suppliers -------------------------------------------------------------
-purchaseOrdersRouter.get("/suppliers", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (_req, res) => {
+purchaseOrdersRouter.get("/suppliers", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, PERMISSION_KEY.VIEW_LEDGERS), async (_req, res) => {
   const suppliers = await prisma.supplier.findMany({ orderBy: { name: "asc" } });
   res.json(suppliers);
 });

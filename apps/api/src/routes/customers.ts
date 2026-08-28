@@ -11,7 +11,12 @@ customersRouter.use(authenticate);
 // invoices) - not just order management. Creating/editing customers stays sales-only below.
 customersRouter.get(
   "/",
-  requirePermission(PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.MANAGE_QUOTATIONS, PERMISSION_KEY.MANAGE_INVOICES),
+  requirePermission(
+    PERMISSION_KEY.MANAGE_ORDERS,
+    PERMISSION_KEY.MANAGE_QUOTATIONS,
+    PERMISSION_KEY.MANAGE_INVOICES,
+    PERMISSION_KEY.VIEW_LEDGERS,
+  ),
   async (_req, res) => {
     const customers = await prisma.customer.findMany({
       include: { contacts: { select: { id: true, name: true, phone: true, email: true } } },
@@ -116,6 +121,8 @@ customersRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), asy
         address: data.address,
         gstin: data.gstin,
         state: data.state,
+        openingBalance: data.openingBalance,
+        openingBalanceDate: data.openingBalanceDate ? new Date(data.openingBalanceDate) : undefined,
       },
       include: { contacts: { select: { id: true, name: true, phone: true, email: true } } },
     });

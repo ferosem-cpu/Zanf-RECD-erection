@@ -176,6 +176,15 @@ const financeLinks = [
       </svg>
     ),
   },
+  {
+    href: "/finance/ledgers",
+    label: "Ledgers",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+      </svg>
+    ),
+  },
 ];
 
 const phase2Links = [
@@ -227,6 +236,7 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/finance/vendor-invoices": ["record_vendor_invoice", "approve_vendor_invoice"],
   "/expenses": ["manage_expenses"],
   "/finance/customer-pricing": ["manage_quotations", "manage_invoices"],
+  "/finance/ledgers": ["view_ledgers"],
   "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
 };
 

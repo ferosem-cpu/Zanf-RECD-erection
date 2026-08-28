@@ -205,6 +205,8 @@ export const updateCustomerSchema = z.object({
   contactName: z.string().min(1).optional(),
   contactPhone: z.string().min(6).optional(),
   contactEmail: z.string().email().optional(),
+  openingBalance: z.number().optional(),
+  openingBalanceDate: z.string().optional(),
 });
 
 export const createProductSchema = z.object({
@@ -357,6 +359,8 @@ export const supplierCreateSchema = z.object({
   contactName: z.string().max(200).optional(),
   contactEmail: z.string().email().optional(),
   contactPhone: z.string().max(20).optional(),
+  openingBalance: z.number().optional(),
+  openingBalanceDate: z.string().optional(),
 });
 
 export const purchaseOrderCreateSchema = z.object({

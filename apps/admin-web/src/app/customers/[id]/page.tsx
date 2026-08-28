@@ -26,6 +26,7 @@ interface CustomerDetail {
   address: string | null;
   gstin: string | null;
   state: string | null;
+  openingBalance?: string | null;
   contacts: { id: string; name: string; phone: string | null; email: string | null }[];
   orders: CustomerSite[];
 }
@@ -78,6 +79,12 @@ export default function CustomerDetailPage() {
         </div>
         {canManage && (
           <div className="flex gap-2 shrink-0">
+            <Link
+              href={`/finance/ledgers?customer=${customer.id}`}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+            >
+              Ledger
+            </Link>
             <Link
               href={`/customers?edit=${customer.id}`}
               className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap"

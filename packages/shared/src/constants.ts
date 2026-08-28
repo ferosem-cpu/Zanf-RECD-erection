@@ -169,6 +169,8 @@ export const PERMISSION_KEY_FINANCE = {
   RECORD_VENDOR_INVOICE: "record_vendor_invoice",
   /** Verify, approve, or reject a vendor invoice - Finance/Management/Super Admin only. */
   APPROVE_VENDOR_INVOICE: "approve_vendor_invoice",
+  /** Party ledger statements (customer/supplier running balance), TDS report, GST exports. */
+  VIEW_LEDGERS: "view_ledgers",
 } as const;
 
 /** Merge finance permission keys into PERMISSION_KEY so they seed + type-check everywhere. */

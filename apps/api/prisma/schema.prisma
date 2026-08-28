@@ -134,6 +134,11 @@ model Customer {
   billingAddress String?
   salesOwnerId  String?
   salesOwner    User?    @relation("CustomerSalesOwner", fields: [salesOwnerId], references: [id])
+  /// Balance carried in from before this app was the source of truth (e.g. Tally opening
+  /// balance on go-live day). Positive = customer owes us. Anchors the party ledger
+  /// statement (see ledger.ts) without needing historical invoice/payment data entry.
+  openingBalance     Decimal   @db.Decimal(12, 2) @default(0)
+  openingBalanceDate DateTime?
   createdAt     DateTime @default(now())
 
   contacts  User[]   @relation("CustomerContacts")
@@ -741,6 +746,9 @@ model Supplier {
   vendorId     String?  @unique
   vendor       Vendor?  @relation(fields: [vendorId], references: [id])
   isActive     Boolean  @default(true)
+  /// Same convention as Customer.openingBalance - positive = we owe the supplier.
+  openingBalance     Decimal   @db.Decimal(12, 2) @default(0)
+  openingBalanceDate DateTime?
   createdAt    DateTime @default(now())
 
   purchaseOrders PurchaseOrder[]

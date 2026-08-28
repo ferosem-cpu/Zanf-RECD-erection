@@ -36,6 +36,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.VIEW_FINANCE_DASHBOARD, name: "View finance dashboard and reports" },
     { key: PERMISSION_KEY.RECORD_VENDOR_INVOICE, name: "Upload / capture a vendor invoice" },
     { key: PERMISSION_KEY.APPROVE_VENDOR_INVOICE, name: "Verify, approve, or reject a vendor invoice" },
+    { key: PERMISSION_KEY.VIEW_LEDGERS, name: "View party ledger statements, TDS report, and GST exports" },
   ];
   for (const p of permissions) {
     await prisma.permission.upsert({ where: { key: p.key }, update: {}, create: p });
@@ -116,6 +117,7 @@ async function seedRoles() {
         PERMISSION_KEY.VIEW_FINANCE_DASHBOARD,
         PERMISSION_KEY.RECORD_VENDOR_INVOICE,
         PERMISSION_KEY.APPROVE_VENDOR_INVOICE,
+        PERMISSION_KEY.VIEW_LEDGERS,
       ],
     },
     [ROLE_KEY.CUSTOMER]: {
