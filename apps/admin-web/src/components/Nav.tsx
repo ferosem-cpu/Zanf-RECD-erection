@@ -295,10 +295,71 @@ interface NavProps {
   onMobileClose?: () => void;
 }
 
+// Collapsible groups below "Main" - keyed by the same names used in COLLAPSIBLE_SECTIONS.
+// Persisted across page loads so a user's fold/unfold choice sticks; whichever section
+// contains the current page always force-opens on navigation, on top of whatever was saved.
+const NAV_SECTIONS_STORAGE_KEY = "recd-nav-open-sections";
+type SectionKey = "operations" | "finance";
+const COLLAPSIBLE_SECTIONS: { key: SectionKey; label: string; links: { href: string }[] }[] = [
+  { key: "operations", label: "Operations", links: operationsLinks },
+  { key: "finance", label: "Finance", links: financeLinks },
+];
+
+function sectionHasActiveLink(links: { href: string }[], pathname: string | null): boolean {
+  return links.some((l) => pathname === l.href || pathname?.startsWith(l.href + "/"));
+}
+
+function loadOpenSections(pathname: string | null): Record<SectionKey, boolean> {
+  let saved: Partial<Record<SectionKey, boolean>> = {};
+  if (typeof window !== "undefined") {
+    try {
+      saved = JSON.parse(window.localStorage.getItem(NAV_SECTIONS_STORAGE_KEY) ?? "{}");
+    } catch {
+      saved = {};
+    }
+  }
+  const result = {} as Record<SectionKey, boolean>;
+  for (const section of COLLAPSIBLE_SECTIONS) {
+    const hasActive = sectionHasActiveLink(section.links, pathname);
+    result[section.key] = hasActive || (saved[section.key] ?? false);
+  }
+  return result;
+}
+
 export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
   const pathname = usePathname();
   const { user, logout, hasPermission } = useAuth();
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [openSections, setOpenSections] = useState<Record<SectionKey, boolean>>(() => loadOpenSections(pathname));
+
+  // Whichever section the current page lives in force-opens on every navigation, so
+  // clicking a Finance link from a collapsed state always reveals where you landed.
+  useEffect(() => {
+    setOpenSections((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const section of COLLAPSIBLE_SECTIONS) {
+        if (sectionHasActiveLink(section.links, pathname) && !next[section.key]) {
+          next[section.key] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+
+  function toggleSection(key: SectionKey) {
+    setOpenSections((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        window.localStorage.setItem(NAV_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // best-effort only - a blocked localStorage just means the fold state won't persist
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     setLogoUrl(getSavedLogo());
@@ -389,44 +450,80 @@ export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
           {/* ── Operations ──────────────────────────────────────────────── */}
           {operationsLinks.some((l) => (LINK_PERMISSIONS[l.href] ?? []).some((p) => hasPermission(p))) && (
             <>
-              <p className="px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
+              <button
+                type="button"
+                data-testid="nav-section-toggle-operations"
+                onClick={() => toggleSection("operations")}
+                aria-expanded={openSections.operations}
+                className="w-full flex items-center justify-between px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest"
+                style={{ color: "var(--theme-sidebar-text-muted)" }}
+              >
                 Operations
-              </p>
-              {operationsLinks
-                .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
-                .map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    data-testid={`nav-link-${link.label.toLowerCase().replace(/[^a-z]/g, "-")}`}
-                    className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
-                  >
-                    {link.icon}
-                    {link.label}
-                  </Link>
-                ))}
+                <svg
+                  className={`w-3 h-3 transition-transform ${openSections.operations ? "rotate-180" : ""}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {openSections.operations && (
+                operationsLinks
+                  .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
+                  .map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      data-testid={`nav-link-${link.label.toLowerCase().replace(/[^a-z]/g, "-")}`}
+                      className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
+                    >
+                      {link.icon}
+                      {link.label}
+                    </Link>
+                  ))
+              )}
             </>
           )}
 
           {/* ── Finance ─────────────────────────────────────────────────── */}
           {financeLinks.some((l) => (LINK_PERMISSIONS[l.href] ?? []).some((p) => hasPermission(p))) && (
             <>
-              <p className="px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest" style={{ color: "var(--theme-sidebar-text-muted)" }}>
+              <button
+                type="button"
+                data-testid="nav-section-toggle-finance"
+                onClick={() => toggleSection("finance")}
+                aria-expanded={openSections.finance}
+                className="w-full flex items-center justify-between px-3 pt-5 pb-1.5 text-[0.625rem] font-semibold uppercase tracking-widest"
+                style={{ color: "var(--theme-sidebar-text-muted)" }}
+              >
                 Finance
-              </p>
-              {financeLinks
-                .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
-                .map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
-                    data-testid={`nav-link-${link.label.toLowerCase().replace(/[^a-z]/g, "-")}`}
-                    className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
-                  >
-                    {link.icon}
-                    {link.label}
-                  </Link>
-                ))}
+                <svg
+                  className={`w-3 h-3 transition-transform ${openSections.finance ? "rotate-180" : ""}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {openSections.finance && (
+                financeLinks
+                  .filter((link) => (LINK_PERMISSIONS[link.href] ?? []).some((p) => hasPermission(p)))
+                  .map((link) => (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      data-testid={`nav-link-${link.label.toLowerCase().replace(/[^a-z]/g, "-")}`}
+                      className={`sidebar-link ${pathname === link.href || pathname?.startsWith(link.href + "/") ? "active" : ""}`}
+                    >
+                      {link.icon}
+                      {link.label}
+                    </Link>
+                  ))
+              )}
             </>
           )}
 
