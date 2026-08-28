@@ -4,12 +4,19 @@ import { PERMISSION_KEY, INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from 
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
+import { settledFromAllocations } from "../services/settlement";
 
 export const financeDashboardRouter = Router();
 financeDashboardRouter.use(authenticate);
 
 const D = (n: number | string | Prisma.Decimal): Prisma.Decimal =>
   n instanceof Prisma.Decimal ? n : new Prisma.Decimal(String(n));
+
+// Settled = cash allocated to this invoice + that cash's pro-rata share of each allocating
+// payment's TDS (see services/settlement.ts). Raw PaymentReceived.amount summed via the
+// legacy invoiceId relation under-counts once a payment can be split across invoices or
+// carry TDS (Phase C) - this must stay the ONE definition of "paid" the dashboard uses,
+// same one recomputeInvoiceSettlement persists onto Invoice.status.
 
 financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FINANCE_DASHBOARD), async (_req, res) => {
   const zero = new Prisma.Decimal(0);
@@ -20,7 +27,7 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
     include: {
-      payments: { select: { amount: true } },
+      paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
       creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
     },
   });
@@ -28,7 +35,7 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
   let overdueCount = 0;
   let overdueValue = zero;
   for (const inv of invoices) {
-    const paid = inv.payments.reduce((s, p) => s.plus(D(p.amount)), zero);
+    const paid = settledFromAllocations(inv.paymentAllocations);
     const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(D(cn.total)), zero);
     const netTotal = D(inv.total).minus(cnTotal);
     const balance = (netTotal.isNegative() ? zero : netTotal).minus(paid);
@@ -70,7 +77,7 @@ financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_
   const invoices = await prisma.invoice.findMany({
     where: { status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
     include: {
-      payments: { select: { amount: true } },
+      paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
       creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
       customer: { select: { id: true, name: true } },
     },
@@ -78,7 +85,7 @@ financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_
 
   const byCustomer = new Map<string, any>();
   for (const inv of invoices) {
-    const paid = inv.payments.reduce((s, p) => s.plus(D(p.amount)), new Prisma.Decimal(0));
+    const paid = settledFromAllocations(inv.paymentAllocations);
     const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(D(cn.total)), new Prisma.Decimal(0));
     const netTotal = D(inv.total).minus(cnTotal);
     const balance = (netTotal.isNegative() ? new Prisma.Decimal(0) : netTotal).minus(paid);

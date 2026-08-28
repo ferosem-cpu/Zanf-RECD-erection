@@ -18,6 +18,7 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
+import { issuedCreditNoteTotal, netInvoiceTotal, deriveInvoiceStatus, recomputeInvoiceSettlement, settledFromAllocations } from "../services/settlement";
 
 export const invoicesRouter = Router();
 invoicesRouter.use(authenticate);
@@ -35,38 +36,30 @@ async function invoiceSummary(tx: Prisma.TransactionClient, id: string) {
       order: { select: { id: true, orderNumber: true } },
       quotation: { select: { id: true, quoteNumber: true } },
       lineItems: { orderBy: { sortOrder: "asc" } },
-      payments: true,
+      // The legacy `payments` relation only shows payments still carrying THIS invoice's id
+      // (true for the single-invoice sugar route, not for a payment split across invoices via
+      // POST /payments) - paymentAllocations is the complete picture (Phase C) and is what the
+      // settlement math and the payment-history display below both use.
+      paymentAllocations: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          payment: {
+            include: {
+              allocations: { include: { invoice: { select: { id: true, invoiceNumber: true } } } },
+            },
+          },
+        },
+      },
       creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, orderBy: { issueDate: "desc" } },
       editLogs: { orderBy: { editedAt: "desc" }, include: { editedBy: { select: { name: true } } } },
     },
   });
 }
 
-// Invoice status/outstanding math is always computed against the NET total - the invoice's
-// own total minus any ISSUED credit notes against it (draft/cancelled CNs have no effect,
-// same convention as Invoice's own draft/cancelled states). This is the one extension point
-// Phase A's ledger.ts already anticipated; nothing here changes what's stored on Invoice
-// itself (total/status stay the gross document total + payment-derived status) - callers
-// that need the net figure compute it via netInvoiceTotal() below rather than mutating total.
-export async function issuedCreditNoteTotal(tx: Prisma.TransactionClient, invoiceId: string): Promise<Prisma.Decimal> {
-  const notes = await tx.creditNote.findMany({
-    where: { invoiceId, status: CREDIT_NOTE_STATUS.ISSUED },
-    select: { total: true },
-  });
-  return notes.reduce((s, n) => s.plus(n.total), new Prisma.Decimal(0));
-}
-
-export function netInvoiceTotal(total: Prisma.Decimal, creditNoteTotal: Prisma.Decimal): Prisma.Decimal {
-  const net = total.minus(creditNoteTotal);
-  return net.isNegative() ? new Prisma.Decimal(0) : net;
-}
-
-export function deriveInvoiceStatus(total: Prisma.Decimal, paid: Prisma.Decimal): string {
-  if (total.isZero()) return INVOICE_STATUS.PAID;
-  if (paid.isZero()) return INVOICE_STATUS.ISSUED;
-  if (paid.greaterThanOrEqualTo(total)) return INVOICE_STATUS.PAID;
-  return INVOICE_STATUS.PARTIALLY_PAID;
-}
+// Invoice status/outstanding math (issuedCreditNoteTotal, netInvoiceTotal, deriveInvoiceStatus,
+// recomputeInvoiceSettlement) now lives in services/settlement.ts (Phase C) - moved there so
+// routes/payments.ts and routes/credit-notes.ts share the same implementation instead of each
+// route file keeping its own copy that could drift once a payment could span several invoices.
 
 invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async (req: AuthenticatedRequest, res) => {
   const where: Record<string, unknown> = {};
@@ -78,7 +71,7 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
     where,
     include: {
       customer: { select: { id: true, name: true } },
-      payments: { select: { amount: true } },
+      paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
       creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
     },
     // Sort by invoice number (ascending) so the list follows the actual document sequence
@@ -92,7 +85,7 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
 
   const now = new Date();
   const rows = invoices.map((inv) => {
-    const paid = inv.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+    const paid = settledFromAllocations(inv.paymentAllocations);
     const creditNoteTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
     const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), creditNoteTotal);
     const balance = netTotal.minus(paid);
@@ -108,7 +101,7 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
       netTotal,
       balance,
       overdue,
-      payments: undefined,
+      paymentAllocations: undefined,
       creditNotes: undefined,
     };
   });
@@ -174,7 +167,7 @@ invoicesRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
   } catch {
     return res.status(404).json({ error: "Invoice not found" });
   }
-  const paid = inv.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+  const paid = settledFromAllocations(inv.paymentAllocations);
   const creditNoteTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
   const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), creditNoteTotal);
   const now = new Date();
@@ -190,14 +183,25 @@ invoicesRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
     netTotal,
     balance: netTotal.minus(paid),
     overdue,
-    payments: inv.payments.map((p) => ({
-      id: p.id,
-      amount: p.amount,
-      method: p.method,
-      reference: p.reference,
-      receivedDate: p.receivedDate,
-      notes: p.notes,
+    // One row per PaymentAllocation touching this invoice (not per PaymentReceived) - a
+    // payment split across several invoices shows up here once, with otherInvoices listing
+    // where the rest of it went, so the amount shown always matches what actually settled
+    // THIS invoice.
+    payments: inv.paymentAllocations.map((a) => ({
+      id: a.payment.id,
+      allocationId: a.id,
+      amount: a.amount,
+      tdsAmount: a.payment.tdsAmount,
+      tdsCertificateRef: a.payment.tdsCertificateRef,
+      method: a.payment.method,
+      reference: a.payment.reference,
+      receivedDate: a.payment.receivedDate,
+      notes: a.payment.notes,
+      otherInvoices: a.payment.allocations
+        .filter((other) => other.invoiceId !== inv.id)
+        .map((other) => ({ id: other.invoice.id, invoiceNumber: other.invoice.invoiceNumber, amount: other.amount })),
     })),
+    paymentAllocations: undefined,
   });
 });
 
@@ -288,15 +292,19 @@ invoicesRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
         };
       }
       // Amounts changing after payments were already recorded means the paid-vs-total
-      // relationship may have shifted (e.g. total raised above what was paid) - recompute
-      // status the same way a new payment would, rather than leaving a stale "paid" status
-      // on an invoice whose corrected total is no longer fully covered.
-      const paidSoFar = existing.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-      const cnTotal = existing.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
-      updateData.status = deriveInvoiceStatus(netInvoiceTotal(totals.total, cnTotal), paidSoFar);
+      // relationship may have shifted (e.g. total raised above what was paid) - recomputed
+      // below via recomputeInvoiceSettlement right after the update, rather than leaving a
+      // stale "paid" status on an invoice whose corrected total is no longer fully covered.
     }
 
-    const updated = await tx.invoice.update({ where: { id }, data: updateData, include: { lineItems: true } });
+    let updated = await tx.invoice.update({ where: { id }, data: updateData, include: { lineItems: true } });
+    if (data.lineItems || placeOfSupplyChanged) {
+      const { status: recomputedStatus } = await recomputeInvoiceSettlement(tx, id);
+      updateData.status = recomputedStatus;
+      if (recomputedStatus !== updated.status) {
+        updated = await tx.invoice.findUniqueOrThrow({ where: { id }, include: { lineItems: true } });
+      }
+    }
 
     // Build a human-readable diff for the audit log - only for invoices that were already a
     // real document (issued/partially_paid/paid), and only fields that actually changed.
@@ -439,6 +447,7 @@ invoicesRouter.post(
     const netTotal = netInvoiceTotal(new Prisma.Decimal(existing.total), cnTotal);
     const outstanding = netTotal.minus(paidBefore);
     const amount = new Prisma.Decimal(String(data.amount));
+    const tdsAmount = data.tdsAmount !== undefined ? new Prisma.Decimal(String(data.tdsAmount)) : new Prisma.Decimal(0);
     if (amount.greaterThan(outstanding)) {
       return res.status(400).json({ error: "Payment exceeds the outstanding balance" });
     }
@@ -449,20 +458,26 @@ invoicesRouter.post(
         include: { customer: { select: { id: true, name: true, contacts: { select: { id: true } } } } },
       });
 
+      // Sugar route: this payment covers exactly this one invoice, so it gets a matching
+      // full-amount PaymentAllocation alongside the legacy invoiceId - recomputeInvoiceSettlement
+      // below is what actually derives the new status (from the allocation, not `amount` here).
       await tx.paymentReceived.create({
         data: {
           invoiceId: inv.id,
+          customerId: inv.customerId,
           amount,
+          tdsAmount,
+          tdsCertificateRef: data.tdsCertificateRef,
           method: data.method,
           reference: data.reference,
           receivedDate: data.receivedDate ? new Date(data.receivedDate) : new Date(),
           notes: data.notes,
           recordedById: req.auth!.userId,
+          allocations: { create: { invoiceId: inv.id, amount } },
         },
       });
 
-      const newPaid = paidBefore.plus(amount);
-      const newStatus = deriveInvoiceStatus(netTotal, newPaid);
+      const { status: newStatus, outstanding: newOutstanding } = await recomputeInvoiceSettlement(tx, inv.id);
       const updated = await tx.invoice.update({
         where: { id: inv.id },
         data: { status: newStatus },
@@ -476,7 +491,7 @@ invoicesRouter.post(
           await send({
             recipientId: contact.id,
             templateKey: "payment_received",
-            data: { invoiceNumber: updated.invoiceNumber, amount: amount.toString(), balance: netTotal.minus(newPaid).toString() },
+            data: { invoiceNumber: updated.invoiceNumber, amount: amount.toString(), balance: newOutstanding.toString() },
           });
         } catch (err) {
           console.error("Notification failed", err);
@@ -514,7 +529,10 @@ invoicesRouter.put(
 
     const invoice = await prisma.invoice.findUnique({
       where: { id },
-      include: { payments: true, creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } } },
+      include: {
+        payments: true,
+        creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
+      },
     });
     if (!invoice) return res.status(404).json({ error: "Invoice not found" });
     if (invoice.status === INVOICE_STATUS.CANCELLED) {
@@ -522,6 +540,14 @@ invoicesRouter.put(
     }
     const payment = invoice.payments.find((p) => p.id === paymentId);
     if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+    // This legacy per-invoice endpoint only understands a single-invoice payment - once a
+    // payment has been split across more than one invoice (or allocated elsewhere) it has to
+    // be corrected via PATCH /payments/:id or its allocations instead (see routes/payments.ts).
+    const allocationCount = await prisma.paymentAllocation.count({ where: { paymentId } });
+    if (allocationCount > 1) {
+      return res.status(400).json({ error: "This payment is split across multiple invoices - edit it from the Payments page instead" });
+    }
 
     const otherPaid = invoice.payments.filter((p) => p.id !== paymentId).reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
     const newAmount = data.amount !== undefined ? new Prisma.Decimal(String(data.amount)) : new Prisma.Decimal(payment.amount);
@@ -542,8 +568,13 @@ invoicesRouter.put(
           notes: data.notes,
         },
       });
+      // Keep the single allocation in sync with the corrected amount so settlement math
+      // (which reads allocations, not PaymentReceived.amount directly) stays consistent.
+      if (data.amount !== undefined) {
+        await tx.paymentAllocation.updateMany({ where: { paymentId }, data: { amount: newAmount } });
+      }
 
-      const newStatus = deriveInvoiceStatus(netTotal, otherPaid.plus(newAmount));
+      const { status: newStatus } = await recomputeInvoiceSettlement(tx, id);
       const updatedInvoice = await tx.invoice.update({ where: { id }, data: { status: newStatus } });
 
       const changes: string[] = [];
@@ -586,13 +617,15 @@ invoicesRouter.delete(
     const payment = invoice.payments.find((p) => p.id === paymentId);
     if (!payment) return res.status(404).json({ error: "Payment not found" });
 
-    const remainingPaid = invoice.payments.filter((p) => p.id !== paymentId).reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-    const cnTotal = invoice.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
-    const netTotal = netInvoiceTotal(new Prisma.Decimal(invoice.total), cnTotal);
+    const allocationCount = await prisma.paymentAllocation.count({ where: { paymentId } });
+    if (allocationCount > 1) {
+      return res.status(400).json({ error: "This payment is split across multiple invoices - remove it from the Payments page instead" });
+    }
 
     const updated = await prisma.$transaction(async (tx) => {
+      // PaymentAllocation rows cascade-delete with the payment (onDelete: Cascade in schema).
       await tx.paymentReceived.delete({ where: { id: paymentId } });
-      const newStatus = deriveInvoiceStatus(netTotal, remainingPaid);
+      const { status: newStatus } = await recomputeInvoiceSettlement(tx, id);
       const updatedInvoice = await tx.invoice.update({ where: { id }, data: { status: newStatus } });
       await tx.invoiceEditLog.create({
         data: {

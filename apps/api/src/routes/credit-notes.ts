@@ -17,7 +17,7 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
-import { issuedCreditNoteTotal, netInvoiceTotal, deriveInvoiceStatus } from "./invoices";
+import { issuedCreditNoteTotal, recomputeInvoiceSettlement } from "../services/settlement";
 
 export const creditNotesRouter = Router();
 creditNotesRouter.use(authenticate);
@@ -239,13 +239,9 @@ creditNotesRouter.post("/:id/issue", requirePermission(PERMISSION_KEY.MANAGE_CRE
       data: { status: CREDIT_NOTE_STATUS.ISSUED, noteNumber, issueDate: new Date() },
     });
 
-    const paid = existing.invoice.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-    const newIssuedTotal = otherIssuedTotal.plus(existing.total);
-    const netTotal = netInvoiceTotal(new Prisma.Decimal(existing.invoice.total), newIssuedTotal);
-    await tx.invoice.update({
-      where: { id: existing.invoiceId },
-      data: { status: deriveInvoiceStatus(netTotal, paid) },
-    });
+    // recomputeInvoiceSettlement re-reads issued credit notes (now including this one, since
+    // its status was just set above) plus allocation+TDS settlement, and persists the status.
+    await recomputeInvoiceSettlement(tx, existing.invoiceId);
 
     return issued;
   });
@@ -272,10 +268,9 @@ creditNotesRouter.post("/:id/cancel", requirePermission(PERMISSION_KEY.MANAGE_CR
     });
 
     if (existing.status === CREDIT_NOTE_STATUS.ISSUED) {
-      const remainingIssuedTotal = await issuedCreditNoteTotal(tx, existing.invoiceId);
-      const paid = existing.invoice.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-      const netTotal = netInvoiceTotal(new Prisma.Decimal(existing.invoice.total), remainingIssuedTotal);
-      await tx.invoice.update({ where: { id: existing.invoiceId }, data: { status: deriveInvoiceStatus(netTotal, paid) } });
+      // The CN's own status was just flipped to cancelled above, so issuedCreditNoteTotal
+      // inside recomputeInvoiceSettlement no longer counts it - same net effect as before.
+      await recomputeInvoiceSettlement(tx, existing.invoiceId);
     }
 
     return cancelled;

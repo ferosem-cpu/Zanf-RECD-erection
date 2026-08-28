@@ -8,7 +8,18 @@ import Link from "next/link";
 import { formatINR, formatDate, INVOICE_STATUS_LABEL, PAYMENT_METHOD_LABEL, CREDIT_NOTE_REASON_LABEL, statusPillClass } from "@/lib/finance";
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string; lineTotal: string; }
-interface Payment { id: string; amount: string; method: string; reference?: string | null; receivedDate: string; notes?: string | null; }
+interface OtherInvoiceAllocation { id: string; invoiceNumber: string; amount: string; }
+interface Payment {
+  id: string;
+  amount: string;
+  tdsAmount?: string;
+  tdsCertificateRef?: string | null;
+  method: string;
+  reference?: string | null;
+  receivedDate: string;
+  notes?: string | null;
+  otherInvoices?: OtherInvoiceAllocation[];
+}
 interface EditLog { id: string; summary: string; editedAt: string; editedBy: { name: string } }
 interface CreditNoteSummary { id: string; noteNumber: string; total: string; issueDate: string; reason: string; }
 interface InvoiceDetail {
@@ -97,17 +108,18 @@ export default function InvoiceDetailPage() {
   // a separate bulk endpoint) and the invoice is reloaded once at the end so the total shown
   // reflects the sum of everything just entered.
   const today = () => new Date().toISOString().slice(0, 10);
+  const emptyPayRow = () => ({ amount: "", tdsAmount: "", tdsCertificateRef: "", method: "bank_transfer", reference: "", receivedDate: today(), notes: "" });
   const [payOpen, setPayOpen] = useState(false);
-  const [payRows, setPayRows] = useState([{ amount: "", method: "bank_transfer", reference: "", receivedDate: today(), notes: "" }]);
+  const [payRows, setPayRows] = useState([emptyPayRow()]);
   const [payError, setPayError] = useState<string | null>(null);
 
   function openPay() {
     setPayError(null);
-    setPayRows([{ amount: "", method: "bank_transfer", reference: "", receivedDate: today(), notes: "" }]);
+    setPayRows([emptyPayRow()]);
     setPayOpen(true);
   }
   function addPayRow() {
-    setPayRows((r) => [...r, { amount: "", method: "bank_transfer", reference: "", receivedDate: today(), notes: "" }]);
+    setPayRows((r) => [...r, emptyPayRow()]);
   }
   function updatePayRow(i: number, patch: Partial<(typeof payRows)[number]>) {
     setPayRows((r) => r.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
@@ -123,6 +135,8 @@ export default function InvoiceDetailPage() {
       for (const row of payRows) {
         await api(`/invoices/${id}/payments`, { method: "POST", body: JSON.stringify({
           amount: parseFloat(row.amount),
+          tdsAmount: row.tdsAmount ? parseFloat(row.tdsAmount) : undefined,
+          tdsCertificateRef: row.tdsCertificateRef || undefined,
           method: row.method,
           reference: row.reference || undefined,
           receivedDate: row.receivedDate ? new Date(row.receivedDate).toISOString() : undefined,
@@ -332,21 +346,32 @@ export default function InvoiceDetailPage() {
         ) : (
           <div className="space-y-2 text-sm">
             {inv.payments.map((p) => (
-              <div key={p.id} className="flex justify-between items-center border-b pb-2 gap-3">
-                <div>
-                  <span className="font-medium">{formatINR(p.amount)}</span>
-                  <span className="text-gray-500 ml-2">{PAYMENT_METHOD_LABEL[p.method] ?? p.method}</span>
-                  {p.reference && <span className="text-gray-400 ml-2">({p.reference})</span>}
+              <div key={p.id} className="border-b pb-2 last:border-b-0 last:pb-0">
+                <div className="flex justify-between items-center gap-3">
+                  <div>
+                    <span className="font-medium">{formatINR(p.amount)}</span>
+                    <span className="text-gray-500 ml-2">{PAYMENT_METHOD_LABEL[p.method] ?? p.method}</span>
+                    {p.reference && <span className="text-gray-400 ml-2">({p.reference})</span>}
+                    {Number(p.tdsAmount ?? 0) > 0 && (
+                      <span className="text-gray-400 ml-2">+ {formatINR(p.tdsAmount!)} TDS{p.tdsCertificateRef ? ` (${p.tdsCertificateRef})` : ""}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-gray-500">{formatDate(p.receivedDate)}</span>
+                    {canRecord && (!p.otherInvoices || p.otherInvoices.length === 0) && (
+                      <>
+                        <button type="button" onClick={() => openEditPayment(p)} className="text-xs font-medium text-[var(--theme-accent)]">Edit</button>
+                        <button type="button" disabled={!!action} onClick={() => deletePayment(p.id)} className="text-xs font-medium text-red-500">Remove</button>
+                      </>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <span className="text-gray-500">{formatDate(p.receivedDate)}</span>
-                  {canRecord && (
-                    <>
-                      <button type="button" onClick={() => openEditPayment(p)} className="text-xs font-medium text-[var(--theme-accent)]">Edit</button>
-                      <button type="button" disabled={!!action} onClick={() => deletePayment(p.id)} className="text-xs font-medium text-red-500">Remove</button>
-                    </>
-                  )}
-                </div>
+                {p.otherInvoices && p.otherInvoices.length > 0 && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    This payment is split - also allocated to {p.otherInvoices.map((o) => `${o.invoiceNumber} (${formatINR(o.amount)})`).join(", ")}.
+                    Manage it from <Link href="/finance/payments" className="text-[var(--theme-accent)] hover:underline">Payments</Link>.
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -421,7 +446,7 @@ export default function InvoiceDetailPage() {
                 {payRows.map((r, i) => (
                   <div key={i} className="rounded-lg border border-gray-200 p-3 space-y-2">
                     <div className="grid grid-cols-2 gap-2">
-                      <input type="number" step="0.01" required className="field" placeholder="Amount (₹)" value={r.amount} onChange={(e) => updatePayRow(i, { amount: e.target.value })} />
+                      <input type="number" step="0.01" required className="field" placeholder="Amount received (₹)" value={r.amount} onChange={(e) => updatePayRow(i, { amount: e.target.value })} />
                       <input type="date" required className="field" value={r.receivedDate} onChange={(e) => updatePayRow(i, { receivedDate: e.target.value })} />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -430,11 +455,19 @@ export default function InvoiceDetailPage() {
                         <option value="upi">UPI</option>
                         <option value="cheque">Cheque</option>
                         <option value="cash">Cash</option>
-                        <option value="tds">TDS Deducted</option>
                         <option value="other">Other</option>
                       </select>
-                      <input className="field" placeholder="Reference (UTR / cheque no / TDS certificate)" value={r.reference} onChange={(e) => updatePayRow(i, { reference: e.target.value })} />
+                      <input className="field" placeholder="Reference (UTR / cheque no)" value={r.reference} onChange={(e) => updatePayRow(i, { reference: e.target.value })} />
                     </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="number" step="0.01" className="field" placeholder="TDS deducted (₹, optional)" value={r.tdsAmount} onChange={(e) => updatePayRow(i, { tdsAmount: e.target.value })} />
+                      <input className="field" placeholder="TDS certificate ref (optional)" value={r.tdsCertificateRef} onChange={(e) => updatePayRow(i, { tdsCertificateRef: e.target.value })} disabled={!r.tdsAmount} />
+                    </div>
+                    {r.tdsAmount && (
+                      <p className="text-xs text-gray-400">
+                        This settles {formatINR(String((parseFloat(r.amount) || 0) + (parseFloat(r.tdsAmount) || 0)))} of the invoice ({formatINR(r.amount || "0")} cash + {formatINR(r.tdsAmount)} TDS).
+                      </p>
+                    )}
                     {payRows.length > 1 && (
                       <button type="button" onClick={() => removePayRow(i)} className="text-xs text-red-500">Remove this row</button>
                     )}
@@ -444,8 +477,8 @@ export default function InvoiceDetailPage() {
               <button type="button" onClick={addPayRow} className="text-xs font-medium text-[var(--theme-accent)]">+ Add another part-payment</button>
 
               <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm flex justify-between">
-                <span className="text-gray-500">Total of {payRows.length} row{payRows.length === 1 ? "" : "s"}</span>
-                <span className="font-semibold">{formatINR(String(payRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)))}</span>
+                <span className="text-gray-500">Total settled by {payRows.length} row{payRows.length === 1 ? "" : "s"} (cash + TDS)</span>
+                <span className="font-semibold">{formatINR(String(payRows.reduce((s, r) => s + (parseFloat(r.amount) || 0) + (parseFloat(r.tdsAmount) || 0), 0)))}</span>
               </div>
 
               {payError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{payError}</p>}
@@ -477,7 +510,7 @@ export default function InvoiceDetailPage() {
                   <option value="upi">UPI</option>
                   <option value="cheque">Cheque</option>
                   <option value="cash">Cash</option>
-                  <option value="tds">TDS Deducted</option>
+                  {editPayForm.method === "tds" && <option value="tds">TDS Deducted (legacy)</option>}
                   <option value="other">Other</option>
                 </select>
               </div>

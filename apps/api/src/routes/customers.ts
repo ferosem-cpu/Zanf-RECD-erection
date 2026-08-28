@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@prisma/client";
 import { createCustomerSchema, updateCustomerSchema, PERMISSION_KEY, ROLE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -157,3 +158,26 @@ customersRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), 
   ]);
   res.status(204).end();
 });
+
+// Payments recorded for this customer with a positive unallocated remainder - i.e. money
+// on account that hasn't yet been applied to an invoice (see PaymentAllocation, Phase C).
+customersRouter.get(
+  "/:id/advances",
+  requirePermission(PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.MANAGE_INVOICES, PERMISSION_KEY.VIEW_LEDGERS),
+  async (req, res) => {
+    const id = asString(req.params.id);
+    const payments = await prisma.paymentReceived.findMany({
+      where: { customerId: id },
+      include: { allocations: { select: { amount: true } } },
+      orderBy: { receivedDate: "desc" },
+    });
+    const advances = payments
+      .map((p) => {
+        const allocated = p.allocations.reduce((s, a) => s.plus(a.amount), new Prisma.Decimal(0));
+        const unallocated = new Prisma.Decimal(p.amount).minus(allocated);
+        return { ...p, allocatedAmount: allocated, unallocatedAmount: unallocated, allocations: undefined };
+      })
+      .filter((p) => p.unallocatedAmount.greaterThan(0.01));
+    res.json(advances);
+  },
+);

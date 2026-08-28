@@ -392,10 +392,38 @@ same session:
   Finance-user walkthrough of `/finance/ledgers`, `/finance/credit-notes`,
   and `/finance/debit-notes` (draft a CN against a real issued tax invoice,
   issue it, confirm the invoice's balance/status update and the ledger
-  shows the credit movement). Phases C (payment allocation/advances/TDS)
-  and D (GST exports) from `docs/ACCOUNTING_LITE_PLAN.md` are not started
-  yet. The in-app AI assistant still has no tool to read ledgers or credit
-  notes — deliberately deferred by the user to after all four phases.
+  shows the credit movement).
+- **Accounting-Lite Phase C is fully built (backend + admin-web frontend)
+  and both deploys are live in production; not yet click-tested by a real
+  Finance user** — see Changelog. Backend: `POST /payments` (split-across-
+  invoices + advances + TDS), `POST /payments/:id/allocations`, `GET
+  /customers/:id/advances`, and `GET /ledgers/tds` are deployed and
+  401-not-404 confirmed; every pre-existing production `PaymentReceived` row
+  was backfilled with a matching full-amount `PaymentAllocation` (11/11
+  verified). A **second** backend deploy shipped after the first because
+  `invoices.ts`/`credit-notes.ts`/`financeDashboard.ts` were hardened to
+  compute "paid" from the new allocation-based settlement helper everywhere
+  (list route, detail route, dashboard, receivables report) instead of the
+  legacy `payments.reduce` pattern, which would have silently undercounted
+  once a payment could be split or carry TDS — confirmed live (`/health` →
+  200, `/payments` and `/ledgers/tds` → 401 not 404) before any frontend
+  push, per the deploy-ordering rule. Frontend: `/finance/payments` (record
+  a payment with customer picker, TDS fields, auto-allocate oldest-first
+  across open invoices, editable split, live advance total), `/reports/tds`
+  (TDS register, fiscal-year selector, Print + CSV), the invoice detail
+  page's payment history (shows TDS inline, flags split payments with a link
+  to `/finance/payments`, hides Edit/Remove on split rows), the Record/Edit
+  Payment modals (TDS amount + certificate ref fields, "tds" method option
+  removed for new payments and shown only conditionally on legacy rows), and
+  `Nav.tsx` links for both new pages (riding on existing `record_payments`/
+  `view_ledgers` permissions, no new permission key needed, as anticipated)
+  — all built, `tsc --noEmit` and `next build` both clean on admin-web, and
+  pushed to `master` for Vercel's git-connected auto-deploy. Owed: a real
+  Finance-user walkthrough (record a split payment, confirm advance shows up,
+  pull the TDS register for a fiscal year). Phase D (GST exports) is not
+  started. The in-app AI assistant still has no tool to read ledgers, credit
+  notes, or payments — deliberately deferred by the user to after all four
+  phases.
 - **Every `DataTable` page has a Print button** (2026-08-20) — prints only
   the currently-filtered rows/visible columns with a full letterhead. Not yet
   click-tested live by the user (standing "agent can't log into admin-web"
@@ -490,6 +518,133 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Feature: Accounting-Lite Phase C — payment allocation, advances, TDS (2026-08-28)
+Third phase of `docs/ACCOUNTING_LITE_PLAN.md`, built immediately after Phase
+B per the user's "proceed" instruction, with the admin-web frontend added
+in the same session per a follow-up "proceed" — **this entry covers both
+backend and frontend, both deployed; see the Frontend section below for
+what shipped (superseding the "Pending Frontend" list this entry originally
+had).**
+**Schema** (`add_payment_allocations` migration, diffed against real
+production `information_schema.columns` before applying — no drift):
+`PaymentReceived.invoiceId` is now optional (an advance has none);
+`PaymentReceived` gained `customerId` (required, backfilled from each row's
+linked invoice before the NOT NULL constraint was added), `tdsAmount`
+(`Decimal(12,2)` default 0), and `tdsCertificateRef`; new
+`PaymentAllocation` model (`paymentId` cascade-deletes, `invoiceId`,
+`amount`, unique on `[paymentId, invoiceId]`) splits one payment's cash
+across one or more invoices — zero allocations (or a remainder after
+allocating) is a customer advance. The legacy `method: "tds"` value is
+untouched on old rows and still readable; it's just no longer how a *new*
+payment expresses TDS (that's the dedicated `tdsAmount` field now).
+**Backfill**: every pre-existing `PaymentReceived` row (11 in production, 7
+in local dev) got one `PaymentAllocation` for its full `amount` against its
+`invoiceId` — spot-checked with a join query (`allocation.amount =
+payment.amount` and `allocation.invoiceId = payment.invoiceId` for all
+rows, zero mismatches) so old payments settle exactly the same as before.
+**Shared**: `paymentCreateSchema` gained optional `tdsAmount`/
+`tdsCertificateRef`; new `paymentAllocationInputSchema`,
+`paymentReceivedCreateSchema` (customerId, amount, tdsAmount, method,
+allocations[] — refined so `sum(allocations) ≤ amount` (cash-only cap; TDS
+is never itself allocated, see settlement math below) and TDS can't exist
+with zero allocations), `paymentAllocationCreateSchema` (for adding one more
+allocation to an existing payment later). **New service**
+`apps/api/src/services/settlement.ts` — `issuedCreditNoteTotal`/
+`netInvoiceTotal`/`deriveInvoiceStatus` moved here from `invoices.ts` (Phase
+B had them there), plus new `settledAmountForInvoice` (sums an invoice's
+allocations *plus* each allocating payment's TDS pro-rated by that
+allocation's share of the payment's cash amount — the resolution to a real
+tension in the plan text between §3's literal refinement and §5.1's
+pro-rata formula, decided in favor of §5.1) and `recomputeInvoiceSettlement`
+(the one place invoice status/outstanding gets computed and persisted now —
+called after every payment create/update/delete, allocation change, and
+credit-note issue/cancel). `invoices.ts` and `credit-notes.ts` both import
+from `settlement.ts` instead of keeping their own copies. **New routes**:
+`apps/api/src/routes/payments.ts` mounted at `/payments` — `POST /` (create
+a payment + allocations transactionally, rejects over-allocation with 400
+before commit), `GET /` (all payments + allocated/unallocated amounts),
+`POST /:id/allocations` (allocate more of an existing advance/payment to an
+invoice later). `GET /customers/:id/advances` added to `customers.ts`
+(payments with a positive unallocated remainder). `GET /ledgers/tds?fy=`
+added to `ledgers.ts` (every TDS-bearing payment for an Indian fiscal year,
+grouped by customer — the 26AS reconciliation view). `POST
+/invoices/:id/payments` (the old single-invoice sugar route) now also
+creates a matching full-amount `PaymentAllocation` and sets `customerId` —
+unchanged from the caller's perspective. `PUT`/`DELETE
+/invoices/:id/payments/:paymentId` now refuse (400) to touch a payment that
+has been split across more than one invoice — correct it from the new
+Payments surface once that exists instead. **`ledger.ts` updated**:
+`buildCustomerLedger` now queries `PaymentReceived` by the direct
+`customerId` field (not through the now-optional `invoice` relation) and
+emits a separate `tds` movement type (credit) for any payment with
+`tdsAmount > 0` — added to `LedgerEntryType`. **`financeDashboard.ts`**'s
+`/summary` and `/reports/receivables` switched from raw `payments.reduce`
+(which undercounts once a payment can be split or carry TDS) to the same
+allocation+pro-rata-TDS settlement math as `recomputeInvoiceSettlement`, so
+there is exactly one definition of "paid" across the dashboard, receivables
+report, and invoice status — per the plan's explicit warning not to leave
+two competing ones. **Verification**: `tsc --noEmit` clean; a scripted
+run of the plan's exact §8 end-to-end scenario against local dev DB (via
+`tsx`, calling the real service functions, not a mock) — ₹1,00,000 invoice →
+₹49,000 + ₹1,000 TDS allocated → `partially_paid`, outstanding ₹50,000 → CN
+₹10,000 → outstanding ₹40,000 → second payment ₹60,000 (₹40,000 allocated,
+₹20,000 advance) → `paid`, one ₹20,000 advance on the customer, ledger
+closing balance exactly −₹20,000 → over-allocating a smaller invoice
+produces negative outstanding (the exact signal `payments.ts` checks to
+reject with 400) — every figure matched exactly. Full manual `zan-app-api`
+deploy dance run (build this time ~5 min, back to the documented norm — the
+~50 min Phase B run was never explained and didn't recur); `payments.js`
+and the `/payments` mount confirmed present in the build output before
+deploying; `@recd/shared` (with the new schemas confirmed in its compiled
+`dist/schemas.js`) patched into the same 3 spots as Phases A/B; `/health` →
+200 and `/payments`, `/ledgers/tds`, `/customers/:id/advances` → 401 (not
+404) confirmed live in production; post-deploy spot-check of `Invoice`
+status counts showed no unexpected change (nothing has recomputed old
+invoices yet since nothing new has touched them — expected, not a bug).
+**Second backend deploy** (same day, before any frontend push): while
+building the frontend it became clear the invoice list (`GET /invoices`)
+and detail (`GET /invoices/:id`) routes, plus `financeDashboard.ts`'s
+`/summary` and `/reports/receivables`, were still computing "paid" via the
+legacy `payments.reduce()` pattern — correct for the old one-payment-one-
+invoice world but silently wrong once a payment can be split across
+invoices or carry TDS. Refactored all of them onto the same
+`settledFromAllocations` helper `recomputeInvoiceSettlement` uses, so there
+is exactly one definition of "paid" everywhere (the plan's explicit
+warning). Re-ran the full manual deploy dance (build, grep the compiled
+output for the changed routes, re-patch `@recd/shared` into the same 3
+spots, `vercel deploy --prebuilt --prod`); confirmed live: `/health` → 200,
+`/invoices`, `/payments`, `/ledgers/tds` all → 401 not 404. This deploy
+shipped *before* the frontend commit, per the deploy-ordering rule.
+**Frontend** (built and shipped in the same session, after both backend
+deploys were confirmed live): `/finance/payments` — customer picker, open
+invoices with outstanding shown, amount + TDS + method/date/reference/notes
+fields, `autoAllocate(cash)` fills oldest-first up to each invoice's
+balance with editable per-invoice overrides, live unallocated/advance
+total, submits to `POST /payments`. `/reports/tds` — fiscal-year selector,
+`GET /ledgers/tds?fy=` KPI tiles and per-customer table with subtotal
+footers, Print + CSV via the standard `ReportChrome` pattern. Invoice
+detail page (`invoices/[id]/page.tsx`): payment history now shows TDS
+inline (amount + certificate ref), flags any payment split across other
+invoices with a link to `/finance/payments` and hides its Edit/Remove
+buttons (matching the backend's 400-on-split-edit guard); Record Payment
+modal replaced the "tds" method option with dedicated TDS amount +
+certificate ref inputs and a settlement preview line; Edit Payment modal
+still renders "tds" as a method option, but only conditionally, for
+legacy rows that already use it. `apps/admin-web/src/app/finance/
+ledgers/page.tsx`'s `TYPE_LABEL` map — found missing `tds` and
+`credit_note` entries while wiring this up (pre-existing gap from Phase
+A/B, not new) — fixed alongside. `Nav.tsx` — added "Payments"
+(`/finance/payments`) and "TDS Register" (`/reports/tds`) links and their
+`LINK_PERMISSIONS` entries, riding on existing `record_payments`/
+`view_ledgers` (no new permission key needed, as anticipated). Verified
+`tsc --noEmit` and `next build` both clean on `admin-web` before pushing to
+`master` for Vercel's git-connected auto-deploy. **Not yet done**: a real
+Finance-user click-through (record a real split payment, confirm an
+advance shows up on the customer, pull the TDS register for a fiscal
+year and cross-check a couple of rows). **Also pending**: Phase D (GST
+exports, not started) and the in-app-agent tool wiring (still deliberately
+deferred to after Phase D).
 
 ### Feature: Accounting-Lite Phase B — Credit/Debit notes (2026-08-28)
 Second phase of `docs/ACCOUNTING_LITE_PLAN.md`, built immediately after

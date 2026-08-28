@@ -6,7 +6,7 @@ const D = (n: number | string | Prisma.Decimal): Prisma.Decimal =>
   n instanceof Prisma.Decimal ? n : new Prisma.Decimal(String(n));
 const ZERO = new Prisma.Decimal(0);
 
-export type LedgerEntryType = "opening_balance" | "invoice" | "payment" | "credit_note" | "bill" | "payment_made";
+export type LedgerEntryType = "opening_balance" | "invoice" | "payment" | "tds" | "credit_note" | "bill" | "payment_made";
 
 export interface LedgerEntry {
   date: Date;
@@ -117,9 +117,18 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
     where: { customerId, status: { in: INVOICE_LEDGER_STATUSES } },
     select: { id: true, invoiceNumber: true, issueDate: true, total: true },
   });
+  // Direct customerId query - invoiceId/invoice is now optional (payment may be an unallocated
+  // advance, or split across several invoices via PaymentAllocation; see ACCOUNTING_LITE_PLAN §5.2).
   const payments = await prisma.paymentReceived.findMany({
-    where: { invoice: { customerId } },
-    select: { id: true, amount: true, receivedDate: true, invoice: { select: { invoiceNumber: true } } },
+    where: { customerId },
+    select: {
+      id: true,
+      amount: true,
+      tdsAmount: true,
+      receivedDate: true,
+      invoice: { select: { invoiceNumber: true } },
+      allocations: { select: { invoice: { select: { invoiceNumber: true } } } },
+    },
   });
   // Issued credit notes reduce what the customer owes - a credit movement, same direction
   // as a payment. Draft/cancelled notes have no accounting effect (see credit-notes.ts).
@@ -127,6 +136,15 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
     where: { customerId, status: CREDIT_NOTE_STATUS.ISSUED },
     select: { id: true, noteNumber: true, issueDate: true, total: true },
   });
+
+  /** Best-effort human label for a payment's ref column: the legacy single invoice, the
+   * allocated invoice(s), or a generic label for an unallocated advance. */
+  const paymentRefLabel = (p: (typeof payments)[number]): string => {
+    if (p.invoice) return p.invoice.invoiceNumber;
+    if (p.allocations.length === 1) return p.allocations[0].invoice.invoiceNumber;
+    if (p.allocations.length > 1) return p.allocations.map((a) => a.invoice.invoiceNumber).join(", ");
+    return "Advance";
+  };
 
   const movements: RawMovement[] = [
     ...invoices.map((inv): RawMovement => ({
@@ -140,11 +158,21 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
     ...payments.map((p): RawMovement => ({
       date: p.receivedDate,
       type: "payment",
-      refNumber: p.invoice.invoiceNumber,
+      refNumber: paymentRefLabel(p),
       refId: p.id,
       debit: ZERO,
       credit: D(p.amount),
     })),
+    ...payments
+      .filter((p) => D(p.tdsAmount).gt(ZERO))
+      .map((p): RawMovement => ({
+        date: p.receivedDate,
+        type: "tds",
+        refNumber: `TDS - ${paymentRefLabel(p)}`,
+        refId: p.id,
+        debit: ZERO,
+        credit: D(p.tdsAmount),
+      })),
     ...creditNotes.map((cn): RawMovement => ({
       date: cn.issueDate,
       type: "credit_note",

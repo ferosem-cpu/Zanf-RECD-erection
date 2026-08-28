@@ -203,6 +203,24 @@ const financeLinks = [
       </svg>
     ),
   },
+  {
+    href: "/finance/payments",
+    label: "Payments",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3M3.75 6h16.5a1.5 1.5 0 011.5 1.5v9a1.5 1.5 0 01-1.5 1.5H3.75a1.5 1.5 0 01-1.5-1.5v-9a1.5 1.5 0 011.5-1.5z" />
+      </svg>
+    ),
+  },
+  {
+    href: "/reports/tds",
+    label: "TDS Register",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 3h6m-7.5 6h9a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z" />
+      </svg>
+    ),
+  },
 ];
 
 const phase2Links = [
@@ -257,6 +275,8 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/finance/ledgers": ["view_ledgers"],
   "/finance/credit-notes": ["manage_credit_notes"],
   "/finance/debit-notes": ["manage_credit_notes"],
+  "/finance/payments": ["record_payments", "view_ledgers"],
+  "/reports/tds": ["view_ledgers"],
   "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
 };
 

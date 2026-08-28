@@ -152,6 +152,7 @@ model Customer {
   savedItemPrices  CustomerSavedItemPrice[]
   purchaseOrders   CustomerPurchaseOrder[]
   creditNotes      CreditNote[]
+  paymentsReceived PaymentReceived[]
 }
 
 /// External erection subcontractor. Not part of Platino. Self-registers, is approved by
@@ -845,6 +846,7 @@ model Invoice {
   billAllocations BillAllocation[]
   customerPurchaseOrders CustomerPurchaseOrder[]
   creditNotes CreditNote[]
+  paymentAllocations PaymentAllocation[]
 }
 
 /// Audit trail for edits made to an invoice after it has already been issued/paid.
@@ -878,12 +880,28 @@ model InvoiceLineItem {
   sortOrder   Int     @default(0)
 }
 
+/// A customer receipt. `invoiceId` is legacy/optional now - real settlement is expressed
+/// through `allocations` below (Phase C), which is what lets one payment cover several
+/// invoices or sit unallocated as a customer advance. `invoiceId` is kept as a
+/// best-effort "primary" reference for old rows and for the single-invoice sugar route
+/// (POST /invoices/:id/payments), which still sets it alongside a matching full-amount
+/// allocation so nothing that reads it directly breaks.
 model PaymentReceived {
   id           String   @id @default(cuid())
-  invoiceId    String
-  invoice      Invoice  @relation(fields: [invoiceId], references: [id])
+  invoiceId    String?
+  invoice      Invoice? @relation(fields: [invoiceId], references: [id])
+  customerId   String
+  customer     Customer @relation(fields: [customerId], references: [id])
   amount       Decimal  @db.Decimal(12, 2)
-  /// bank_transfer | upi | cheque | cash | other  (PAYMENT_METHOD in shared)
+  /// Tax deducted at source by the customer on this receipt - a real settlement of the
+  /// receivable (not lost revenue; the customer remits it to the government on our
+  /// behalf), pro-rated across this payment's allocations when computing how much of
+  /// each invoice it settles (see services/settlement.ts). 0 for a payment with no TDS.
+  tdsAmount    Decimal  @db.Decimal(12, 2) @default(0)
+  tdsCertificateRef String?
+  /// bank_transfer | upi | cheque | cash | other  (PAYMENT_METHOD in shared). The legacy
+  /// "tds" value is still readable on old rows but no longer offered in the UI picker -
+  /// TDS is now the dedicated tdsAmount field on every payment, any method.
   method       String
   reference    String?  // UTR / cheque no / UPI ref
   receivedDate DateTime
@@ -891,6 +909,26 @@ model PaymentReceived {
   recordedById String
   recordedBy   User     @relation("PaymentReceivedRecorder", fields: [recordedById], references: [id])
   createdAt    DateTime @default(now())
+
+  allocations PaymentAllocation[]
+}
+
+/// Splits one PaymentReceived's cash amount across the invoice(s) it settles. A payment
+/// with allocations summing to less than its amount has the remainder sitting as an
+/// unallocated customer advance (GET /customers/:id/advances); one with zero allocations
+/// is a pure advance. amount here is the CASH portion credited to this invoice - the
+/// payment's tdsAmount is added on top pro-rata across allocations when computing how
+/// much of the invoice's value this settles (see recomputeInvoiceSettlement).
+model PaymentAllocation {
+  id        String          @id @default(cuid())
+  paymentId String
+  payment   PaymentReceived @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceId String
+  invoice   Invoice         @relation(fields: [invoiceId], references: [id])
+  amount    Decimal         @db.Decimal(12, 2)
+  createdAt DateTime        @default(now())
+
+  @@unique([paymentId, invoiceId])
 }
 
 /// Statutory GST credit note against an issued tax invoice (return, rate correction,

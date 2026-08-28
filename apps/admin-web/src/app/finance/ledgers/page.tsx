@@ -30,6 +30,8 @@ const TYPE_LABEL: Record<string, string> = {
   opening_balance: "Opening balance",
   invoice: "Invoice",
   payment: "Payment received",
+  tds: "TDS deducted",
+  credit_note: "Credit note",
   bill: "Bill",
   payment_made: "Payment made",
 };

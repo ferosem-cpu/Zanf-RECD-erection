@@ -374,9 +374,49 @@ export const paymentCreateSchema = z.object({
   reference: z.string().max(200).optional(),
   receivedDate: z.string().datetime().optional(),
   notes: z.string().max(1000).optional(),
+  tdsAmount: z.number().nonnegative().optional(),
+  tdsCertificateRef: z.string().max(200).optional(),
 });
 
 export const paymentUpdateSchema = paymentCreateSchema.partial();
+
+/// A payment recorded against a customer directly (not sugared onto one invoice) -
+/// the general Phase C entry point: allocate the CASH amount across zero or more
+/// invoices, with any remainder sitting as an unallocated advance. Each allocation's
+/// `amount` is the cash portion sent to that invoice; the payment's tdsAmount is added
+/// on top, pro-rated across allocations by their share of `amount`, when computing how
+/// much of each invoice's value this settles (see services/settlement.ts) - so
+/// allocations must sum to at most the cash `amount`, never amount + tdsAmount.
+export const paymentAllocationInputSchema = z.object({
+  invoiceId: z.string().min(1),
+  amount: z.number().positive("Allocation amount must be > 0"),
+});
+
+export const paymentReceivedCreateSchema = z
+  .object({
+    customerId: z.string().min(1),
+    amount: z.number().positive("Amount must be > 0"),
+    tdsAmount: z.number().nonnegative().default(0),
+    tdsCertificateRef: z.string().max(200).optional(),
+    method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]),
+    reference: z.string().max(200).optional(),
+    receivedDate: z.string().datetime().optional(),
+    notes: z.string().max(1000).optional(),
+    allocations: z.array(paymentAllocationInputSchema).default([]),
+  })
+  .refine((d) => d.allocations.reduce((s, a) => s + a.amount, 0) <= d.amount + 0.01, {
+    message: "Allocations cannot exceed the cash amount received",
+    path: ["allocations"],
+  })
+  .refine((d) => d.allocations.length > 0 || d.tdsAmount === 0, {
+    message: "TDS must be tied to at least one invoice allocation",
+    path: ["tdsAmount"],
+  });
+
+export const paymentAllocationCreateSchema = z.object({
+  invoiceId: z.string().min(1),
+  amount: z.number().positive("Allocation amount must be > 0"),
+});
 
 export const supplierCreateSchema = z.object({
   name: z.string().min(1),
