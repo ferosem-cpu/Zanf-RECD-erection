@@ -40,6 +40,23 @@ purchaseOrdersRouter.put("/suppliers/:id", requirePermission(PERMISSION_KEY.MANA
   res.json(supplier);
 });
 
+// Payments made to this supplier with no bill attached - i.e. money paid out that hasn't yet
+// been applied to a bill (mirrors GET /customers/:id/advances, Phase C). PaymentMade has no
+// allocation table like PaymentReceived does, so "advance" here is simply billId === null,
+// rather than a positive unallocated remainder.
+purchaseOrdersRouter.get(
+  "/suppliers/:id/advances",
+  requirePermission(PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.APPROVE_VENDOR_INVOICE, PERMISSION_KEY.VIEW_LEDGERS),
+  async (req, res) => {
+    const id = asString(req.params.id);
+    const advances = await prisma.paymentMade.findMany({
+      where: { supplierId: id, billId: null },
+      orderBy: { paidDate: "desc" },
+    });
+    res.json(advances);
+  },
+);
+
 // One-click "create supplier from vendor" affordance for the Vendor Invoices flow (an
 // erection Vendor is a separate model from Supplier - see Supplier.vendorId's doc comment).
 // Idempotent: if this vendor already has a linked Supplier, that row is returned unchanged

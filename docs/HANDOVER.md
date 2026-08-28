@@ -449,6 +449,20 @@ same session:
   invoice detail page never got the "show issued credit notes + net
   outstanding / Create credit note button" the plan called for back in
   Phase B — credit notes only surface via `/finance/credit-notes` today.
+- **Vendor advances (pay a supplier without a bill) are fully built; not yet
+  deployed or click-tested** (2026-08-28) — see Changelog. Backend: `POST
+  /bills/payments` (general endpoint, supports a pure advance or an
+  over-payment that auto-splits into one), `POST /bills/:id/apply-advance`,
+  `GET /bills/payments`, `GET /purchase-orders/suppliers/:id/advances` — all
+  verified by hitting the real dev server over HTTP, not deployed yet (owed:
+  the manual API deploy dance). Frontend: new `/finance/vendor-payments`
+  page and its `Nav.tsx` link — `tsc --noEmit`/`next build` clean, not yet
+  pushed. Owed once deployed: a real Finance-user walkthrough (record a pure
+  advance, record an over-payment and confirm the split, apply an advance to
+  a bill). Also note: applying an advance only works from the new Vendor
+  Payments page today — the bill detail page itself still has no
+  credit/advance section, the vendor-side counterpart of the Phase B gap
+  noted below.
 - **The in-app AI assistant now has read access to the whole Accounting-
   Lite module** (2026-08-28) — see Changelog. Three new tools:
   `get_customer_ledger`, `search_credit_notes`, `get_customer_advances`,
@@ -555,6 +569,61 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Feature: Vendor advances - pay a supplier without a bill (2026-08-28)
+Found while answering "how do I input an advance paid to a vendor": that feature simply didn't
+exist. Customers got it in Phase C (`PaymentReceived` + `PaymentAllocation`, over-payment sits
+as an unallocated advance); vendors never did. `PaymentMade.billId` was already nullable in the
+schema (no migration needed) but the only route that could create one, `POST /bills/:id/
+payments`, required an existing bill and hard-capped the amount at that bill's outstanding
+balance - there was no way to record money paid to a supplier that wasn't tied to a bill.
+
+**Backend** (`apps/api/src/routes/bills.ts`, new schemas in `packages/shared/src/schemas.ts`):
+`POST /bills/payments` (new, general endpoint, mirrors `POST /payments` for customers) takes
+`{ supplierId, billId?, amount, method, reference?, paidDate?, notes? }` - omit `billId`
+entirely for a pure advance, or pass it with an amount larger than the bill's outstanding
+balance and the excess is automatically split into a second, separate `PaymentMade` row with
+`billId: null` (same "over-payment becomes an advance" behavior as the customer side). The
+older `POST /:id/payments` route is untouched (still hard-caps at outstanding) so its existing
+call site keeps its simpler, stricter behavior. `POST /bills/:id/apply-advance` applies part or
+all of an existing unallocated advance to a specific bill later: since `PaymentMade` has no
+allocation/junction table the way `PaymentReceived` does, using the whole advance just points
+its `billId` at the bill, and using part of it shrinks the original row and creates a new
+bill-linked row for the applied amount. `GET /bills/payments` (list, `?supplierId=` filter) and
+`GET /purchase-orders/suppliers/:id/advances` (mirrors `GET /customers/:id/advances`; "advance"
+here is simply `billId === null`, not a positive-remainder calculation) round it out. Both new
+GET routes had to be registered *before* the pre-existing `GET /bills/:id` / had to avoid an
+existing `:id` param route, respectively - Express matches routes in registration order and a
+literal `/payments` or `/suppliers/:id/advances` segment can otherwise get swallowed by an
+earlier `:id` route. `services/ledger.ts`'s `buildSupplierLedger` already sourced every
+`PaymentMade` regardless of `billId` and already labelled a bill-less one "Payment / advance" -
+it needed no changes at all, so vendor advances show up correctly in `/finance/ledgers` (supplier
+view) immediately.
+
+**Frontend**: new `/finance/vendor-payments` page (`Nav.tsx` link under Finance, riding on the
+existing `record_payments`/`approve_vendor_invoice`/`view_ledgers` permissions, no new
+permission key). "Record vendor payment" modal: pick a supplier, optionally pick one of that
+supplier's open bills (shows each bill's live outstanding balance), enter the amount - the form
+previews the bill/advance split live as you type, matching what the server will actually do.
+Every vendor payment lists in a table (Supplier, Date, Amount, Method, "Applied to <bill>" or
+"Standing advance"); any standing advance gets an inline "Apply to a bill" action that opens a
+small second modal (pick a bill, adjust the amount, submit against `POST /bills/:id/apply-
+advance`).
+
+**Verification**: `tsc --noEmit` clean on `packages/shared` and `apps/api`; `tsc --noEmit` and
+`next build` clean on `admin-web`. Ran the actual endpoints (not a mock) against local dev DB
+by starting the real dev server and hitting it over HTTP with a real login token: created a
+pure advance and confirmed it listed via the new advances endpoint; paid a bill under its
+outstanding balance (no split) then paid it again for more than the remaining balance and
+confirmed the excess split into a second advance row and the bill's status flipped through
+`partially_paid` -> `paid` correctly; applied part of a separate advance to a fresh bill and
+confirmed the original advance row shrank by exactly the applied amount, a new bill-linked row
+appeared, and the bill's status updated. All test suppliers/bills/payments deleted afterward.
+Not yet deployed - the API side needs the manual Vercel deploy dance (not git-connected) before
+this is live; `admin-web` deploys automatically on push per its existing git connection. **Not
+yet done**: a real Finance-user walkthrough, and note the same known gap flagged for Phase B
+below (no credit/advance section on the bill detail page itself - applying an advance today
+only happens from the new Vendor Payments page, not from a bill's own detail view).
 
 ### Feature: In-app AI assistant gains Accounting-Lite read access (2026-08-28)
 With all four Accounting-Lite phases shipped, the standing restriction ("no new tool access

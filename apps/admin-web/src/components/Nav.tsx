@@ -213,6 +213,16 @@ const financeLinks = [
     ),
   },
   {
+    href: "/finance/vendor-payments",
+    label: "Vendor Payments",
+    icon: (
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3M3.75 6h16.5a1.5 1.5 0 011.5 1.5v9a1.5 1.5 0 01-1.5 1.5H3.75a1.5 1.5 0 01-1.5-1.5v-9a1.5 1.5 0 011.5-1.5z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14.25 4.5L17.25 1.5m0 0L20.25 4.5M17.25 1.5v6" />
+      </svg>
+    ),
+  },
+  {
     href: "/reports/tds",
     label: "TDS Register",
     icon: (
@@ -285,6 +295,7 @@ const LINK_PERMISSIONS: Record<string, string[]> = {
   "/finance/credit-notes": ["manage_credit_notes"],
   "/finance/debit-notes": ["manage_credit_notes"],
   "/finance/payments": ["record_payments", "view_ledgers"],
+  "/finance/vendor-payments": ["record_payments", "approve_vendor_invoice", "view_ledgers"],
   "/reports/tds": ["view_ledgers"],
   "/reports/gst-returns": ["view_ledgers"],
   "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],

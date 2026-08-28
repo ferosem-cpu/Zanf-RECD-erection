@@ -573,6 +573,24 @@ export const paymentMadeCreateSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
 
+/**
+ * The general vendor-payment endpoint (mirrors paymentReceivedCreateSchema): supplierId is
+ * required (unlike paymentMadeCreateSchema, whose supplier is implied by the bill it's
+ * nested under at POST /bills/:id/payments) and billId is optional - omit it entirely to
+ * record a pure advance, or pass it with an amount larger than the bill's outstanding
+ * balance and the server splits the excess into an advance automatically.
+ */
+export const paymentMadeGeneralCreateSchema = paymentMadeCreateSchema.extend({
+  supplierId: z.string().min(1),
+});
+
+/** POST /bills/:id/apply-advance: apply part or all of an existing unallocated PaymentMade
+ * (billId still null) to this bill. */
+export const advanceApplicationCreateSchema = z.object({
+  paymentId: z.string().min(1),
+  amount: z.number().positive("Amount must be > 0"),
+});
+
 export const expenseCreateSchema = z.object({
   categoryId: z.string().min(1),
   description: z.string().min(1).max(500),

@@ -15,6 +15,8 @@ import {
   billRejectSchema,
   billExtractRequestSchema,
   paymentMadeCreateSchema,
+  paymentMadeGeneralCreateSchema,
+  advanceApplicationCreateSchema,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -225,6 +227,24 @@ billsRouter.post("/extract", requirePermission(...CAPTURE), async (req, res) => 
   }
 });
 
+// All vendor payments (and standing advances) across suppliers/bills - powers the Vendor
+// Payments admin page, mirroring GET /payments for customers. Registered before GET /:id so
+// "/bills/payments" isn't swallowed by the :id param route.
+billsRouter.get("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.APPROVE_VENDOR_INVOICE, PERMISSION_KEY.VIEW_LEDGERS), async (req, res) => {
+  const where: Record<string, unknown> = {};
+  if (typeof req.query.supplierId === "string") where.supplierId = req.query.supplierId;
+
+  const payments = await prisma.paymentMade.findMany({
+    where,
+    include: {
+      supplier: { select: { id: true, name: true } },
+      bill: { select: { id: true, billNumber: true } },
+    },
+    orderBy: { paidDate: "desc" },
+  });
+  res.json(payments);
+});
+
 // --- Detail / edit -----------------------------------------------------------
 billsRouter.get("/:id", requirePermission(...CAPTURE), async (req: AuthenticatedRequest, res) => {
   const id = asString(req.params.id);
@@ -425,6 +445,164 @@ billsRouter.post("/:id/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMEN
         actorId: req.auth!.userId,
         action: BILL_AUDIT_ACTION.PAYMENT_RECORDED,
         summary: `Payment recorded: Rs ${amount.toFixed(2)} (${data.method}); Status: ${bill.status} -> ${newStatus}`,
+      },
+    });
+    return updated;
+  });
+  res.status(201).json(result);
+});
+
+// The general vendor-payment endpoint (mirrors POST /payments for customers, Phase C): a
+// payment can be recorded against a specific bill, left entirely unallocated as a supplier
+// advance (omit billId), or both at once - pay more than a bill's outstanding balance and
+// the excess is automatically split off into a separate advance PaymentMade row, the same
+// way an over-payment becomes a customer advance. Kept separate from POST /:id/payments
+// above (which still hard-caps at the bill's outstanding balance) so that existing call site
+// keeps its simpler, stricter behaviour.
+billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS), async (req: AuthenticatedRequest, res) => {
+  const parsed = paymentMadeGeneralCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const data = parsed.data;
+
+  const supplier = await prisma.supplier.findUnique({ where: { id: data.supplierId }, select: { id: true } });
+  if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+
+  const amount = new Prisma.Decimal(String(data.amount));
+  const paidDate = data.paidDate ? new Date(data.paidDate) : new Date();
+
+  if (!data.billId) {
+    // Pure advance - no bill to validate against.
+    const created = await prisma.paymentMade.create({
+      data: {
+        supplierId: data.supplierId,
+        amount,
+        method: data.method,
+        reference: data.reference,
+        paidDate,
+        notes: data.notes,
+        recordedById: req.auth!.userId,
+      },
+    });
+    return res.status(201).json(created);
+  }
+
+  const billId = data.billId;
+  const bill = await prisma.bill.findUnique({ where: { id: billId }, include: { payments: true } });
+  if (!bill) return res.status(404).json({ error: "Bill not found" });
+  if (bill.supplierId !== data.supplierId) return res.status(400).json({ error: "Bill does not belong to this supplier" });
+  if (![BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID].includes(bill.status as never)) {
+    return res.status(400).json({ error: "Only an approved (or partially paid) vendor invoice can receive payments" });
+  }
+  const paidBefore = bill.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+  const outstanding = new Prisma.Decimal(bill.total).minus(paidBefore);
+  const appliedAmount = Prisma.Decimal.min(amount, outstanding.isNegative() ? new Prisma.Decimal(0) : outstanding);
+  const advanceAmount = amount.minus(appliedAmount);
+
+  const result = await prisma.$transaction(async (tx) => {
+    if (appliedAmount.greaterThan(0)) {
+      await tx.paymentMade.create({
+        data: {
+          billId,
+          supplierId: data.supplierId,
+          amount: appliedAmount,
+          method: data.method,
+          reference: data.reference,
+          paidDate,
+          notes: data.notes,
+          recordedById: req.auth!.userId,
+        },
+      });
+    }
+    if (advanceAmount.greaterThan(0.01)) {
+      await tx.paymentMade.create({
+        data: {
+          supplierId: data.supplierId,
+          amount: advanceAmount,
+          method: data.method,
+          reference: data.reference,
+          paidDate,
+          notes: data.notes ? `${data.notes} (advance)` : "Advance (paid alongside a bill payment)",
+          recordedById: req.auth!.userId,
+        },
+      });
+    }
+    const newPaid = paidBefore.plus(appliedAmount);
+    const newStatus = deriveBillStatus(new Prisma.Decimal(bill.total), newPaid);
+    const updated = await tx.bill.update({ where: { id: billId }, data: { status: newStatus } });
+    const summary = advanceAmount.greaterThan(0.01)
+      ? `Payment recorded: Rs ${appliedAmount.toFixed(2)} (${data.method}) against this bill, Rs ${advanceAmount.toFixed(2)} held as a supplier advance; Status: ${bill.status} -> ${newStatus}`
+      : `Payment recorded: Rs ${appliedAmount.toFixed(2)} (${data.method}); Status: ${bill.status} -> ${newStatus}`;
+    await tx.billAuditLog.create({
+      data: { billId, actorId: req.auth!.userId, action: BILL_AUDIT_ACTION.PAYMENT_RECORDED, summary },
+    });
+    return updated;
+  });
+  res.status(201).json({ ...result, advanceAmount });
+});
+
+// Apply part or all of an existing, still-unallocated supplier advance (a PaymentMade with
+// billId null) to a specific bill. Splits the advance in two when only part of it is used:
+// the original row shrinks by the applied amount, and a new billId-linked row is created for
+// the applied portion - PaymentMade has no allocation/junction table (unlike PaymentReceived's
+// PaymentAllocation), so this is the simplest way to keep one advance usable across several
+// bills over time without a schema change.
+billsRouter.post("/:id/apply-advance", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  const parsed = advanceApplicationCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const data = parsed.data;
+
+  const bill = await prisma.bill.findUnique({ where: { id }, include: { payments: true } });
+  if (!bill) return res.status(404).json({ error: "Bill not found" });
+  if (![BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID].includes(bill.status as never)) {
+    return res.status(400).json({ error: "Only an approved (or partially paid) vendor invoice can receive payments" });
+  }
+
+  const advance = await prisma.paymentMade.findUnique({ where: { id: data.paymentId } });
+  if (!advance) return res.status(404).json({ error: "Advance payment not found" });
+  if (advance.billId) return res.status(400).json({ error: "This payment is already applied to a bill" });
+  if (advance.supplierId !== bill.supplierId) return res.status(400).json({ error: "Advance does not belong to this bill's supplier" });
+
+  const paidBefore = bill.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+  const outstanding = new Prisma.Decimal(bill.total).minus(paidBefore);
+  const applyAmount = new Prisma.Decimal(String(data.amount));
+  if (applyAmount.greaterThan(outstanding.plus(0.01))) {
+    return res.status(400).json({ error: "Amount exceeds the bill's outstanding balance" });
+  }
+  if (applyAmount.greaterThan(new Prisma.Decimal(advance.amount).plus(0.01))) {
+    return res.status(400).json({ error: "Amount exceeds the advance's remaining balance" });
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const remaining = new Prisma.Decimal(advance.amount).minus(applyAmount);
+    if (remaining.lessThanOrEqualTo(0.01)) {
+      // Using the whole advance - just point the existing row at this bill.
+      await tx.paymentMade.update({ where: { id: advance.id }, data: { billId: id } });
+    } else {
+      // Using part of it - shrink the original advance and create a new bill-linked row.
+      await tx.paymentMade.update({ where: { id: advance.id }, data: { amount: remaining } });
+      await tx.paymentMade.create({
+        data: {
+          billId: id,
+          supplierId: advance.supplierId,
+          amount: applyAmount,
+          method: advance.method,
+          reference: advance.reference,
+          paidDate: advance.paidDate,
+          notes: `Applied from advance recorded ${advance.paidDate.toISOString().slice(0, 10)}`,
+          recordedById: req.auth!.userId,
+        },
+      });
+    }
+    const newPaid = paidBefore.plus(applyAmount);
+    const newStatus = deriveBillStatus(new Prisma.Decimal(bill.total), newPaid);
+    const updated = await tx.bill.update({ where: { id }, data: { status: newStatus } });
+    await tx.billAuditLog.create({
+      data: {
+        billId: id,
+        actorId: req.auth!.userId,
+        action: BILL_AUDIT_ACTION.PAYMENT_RECORDED,
+        summary: `Advance applied: Rs ${applyAmount.toFixed(2)}; Status: ${bill.status} -> ${newStatus}`,
       },
     });
     return updated;
