@@ -4,6 +4,8 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
 import { buildCustomerLedger, buildSupplierLedger } from "../services/ledger";
+import { buildGstr1, buildGstr3b } from "../services/gstExport";
+import { buildCsv } from "../lib/csv";
 
 export const ledgersRouter = Router();
 ledgersRouter.use(authenticate);
@@ -89,4 +91,83 @@ ledgersRouter.get("/tds", async (req, res) => {
     totalsByCustomer: Array.from(totalsByCustomer.values()),
     grandTotalTds: rows.reduce((s, r) => s + Number(r.tdsAmount), 0),
   });
+});
+
+function parseRequiredRange(req: any, res: any): { from: Date; to: Date } | null {
+  const fromStr = asOptionalString(req.query.from);
+  const toStr = asOptionalString(req.query.to);
+  if (!fromStr || !toStr) {
+    res.status(400).json({ error: "from and to (YYYY-MM-DD) are both required" });
+    return null;
+  }
+  const from = new Date(fromStr);
+  const to = new Date(toStr);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) {
+    res.status(400).json({ error: "from/to must be valid dates" });
+    return null;
+  }
+  // Inclusive end-of-day so a same-day range and a "to" date with no time component
+  // both include documents issued on that day.
+  to.setUTCHours(23, 59, 59, 999);
+  return { from, to };
+}
+
+// GSTR-1 B2B + CDNR for an issue-date range. ?format=csv streams two CSV sections
+// (B2B rows, then a blank line, then CDNR rows) instead of the JSON shape.
+ledgersRouter.get("/gst/gstr1", async (req, res) => {
+  const range = parseRequiredRange(req, res);
+  if (!range) return;
+  const result = await buildGstr1(range.from, range.to);
+
+  if (asOptionalString(req.query.format) === "csv") {
+    const b2bCsv = buildCsv(
+      ["Invoice No", "Invoice Date", "Customer", "GSTIN", "Place of Supply", "Rate %", "Taxable Value", "CGST", "SGST", "IGST", "Invoice Value"],
+      result.b2b.map((r) => [r.invoiceNumber, r.invoiceDate.toISOString().slice(0, 10), r.customerName, r.customerGstin ?? "", r.placeOfSupply ?? "", r.taxRatePct, r.taxableValue, r.cgstAmount, r.sgstAmount, r.igstAmount, r.invoiceValue]),
+    );
+    const cdnrCsv = buildCsv(
+      ["Note No", "Note Date", "Invoice No", "Customer", "GSTIN", "Place of Supply", "Rate %", "Taxable Value", "CGST", "SGST", "IGST", "Note Value"],
+      result.cdnr.map((r) => [r.noteNumber, r.noteDate.toISOString().slice(0, 10), r.invoiceNumber, r.customerName, r.customerGstin ?? "", r.placeOfSupply ?? "", r.taxRatePct, r.taxableValue, r.cgstAmount, r.sgstAmount, r.igstAmount, r.noteValue]),
+    );
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="gstr1-b2b-cdnr.csv"`);
+    return res.send(`B2B\r\n${b2bCsv}\r\n\r\nCDNR\r\n${cdnrCsv}`);
+  }
+
+  res.json(result);
+});
+
+// GSTR-3B summary (3.1a output tax net of issued CNs, 4A eligible ITC) for a date range.
+ledgersRouter.get("/gst/gstr3b", async (req, res) => {
+  const range = parseRequiredRange(req, res);
+  if (!range) return;
+  const result = await buildGstr3b(range.from, range.to);
+
+  if (asOptionalString(req.query.format) === "csv") {
+    const csv = buildCsv(
+      ["Field", "Value"],
+      [
+        ["Period from", range.from.toISOString().slice(0, 10)],
+        ["Period to", range.to.toISOString().slice(0, 10)],
+        ["Outward taxable value", result.outwardTaxableValue],
+        ["Outward CGST", result.outwardCgst],
+        ["Outward SGST", result.outwardSgst],
+        ["Outward IGST", result.outwardIgst],
+        ["Credit note taxable value", result.creditNoteTaxableValue],
+        ["Credit note CGST", result.creditNoteCgst],
+        ["Credit note SGST", result.creditNoteSgst],
+        ["Credit note IGST", result.creditNoteIgst],
+        ["Net taxable value (3.1a)", result.netTaxableValue],
+        ["Net CGST", result.netCgst],
+        ["Net SGST", result.netSgst],
+        ["Net IGST", result.netIgst],
+        ["Net output tax", result.netOutputTax],
+        ["Eligible ITC (4A)", result.eligibleItc],
+      ],
+    );
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="gstr3b-summary.csv"`);
+    return res.send(csv);
+  }
+
+  res.json(result);
 });

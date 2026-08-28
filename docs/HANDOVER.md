@@ -420,10 +420,39 @@ same session:
   — all built, `tsc --noEmit` and `next build` both clean on admin-web, and
   pushed to `master` for Vercel's git-connected auto-deploy. Owed: a real
   Finance-user walkthrough (record a split payment, confirm advance shows up,
-  pull the TDS register for a fiscal year). Phase D (GST exports) is not
-  started. The in-app AI assistant still has no tool to read ledgers, credit
-  notes, or payments — deliberately deferred by the user to after all four
-  phases.
+  pull the TDS register for a fiscal year).
+- **Accounting-Lite Phase D (GST exports) is fully built and both deploys
+  are live in production; not yet click-tested by a real Finance user** —
+  see Changelog. No schema migration was needed (every field the exports
+  read — `gstin`, `placeOfSupply`, `cgst/sgst/igstAmount` — already existed
+  from Phases A-B). New `GET /ledgers/gst/gstr1?from=&to=` (B2B + CDNR,
+  JSON or `?format=csv`) and `GET /ledgers/gst/gstr3b?from=&to=` (3.1a net
+  of issued CNs + 4A eligible ITC) confirmed live (`/health` → 200, both
+  routes → 401 not 404) and functionally verified by running the exact
+  service functions against local dev data (`tsx`, not a mock) — a
+  cross-check that `sum(B2B taxable value)` exactly equals the GSTR-3B
+  `outwardTaxableValue` passed on real seeded invoices, including one
+  correctly detected as interstate (IGST-only, no CGST/SGST). New
+  `/reports/gst-returns` page (month/quarter picker, GSTR-1 B2B + CDNR
+  tables, GSTR-3B summary tiles, Print + CSV per section) and its `Nav.tsx`
+  link (riding on `view_ledgers`, no new permission key). `tsc --noEmit`
+  and `next build` both clean on admin-web before pushing to `master`.
+  **This closes out all four Accounting-Lite phases from
+  `docs/ACCOUNTING_LITE_PLAN.md`** — the module (party ledgers, credit/debit
+  notes, payment allocation + advances + TDS, GST exports) is now fully
+  built and deployed end to end. Owed: a real Finance-user walkthrough of
+  every phase (see the Phase A-C bullets above), and specifically for Phase
+  D — pull a GSTR-1/3B for a real filing period and have someone who
+  actually files these sanity-check the numbers against last period's real
+  filing before relying on it. Also a known pre-existing gap found while
+  building this, not part of Phase D's own scope and not yet fixed: the
+  invoice detail page never got the "show issued credit notes + net
+  outstanding / Create credit note button" the plan called for back in
+  Phase B — credit notes only surface via `/finance/credit-notes` today.
+  The in-app AI assistant still has no tool to read ledgers, credit notes,
+  or payments — deliberately deferred by the user to after all four
+  phases, which are now done, so this is unblocked whenever the user wants
+  it taken up.
 - **Every `DataTable` page has a Print button** (2026-08-20) — prints only
   the currently-filtered rows/visible columns with a full letterhead. Not yet
   click-tested live by the user (standing "agent can't log into admin-web"
@@ -518,6 +547,69 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Feature: Accounting-Lite Phase D — GST exports (2026-08-28)
+Fourth and final phase of `docs/ACCOUNTING_LITE_PLAN.md`, built the same day
+per the user's "proceed" instruction. **No schema migration** — every field
+these exports read (`Customer.gstin`, `Invoice/CreditNote.placeOfSupply`,
+`cgst/sgst/igstAmount`, `InvoiceLineItem/CreditNoteLineItem.taxRatePct`,
+`CompanySettings`' own GSTIN) was already added in Phases A-B; this phase
+is pure query composition and UI, nothing written to the database.
+**New service** `apps/api/src/services/gstExport.ts`: `buildGstr1(from, to)`
+returns B2B rows (one issued tax invoice, grouped by tax rate across its
+line items — most invoices have one rate so this is usually one row per
+invoice) and CDNR rows (issued credit notes, same per-rate grouping)
+between two issue dates; interstate vs intra-state is read directly off
+the document's own `igstAmount > 0` (never re-derived from a company/
+customer state comparison) — CGST+SGST split 50/50 or IGST wholesale on
+each rate group's computed tax accordingly. `buildGstr3b(from, to)` sums
+3.1a output tax from issued tax invoices, subtracts issued credit notes'
+tax in the same range (net taxable value + net CGST/SGST/IGST), and sums
+4A eligible ITC from vendor bills whose `billDate` falls in range and
+whose status is `approved`/`partially_paid`/`paid` (excludes `uploaded`/
+`verified`-only, `rejected`, `cancelled`) — explicitly a filing **aid**,
+not a filing-ready return; a CA still reconciles and files GSTR-3B.
+**New** `apps/api/src/lib/csv.ts` — tiny dependency-free server-side CSV
+builder (same escaping + BOM convention as the existing client-side
+`apps/admin-web/src/lib/csvExport.ts`), per the plan's note that the API
+needed its own equivalent. **New routes** in `ledgers.ts` (`view_ledgers`):
+`GET /ledgers/gst/gstr1?from=&to=` and `GET /ledgers/gst/gstr3b?from=&to=`
+— both require `from`/`to` (400 if missing/invalid), return JSON by
+default or stream a CSV with `?format=csv`. **Verification**: `tsc
+--noEmit` clean; ran `buildGstr1`/`buildGstr3b` directly against local dev
+DB via `tsx` (the real service functions, not a mock, same pattern as
+Phase C's §8 script) over the full seeded date range — 7 B2B rows, 0 CDNR
+(no issued CN exists in local dev right now), and a cross-check that
+`sum(B2B taxable value)` exactly equals GSTR-3B's `outwardTaxableValue`
+(₹37,09,679 both sides); one seeded invoice correctly came back
+IGST-only (interstate) with zero CGST/SGST, confirming the
+interstate-detection logic. Full manual `zan-app-api` deploy dance (build
+~4 min); `gstExport.js`/`csv.js`/the two new route handlers confirmed
+present in the build output before deploying; `@recd/shared` patched into
+the same 3 spots as every prior phase (unchanged this phase — no shared
+schema additions were needed); `/health` → 200 and both new routes → 401
+not 404 confirmed live in production. **Frontend**: `/reports/gst-returns`
+— period-type toggle (Month / Indian-FY-aligned Quarter, i.e. Apr-Jun/
+Jul-Sep/Oct-Dec/Jan-Mar) driving both API calls, a GSTR-3B summary card
+(KPI tiles + a taxable-value/CGST/SGST/IGST table: outward, less credit
+notes, net) and two GSTR-1 tables (B2B, CDNR), each with its own Export
+CSV button — CSV is built client-side from the already-fetched JSON via
+the existing `downloadCsv` helper (matching the TDS report page's
+convention) rather than hitting the API's own `?format=csv`, which stays
+available for direct/CA use outside the UI. `Nav.tsx` link added (riding
+on `view_ledgers`, no new permission key, as anticipated). Verified `tsc
+--noEmit` and `next build` both clean on `admin-web` (`/reports/gst-
+returns` compiles as a static route) before pushing to `master`. **Not
+yet done**: a real Finance-user click-through, and specifically having
+someone who actually files GST sanity-check a real period's GSTR-1/3B
+output against what was actually filed. **Also found, not fixed** (see
+Current open items): the invoice detail page still doesn't show issued
+credit notes or a "Create credit note" button, a Phase B gap this phase's
+work surfaced but didn't touch, since it's out of Phase D's own scope.
+**This is the last of the four Accounting-Lite phases** — Phase D was the
+final item in `docs/ACCOUNTING_LITE_PLAN.md`'s implementation order. The
+in-app AI assistant tool wiring (deliberately deferred by the user to
+after all four phases) is now unblocked whenever it's wanted.
 
 ### Feature: Accounting-Lite Phase C — payment allocation, advances, TDS (2026-08-28)
 Third phase of `docs/ACCOUNTING_LITE_PLAN.md`, built immediately after Phase
