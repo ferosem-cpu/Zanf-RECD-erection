@@ -449,10 +449,18 @@ same session:
   invoice detail page never got the "show issued credit notes + net
   outstanding / Create credit note button" the plan called for back in
   Phase B — credit notes only surface via `/finance/credit-notes` today.
-  The in-app AI assistant still has no tool to read ledgers, credit notes,
-  or payments — deliberately deferred by the user to after all four
-  phases, which are now done, so this is unblocked whenever the user wants
-  it taken up.
+- **The in-app AI assistant now has read access to the whole Accounting-
+  Lite module** (2026-08-28) — see Changelog. Three new tools:
+  `get_customer_ledger`, `search_credit_notes`, `get_customer_advances`,
+  plus `search_invoices` and `get_document_detail` (docType `invoice`)
+  were fixed to use the allocation-based settlement math instead of a
+  legacy raw-payments sum that undercounted split/TDS payments (the same
+  bug class fixed in the REST routes back in Phase C, just missed here
+  until now). Still no new WRITE tools for this module — an AI assistant
+  proposing a payment/credit-note/allocation on its own was deliberately
+  left out of scope; only reads. Deployed and confirmed live. Not yet
+  click-tested by asking the assistant a real account-standing question
+  in production chat.
 - **Every `DataTable` page has a Print button** (2026-08-20) — prints only
   the currently-filtered rows/visible columns with a full letterhead. Not yet
   click-tested live by the user (standing "agent can't log into admin-web"
@@ -547,6 +555,41 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Feature: In-app AI assistant gains Accounting-Lite read access (2026-08-28)
+With all four Accounting-Lite phases shipped, the standing restriction ("no new tool access
+until all four phases are complete") lifted, and the user asked to wire it up. Read-only, per
+the plan's own note ("no new write tools this phase") — an AI assistant proposing a payment,
+credit note, or allocation on its own was judged out of scope, matching how conservatively the
+rest of the write-tool surface (`zanAppWriteTools.ts`) was built (draft-only, always needs a
+human's explicit Confirm click). **Three new tools** in `apps/api/src/agent/tools/
+zanAppReadTools.ts`: `get_customer_ledger` (wraps `services/ledger.ts`'s
+`buildCustomerLedger` — the Phase A statement, permission `view_ledgers`), `search_credit_notes`
+(note number/invoice number/customer name, permission `manage_credit_notes`), and
+`get_customer_advances` (mirrors `GET /customers/:id/advances`'s query exactly, permission
+`record_payments`/`manage_invoices`/`view_ledgers`). **Also fixed while in here**:
+`search_invoices` and `get_document_detail`'s `invoice` case (`apps/api/src/agent/tools/
+zanAppDetailTool.ts`) were still summing the legacy raw `payments` relation — the exact bug
+class already fixed in the invoices/credit-notes/financeDashboard REST routes during Phase C,
+just never carried over to the agent tools at the time. Both now use
+`settledFromAllocations`/`netInvoiceTotal` from `services/settlement.ts`, so `amountPaid`/
+`balance` the assistant reports match what a human sees in the UI exactly, and the invoice
+detail tool now also surfaces `creditNoteTotal` and the `creditNotes` array (previously
+invisible to the agent entirely). `systemPrompt.ts` updated to tell staff-mode about all three
+new tools and when to reach for them ("how much does X owe us", "does X have an advance with
+us") instead of trying to add up individual invoices itself. **Verification**: `tsc --noEmit`
+clean; ran the actual tool handlers via `tsx` against local dev DB (not a mock, same pattern
+as every prior phase) with a synthetic `AgentAuthContext` carrying the relevant permissions —
+`get_customer_ledger` returned a real statement with a correct running balance,
+`get_document_detail` on a real invoice came back with `paymentAllocations` correctly stripped
+from the response and `amountPaid`/`balance` computed from allocations, `search_credit_notes`/
+`get_customer_advances` correctly returned empty (no issued CN or advance exists in local dev
+right now, consistent with Phase D's GST-export verification finding the same). No schema
+change, no `@recd/shared` change — pure `apps/api/src` addition, one deploy dance, confirmed
+live (`/health` → 200; `/ledgers/customer/:id` and `/credit-notes` still → 401 not 404, i.e.
+the routes these tools call under the hood weren't disturbed). **Not yet done**: actually
+asking the assistant an account-standing question in a real production chat session — this
+was verified at the function level, not through a live LLM tool-call round-trip.
 
 ### Feature: Accounting-Lite Phase D — GST exports (2026-08-28)
 Fourth and final phase of `docs/ACCOUNTING_LITE_PLAN.md`, built the same day

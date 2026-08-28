@@ -6,8 +6,10 @@
  * the DB, so Decimal precision loss here is safe.
  */
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY } from "@recd/shared";
+import { PERMISSION_KEY, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
+import { buildCustomerLedger } from "../../services/ledger";
+import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const RESULT_LIMIT = 15;
@@ -121,8 +123,10 @@ const searchInvoices: AgentTool = {
   name: "search_invoices",
   description:
     "Search invoices (proforma or tax invoice) by invoice number or customer name. Returns " +
-    "id, invoiceNumber, docType, customer, status, issueDate, dueDate, total, amountPaid, " +
-    "balance, and whether it's overdue. Use get_document_detail for line items/payments.",
+    "id, invoiceNumber, docType, customer, status, issueDate, dueDate, total, creditNoteTotal " +
+    "(sum of any issued credit notes against it), amountPaid, balance (net of credit notes, " +
+    "after allocated payments and pro-rated TDS), and whether it's overdue. Use " +
+    "get_document_detail for line items/payments/credit notes.",
   inputSchema: {
     type: "object",
     properties: {
@@ -141,21 +145,30 @@ const searchInvoices: AgentTool = {
           ? { OR: [{ invoiceNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }] }
           : {}),
       },
-      include: { customer: { select: { name: true } }, payments: { select: { amount: true } } },
+      include: {
+        customer: { select: { name: true } },
+        // paymentAllocations (not the legacy `payments` relation) is the complete picture
+        // since Phase C - a payment split across invoices or carrying TDS would otherwise
+        // be undercounted here, same fix already applied to the REST routes.
+        paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
+        creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
+      },
       orderBy: { invoiceNumber: "asc" },
       take: RESULT_LIMIT,
     });
     const now = Date.now();
     return invoices.map((inv) => {
-      const paid = inv.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-      const balance = new Prisma.Decimal(inv.total).minus(paid);
+      const paid = settledFromAllocations(inv.paymentAllocations);
+      const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+      const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), cnTotal);
+      const balance = netTotal.minus(paid);
       const overdue = ["issued", "partially_paid"].includes(inv.status) && !!inv.dueDate && inv.dueDate.getTime() < now;
       return {
         id: inv.id,
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
         docType: inv.docType, customer: inv.customer.name, status: inv.status,
         issueDate: inv.issueDate, dueDate: inv.dueDate, total: num(inv.total),
-        amountPaid: num(paid), balance: num(balance), overdue,
+        creditNoteTotal: num(cnTotal), amountPaid: num(paid), balance: num(balance), overdue,
       };
     });
   },
@@ -498,6 +511,116 @@ const searchProducts: AgentTool = {
   },
 };
 
+const getCustomerLedger: AgentTool = {
+  name: "get_customer_ledger",
+  description:
+    "Get one customer's running account statement (Accounting-Lite Phase A) - a date-ordered " +
+    "list of every issued invoice (debit), payment received including TDS (credit), and " +
+    "issued credit note (credit) against them, with a running balance and an opening/closing " +
+    "balance for the range. A positive closing balance means the customer owes us that much; " +
+    "negative means we're holding an unallocated advance from them. Resolve the customerId " +
+    "with search_customers first. Omit from/to for the full history.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      customerId: { type: "string", description: "Customer id, from search_customers." },
+      from: { type: "string", description: "Optional start date, YYYY-MM-DD." },
+      to: { type: "string", description: "Optional end date, YYYY-MM-DD." },
+    },
+    required: ["customerId"],
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.VIEW_LEDGERS)) return forbidden("ledgers");
+    const customerId = String(input.customerId ?? "");
+    if (!customerId) return { error: "customerId is required." };
+    const customer = await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true, name: true } });
+    if (!customer) return { error: `No customer found with id ${customerId}.` };
+    const from = input.from ? new Date(String(input.from)) : undefined;
+    const to = input.to ? new Date(String(input.to)) : undefined;
+    const statement = await buildCustomerLedger(customerId, from, to);
+    return { customer: customer.name, ...statement };
+  },
+};
+
+const searchCreditNotes: AgentTool = {
+  name: "search_credit_notes",
+  description:
+    "Search GST credit notes (Accounting-Lite Phase B) by note number, invoice number, or " +
+    "customer name. Returns id, noteNumber, status, reason, invoice it's against, customer, " +
+    "issueDate, and total. Use get_document_detail (docType 'invoice') on the invoice to see " +
+    "all credit notes issued against it alongside its payment history.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Note number, invoice number, or customer name (partial match)." },
+      status: { type: "string", description: "Optional filter: draft | issued | cancelled" },
+    },
+  },
+  handler: async (input, auth) => {
+    if (!auth.permissions.has(PERMISSION_KEY.MANAGE_CREDIT_NOTES)) return forbidden("credit notes");
+    const query = input.query ? String(input.query) : undefined;
+    const status = input.status ? String(input.status) : undefined;
+    const notes = await prisma.creditNote.findMany({
+      where: {
+        ...(status ? { status } : {}),
+        ...(query
+          ? {
+              OR: [
+                { noteNumber: { contains: query, mode: "insensitive" } },
+                { invoice: { invoiceNumber: { contains: query, mode: "insensitive" } } },
+                { customer: { name: { contains: query, mode: "insensitive" } } },
+              ],
+            }
+          : {}),
+      },
+      include: { customer: { select: { name: true } }, invoice: { select: { id: true, invoiceNumber: true } } },
+      orderBy: { issueDate: "desc" },
+      take: RESULT_LIMIT,
+    });
+    return notes.map((n) => ({
+      id: n.id, noteNumber: n.status === "draft" ? `DRAFT-${n.id}` : n.noteNumber, status: n.status,
+      reason: n.reason, customer: n.customer.name,
+      invoice: { id: n.invoice.id, invoiceNumber: n.invoice.invoiceNumber },
+      issueDate: n.issueDate, total: num(n.total),
+    }));
+  },
+};
+
+const getCustomerAdvances: AgentTool = {
+  name: "get_customer_advances",
+  description:
+    "Get one customer's unallocated payment advances (Accounting-Lite Phase C) - payments " +
+    "received that haven't been fully applied to an invoice yet. Returns each payment's " +
+    "amount, method, date, and the unallocated remainder still sitting as credit. Resolve " +
+    "the customerId with search_customers first.",
+  inputSchema: {
+    type: "object",
+    properties: { customerId: { type: "string", description: "Customer id, from search_customers." } },
+    required: ["customerId"],
+  },
+  handler: async (input, auth) => {
+    if (!hasAny(auth, [PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.MANAGE_INVOICES, PERMISSION_KEY.VIEW_LEDGERS]))
+      return forbidden("customer advances");
+    const customerId = String(input.customerId ?? "");
+    if (!customerId) return { error: "customerId is required." };
+    const payments = await prisma.paymentReceived.findMany({
+      where: { customerId },
+      include: { allocations: { select: { amount: true } } },
+      orderBy: { receivedDate: "desc" },
+    });
+    return payments
+      .map((p) => {
+        const allocated = p.allocations.reduce((s, a) => s.plus(a.amount), new Prisma.Decimal(0));
+        const unallocated = new Prisma.Decimal(p.amount).minus(allocated);
+        return {
+          id: p.id, amount: num(p.amount), method: p.method, receivedDate: p.receivedDate,
+          reference: p.reference, unallocatedAmount: num(unallocated),
+        };
+      })
+      .filter((p) => p.unallocatedAmount !== null && p.unallocatedAmount > 0.01);
+  },
+};
+
 export const zanAppReadTools: AgentTool[] = [
   searchCustomers,
   searchVendors,
@@ -511,4 +634,7 @@ export const zanAppReadTools: AgentTool[] = [
   searchSavedItems,
   searchProducts,
   getCustomerPricing,
+  getCustomerLedger,
+  searchCreditNotes,
+  getCustomerAdvances,
 ];

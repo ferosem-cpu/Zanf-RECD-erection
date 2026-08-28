@@ -2,8 +2,10 @@
  * zanAppReadTools search_* tools. Kept as one dispatched tool (rather than one per docType)
  * so the agent only has to remember one shape: docType + id.
  */
-import { PERMISSION_KEY } from "@recd/shared";
+import { Prisma } from "@prisma/client";
+import { PERMISSION_KEY, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
+import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const DOC_TYPES = [
@@ -48,18 +50,53 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
           invoices: { select: { id: true, invoiceNumber: true, status: true } },
         },
       });
-    case "invoice":
+    case "invoice": {
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_INVOICES)) return forbidden("invoices");
-      return prisma.invoice.findUnique({
+      const inv = await prisma.invoice.findUnique({
         where: { id },
         include: {
           customer: { select: { name: true, gstin: true, state: true, address: true } },
           order: { select: { orderNumber: true } },
           quotation: { select: { quoteNumber: true } },
           lineItems: { orderBy: { sortOrder: "asc" } },
-          payments: true,
+          // paymentAllocations (Phase C), not the legacy `payments` relation, is the complete
+          // picture - a payment split across invoices or carrying TDS would otherwise be
+          // undercounted, same fix already applied to the invoices.ts REST route.
+          paymentAllocations: {
+            orderBy: { createdAt: "desc" },
+            include: {
+              payment: {
+                include: { allocations: { include: { invoice: { select: { id: true, invoiceNumber: true } } } } },
+              },
+            },
+          },
+          creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, orderBy: { issueDate: "desc" } },
         },
       });
+      if (!inv) return null;
+      const paid = settledFromAllocations(inv.paymentAllocations);
+      const creditNoteTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
+      const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), creditNoteTotal);
+      return {
+        ...inv,
+        amountPaid: paid,
+        creditNoteTotal,
+        netTotal,
+        balance: netTotal.minus(paid),
+        // One row per PaymentAllocation (not per PaymentReceived) - a payment split across
+        // several invoices shows up here once, with otherInvoices listing where the rest
+        // went, so the amount shown always matches what actually settled THIS invoice.
+        payments: inv.paymentAllocations.map((a) => ({
+          id: a.payment.id, amount: a.amount, tdsAmount: a.payment.tdsAmount,
+          tdsCertificateRef: a.payment.tdsCertificateRef, method: a.payment.method,
+          reference: a.payment.reference, receivedDate: a.payment.receivedDate,
+          otherInvoices: a.payment.allocations
+            .filter((other) => other.invoiceId !== inv.id)
+            .map((other) => ({ id: other.invoice.id, invoiceNumber: other.invoice.invoiceNumber, amount: other.amount })),
+        })),
+        paymentAllocations: undefined,
+      };
+    }
     case "purchase_order":
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS)) return forbidden("purchase orders");
       return prisma.purchaseOrder.findUnique({
@@ -134,9 +171,11 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
 export const getDocumentDetailTool: AgentTool = {
   name: "get_document_detail",
   description:
-    "Get the full detail (all line items / payments / contacts, not just a summary) of one " +
-    "specific record, given its id and type. Get the id from one of the search_* tools first " +
-    `(never guess an id). docType must be one of: ${DOC_TYPES.join(", ")}.`,
+    "Get the full detail (all line items / payments / issued credit notes / contacts, not " +
+    "just a summary) of one specific record, given its id and type. For an invoice, this " +
+    "includes amountPaid/creditNoteTotal/balance computed net of any issued credit notes and " +
+    "pro-rated TDS, plus the creditNotes array itself. Get the id from one of the search_* " +
+    `tools first (never guess an id). docType must be one of: ${DOC_TYPES.join(", ")}.`,
   inputSchema: {
     type: "object",
     properties: {
