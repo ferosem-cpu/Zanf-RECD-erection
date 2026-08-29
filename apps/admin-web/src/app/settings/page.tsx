@@ -18,6 +18,7 @@ import { extractDominantColors, colorsToTheme } from "@/lib/colorExtractor";
 import { api } from "@/lib/apiClient";
 import AgentProvidersSettings from "@/components/AgentProvidersSettings";
 import AgentVisibilitySettings from "@/components/AgentVisibilitySettings";
+import BackupSettings from "@/components/BackupSettings";
 
 export default function SettingsPage() {
   const [activeTheme, setActiveTheme] = useState("slate");
@@ -482,6 +483,7 @@ export default function SettingsPage() {
       {/* ── In-app agent LLM providers ──────────────────────────────────── */}
       <AgentProvidersSettings />
       <AgentVisibilitySettings />
+      <BackupSettings />
 
       <section className="card p-4 sm:p-6">
         <h2 className="text-base sm:text-lg font-semibold mb-1">Saved Items</h2>

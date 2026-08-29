@@ -30,6 +30,7 @@ import { agentTestRouter } from "./routes/agentTest";
 import { agentProvidersRouter } from "./routes/agentProviders";
 import { agentConversationsRouter } from "./routes/agentConversations";
 import { agentCronRouter } from "./routes/agentCron";
+import { backupRouter } from "./routes/backup";
 
 const app = express();
 app.use(cors());
@@ -69,6 +70,7 @@ app.use("/agent", agentTestRouter);
 app.use("/agent", agentProvidersRouter);
 app.use("/agent", agentConversationsRouter);
 app.use("/agent", agentCronRouter);
+app.use("/backup", backupRouter);
 
 // Catches anything a route handler throws or rejects with (Express 5 forwards rejected
 // async handlers here automatically) so a downstream failure - like the database being

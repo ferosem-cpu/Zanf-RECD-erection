@@ -625,3 +625,17 @@ export const settingsCompanyUpdateSchema = z.object({
   quotationTerms: z.string().max(2000).optional(),
   defaultTaxRatePct: z.number().min(0).max(28).optional(),
 });
+
+export const backupMethodSchema = z.enum(["FULL", "INCREMENTAL"]);
+
+export const backupRunSchema = z.object({
+  method: backupMethodSchema,
+});
+
+export const backupSettingsUpdateSchema = z.object({
+  scheduleEnabled: z.boolean().optional(),
+  scheduleDayOfWeek: z.number().int().min(0).max(6).optional(),
+  scheduleHour: z.number().int().min(0).max(23).optional(),
+  scheduleMinute: z.number().int().min(0).max(59).optional(),
+  method: backupMethodSchema.optional(),
+});

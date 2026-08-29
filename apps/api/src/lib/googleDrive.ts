@@ -1,4 +1,5 @@
 import { google } from "googleapis";
+import { Readable } from "node:stream";
 
 // Separate from lib/googleAuth.ts (which verifies end-user Google Sign-In ID tokens via
 // GOOGLE_CLIENT_ID). This client authenticates as the dedicated company Drive account
@@ -62,6 +63,29 @@ export async function createDriveFolder(
   });
   if (!res.data.id || !res.data.webViewLink) {
     throw new Error("Drive did not return an id/webViewLink for the created folder");
+  }
+  return { id: res.data.id, webViewLink: res.data.webViewLink };
+}
+
+/**
+ * Uploads a small-to-medium file (backup JSON exports today, a few MB) into a Drive folder.
+ * Uses the `drive.file` scope this app already has (create/manage files the app itself
+ * creates), same as createDriveFolder above.
+ */
+export async function uploadDriveFile(
+  name: string,
+  mimeType: string,
+  content: Buffer | string,
+  parentFolderId: string,
+): Promise<{ id: string; webViewLink: string }> {
+  const drive = getDriveClient();
+  const res = await drive.files.create({
+    requestBody: { name, parents: [parentFolderId] },
+    media: { mimeType, body: Readable.from(typeof content === "string" ? Buffer.from(content) : content) },
+    fields: "id, webViewLink",
+  });
+  if (!res.data.id || !res.data.webViewLink) {
+    throw new Error("Drive did not return an id/webViewLink for the uploaded file");
   }
   return { id: res.data.id, webViewLink: res.data.webViewLink };
 }

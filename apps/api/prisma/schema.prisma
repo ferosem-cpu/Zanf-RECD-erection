@@ -100,6 +100,7 @@ model User {
   paymentsMade         PaymentMade[]      @relation("PaymentMadeRecorder")
   expensesRecorded     Expense[]          @relation("ExpenseRecorder")
   invoiceEdits         InvoiceEditLog[]   @relation("InvoiceEditor")
+  backupsTriggered     BackupLog[]        @relation("BackupTriggeredBy")
   creditNotesCreated   CreditNote[]       @relation("CreditNoteCreator")
   debitNotesCreated    DebitNote[]        @relation("DebitNoteCreator")
   workOrdersAssigned   WorkOrder[]        @relation("WorkOrderAssignee")
@@ -698,6 +699,68 @@ model CompanySettings {
   /// Free-text instructions from the admin, appended to the in-app agent's system prompt on
   /// every turn (e.g. "always ask for the delivery address before drafting an invoice").
   agentCustomInstructions String?
+}
+
+/// Fixed, non-growing dichotomy (per this schema's own "data, not code" rule at the top -
+/// enums are for genuinely structural categories that don't grow), so a real Prisma enum
+/// rather than a lookup table.
+enum BackupMethod {
+  FULL
+  INCREMENTAL
+}
+
+/// Singleton (see CompanySettings above for the same id-based-singleton pattern) holding the
+/// in-app backup schedule config. Manual backups (Settings -> Backup -> "Backup Now") don't
+/// touch this row except lastRunAt/lastRunStatus/lastFullBackupAt bookkeeping; the schedule
+/// fields only drive the Vercel Cron-triggered scheduled run (see POST
+/// /backup/internal/run-scheduled and the `crons` entry in vercel.json).
+model BackupSettings {
+  id                 String        @id @default("singleton")
+  scheduleEnabled    Boolean       @default(false)
+  /// 0 = Sunday ... 6 = Saturday, matching JS Date#getDay() - compared against the current
+  /// day in IST at run time.
+  scheduleDayOfWeek  Int           @default(0)
+  /// Hour/minute are stored for a future finer-grained scheduler; the Vercel Cron job that
+  /// actually fires this route runs once/day at a fixed UTC time (~1:00 AM IST) regardless of
+  /// these values, since Vercel Cron doesn't support less-than-daily granularity reliably -
+  /// see docs/HANDOVER.md.
+  scheduleHour       Int           @default(1)
+  scheduleMinute     Int           @default(0)
+  method             BackupMethod  @default(FULL)
+
+  lastRunAt          DateTime?
+  lastRunStatus      String?
+  /// Baseline timestamp an INCREMENTAL run diffs against; reset to "now" every time a FULL
+  /// run completes successfully.
+  lastFullBackupAt   DateTime?
+
+  /// Cached Google Drive folder id for the "Backups" subfolder under ZanF_DropBox, created
+  /// lazily on first scheduled run (see lib/googleDrive.ts's createDriveFolder).
+  driveBackupsFolderId String?
+
+  updatedAt          DateTime      @updatedAt
+}
+
+/// History of every backup run, manual or scheduled - shown in Settings -> Backup.
+model BackupLog {
+  id             String        @id @default(cuid())
+  method         BackupMethod
+  /// "manual" (Settings button, downloaded to the triggering user's browser) or "scheduled"
+  /// (Vercel Cron, uploaded to Drive) - plain string, not an enum, since this is closer to a
+  /// free-form source tag than a fixed domain category.
+  trigger        String
+  status         String
+  startedAt      DateTime      @default(now())
+  finishedAt     DateTime?
+  tableCount     Int?
+  rowCount       Int?
+  sizeBytes      Int?
+  driveFileId    String?
+  driveFileLink  String?
+  errorMessage   String?
+
+  triggeredById  String?
+  triggeredBy    User?         @relation("BackupTriggeredBy", fields: [triggeredById], references: [id])
 }
 
 /// A reusable billing line item (e.g. "Installation labour", "Crane hire") with a standard

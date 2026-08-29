@@ -11,6 +11,10 @@
     {
       "path": "/agent/cron/cleanup-conversations",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/backup/internal/run-scheduled",
+      "schedule": "30 19 * * *"
     }
   ]
 }
