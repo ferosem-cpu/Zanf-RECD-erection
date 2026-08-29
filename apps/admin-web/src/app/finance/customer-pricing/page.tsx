@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, type ReactNode } from "react";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+import { downloadCsv } from "@/lib/csvExport";
+import { ReportPrintHeader, ReportToolbar, useCompany } from "@/components/reports/ReportChrome";
 
 interface Customer {
   id: string;
@@ -37,6 +39,7 @@ interface SavedItemPriceRow {
 export default function CustomerPricingPage() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_quotations") || hasPermission("manage_invoices");
+  const company = useCompany();
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -136,6 +139,15 @@ export default function CustomerPricingPage() {
 
   const unpricedProducts = products.filter((p) => !productPrices.some((pp) => pp.productId === p.id));
   const unpricedSavedItems = savedItems.filter((i) => !savedItemPrices.some((sp) => sp.savedItemId === i.id));
+  const selectedCustomerName = customers.find((c) => c.id === customerId)?.name ?? "";
+
+  function exportCsv() {
+    const rows: (string | number)[][] = [
+      ...productPrices.map((pp) => ["Product", `${pp.productName} (${pp.productModel})`, pp.price]),
+      ...savedItemPrices.map((sp) => ["Saved item", sp.name, sp.price]),
+    ];
+    downloadCsv(`customer-pricing-${selectedCustomerName || customerId}`, ["Type", "Item", "Price"], rows);
+  }
 
   if (!canManage) {
     return <p className="text-sm text-gray-500">You don&apos;t have permission to view this page.</p>;
@@ -143,7 +155,18 @@ export default function CustomerPricingPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div>
+      <ReportToolbar
+        backHref="/finance"
+        onExportCsv={customerId ? exportCsv : undefined}
+        exportDisabled={!customerId || (productPrices.length === 0 && savedItemPrices.length === 0)}
+      />
+      <ReportPrintHeader
+        company={company}
+        title="Customer Pricing"
+        subtitle={selectedCustomerName ? `Negotiated prices — ${selectedCustomerName}` : "Negotiated prices"}
+      />
+
+      <div className="print:hidden">
         <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>
           Customer Pricing
         </h1>
@@ -154,7 +177,7 @@ export default function CustomerPricingPage() {
         </p>
       </div>
 
-      <div className="card p-4 sm:p-6">
+      <div className="card p-4 sm:p-6 print:hidden">
         <label className="block text-xs font-medium text-gray-500 mb-1">Customer</label>
         <select className="field w-full sm:w-96" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
           <option value="">Select a customer</option>
@@ -168,7 +191,7 @@ export default function CustomerPricingPage() {
 
       {customerId && (
         <>
-          <section className="card p-4 sm:p-6">
+          <section className="card p-4 sm:p-6 print:border-0 print:shadow-none">
             <h2 className="text-base font-semibold mb-3">Product prices</h2>
             {loading ? (
               <p className="text-sm text-gray-400">Loading…</p>
@@ -194,7 +217,7 @@ export default function CustomerPricingPage() {
                   />
                 ))}
                 {unpricedProducts.length > 0 && (
-                  <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-gray-100 mt-2">
+                  <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-gray-100 mt-2 print:hidden">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Add product</label>
                       <select className="field" value={newProductId} onChange={(e) => setNewProductId(e.target.value)}>
@@ -230,7 +253,7 @@ export default function CustomerPricingPage() {
             )}
           </section>
 
-          <section className="card p-4 sm:p-6">
+          <section className="card p-4 sm:p-6 print:border-0 print:shadow-none">
             <h2 className="text-base font-semibold mb-3">Saved item prices</h2>
             {loading ? (
               <p className="text-sm text-gray-400">Loading…</p>
@@ -248,7 +271,7 @@ export default function CustomerPricingPage() {
                   />
                 ))}
                 {unpricedSavedItems.length > 0 && (
-                  <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-gray-100 mt-2">
+                  <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-gray-100 mt-2 print:hidden">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Add saved item</label>
                       <select className="field" value={newSavedItemId} onChange={(e) => setNewSavedItemId(e.target.value)}>
@@ -311,22 +334,23 @@ function PriceRow({
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <span className="flex-1 min-w-[12rem] text-gray-800">{label}</span>
       {middle}
+      <span className="hidden print:inline w-32 text-gray-800">₹{Number(value).toLocaleString("en-IN")}</span>
       <input
         type="number"
         min={0}
         step="0.01"
-        className="field w-32"
+        className="field w-32 print:hidden"
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />
       <button
-        className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
+        className="text-sm font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50 print:hidden"
         disabled={!dirty || saving}
         onClick={() => onSave(value)}
       >
         Save
       </button>
-      <button className="text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50" disabled={saving} onClick={onRemove}>
+      <button className="text-sm font-medium text-red-600 hover:text-red-800 disabled:opacity-50 print:hidden" disabled={saving} onClick={onRemove}>
         Remove
       </button>
     </div>
