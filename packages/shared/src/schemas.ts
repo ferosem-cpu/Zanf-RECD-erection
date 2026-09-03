@@ -1,7 +1,20 @@
 import { z } from "zod";
 
+// Emails are matched against the DB with a plain case-sensitive equality check (Postgres
+// `text`, no citext), so every login surface normalizes the input the same way *before*
+// validating shape - otherwise a customer typing "Sales.Mangalore@..." instead of the stored
+// "sales.mangalore@..." gets silently treated as "no such account" with no error anywhere
+// (findEmailOtpEligibleUser deliberately returns a generic "if registered..." response either
+// way). Trim first so stray whitespace doesn't fail the .email() check, lowercase after so the
+// check itself still runs against a normal-looking address.
+const normalizedEmail = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .pipe(z.string().email());
+
 export const loginSchema = z.object({
-  email: z.string().email(),
+  email: normalizedEmail,
   password: z.string().min(8),
 });
 
@@ -15,11 +28,11 @@ export const requestOtpSchema = z.object({
  * just keyed by email instead of phone - see auth.ts's /auth/email-otp/* routes.
  */
 export const requestEmailOtpSchema = z.object({
-  email: z.string().email(),
+  email: normalizedEmail,
 });
 
 export const verifyEmailOtpSchema = z.object({
-  email: z.string().email(),
+  email: normalizedEmail,
   code: z.string().length(6),
 });
 

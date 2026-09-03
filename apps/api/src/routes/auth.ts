@@ -86,7 +86,7 @@ authRouter.post("/google", authLimiter, async (req, res) => {
     return res.status(401).json({ error: "Google sign-in failed" });
   }
 
-  const user = await prisma.user.findUnique({ where: { email: googleEmail }, include: { role: true } });
+  const user = await prisma.user.findUnique({ where: { email: googleEmail.toLowerCase() }, include: { role: true } });
   if (!user) return res.status(401).json({ error: "No staff account is linked to this Google account" });
   if (!user.isActive) return res.status(401).json({ error: "Account is inactive" });
 
