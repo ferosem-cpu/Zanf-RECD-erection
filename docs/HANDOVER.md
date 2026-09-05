@@ -617,6 +617,75 @@ fix, the same one-word query correctly finds the site via `search_orders_and_sit
 clickable `[Devanahalli Airport, Bangalore](/sites/{id})` / `[ORD-...](/orders/{id})` links, no
 extra back-and-forth needed. Test order/site deleted afterward. `tsc --noEmit` clean.
 
+### INCIDENT: production API outage during the deploy for the fix above (2026-09-05)
+Deploying the InterGlobe fix (a one-line prompt change, `apps/api` only - not git-connected,
+needs the manual `vercel build` + `vercel deploy --prebuilt --prod` dance) **took production
+down completely** for several minutes - every request returned `FUNCTION_INVOCATION_FAILED`.
+Root cause and full resolution, so this never eats another deploy blind:
+
+**What broke.** The compiled code does `require('@recd/shared')` - a bare package specifier.
+`vercel build` runs locally on Windows here (not on Vercel's own infra), and its own
+`postinstall` (`npm install` for the workspace) creates a normal npm-workspaces symlink at
+`apps/api/node_modules/@recd/shared` pointing up to `packages/shared`. `@vercel/nft`'s file
+tracer follows that symlink while tracing `dist/routes/*.js`'s `require` calls, and - matching
+the older "Windows symlinks don't survive Vercel's function-file tracing" note further up this
+doc - it doesn't bundle the real files. Instead it writes a `"filePathMap": { "node_modules/
+@recd/shared": "node_modules/@recd/shared" }` entry into both functions' `.vc-config.json`,
+recording an identity mapping keyed to that virtual path. This repo's past deploy sessions
+apparently already had *some* fix in place for this (this doc's earlier deploy notes mention
+"5 `@recd/shared` node_modules spots patched"), but the exact mechanism wasn't written down
+anywhere - so this session had to rediscover it from scratch, live, on a broken production API.
+
+**Why patching in a real directory wasn't enough.** The obvious fix - after `vercel build`,
+copy `packages/shared/dist` + `package.json` into `.vercel/output/functions/*/index.func/
+node_modules/@recd/shared` as real files - is necessary but was **not sufficient on its own**.
+Vercel's `deploy --prebuilt` step reads each function's `filePathMap` and tries to separately
+materialize a file at that exact virtual path from its own content-addressed store *in addition
+to* whatever's physically sitting in the uploaded output tree, and the two collided:
+`Error: ENOTDIR: not a directory, mkdir '/tmp/lambda-vhs-.../src/node_modules/@recd/shared'`.
+This reproduced identically across a clean `.vercel/output` wipe, a fresh `vercel build`, and
+even `vercel deploy --force` (bypassing the build cache) - proving it wasn't stale local state,
+it was the `filePathMap` entry itself causing the conflict every time.
+
+**The actual fix, in order, every time this needs a manual deploy:**
+1. `cd apps/api`, `npx vercel build --prod` (runs locally, produces `.vercel/output`).
+2. Open both `.vc-config.json` files (`.vercel/output/functions/api/index.func/.vc-config.json`
+   and `.../functions/index.func/.vc-config.json`) and **delete the entire `"filePathMap"`
+   key** from each - this is the step that was missing/undocumented before today.
+3. Copy real files into both: `.vercel/output/functions/{api/index.func,index.func}/
+   node_modules/@recd/shared/{dist/,package.json}`, sourced from `packages/shared`.
+4. `vercel deploy --prebuilt` separately re-checks that `apps/api/node_modules/@recd/shared`
+   exists *locally* before it'll even start uploading (a local preflight, unrelated to what
+   actually ships) - `npm install`'s own postinstall step removes this by the time `vercel
+   build` finishes, so recreate it as a junction just before deploying:
+   `New-Item -ItemType Junction -Path apps/api/node_modules/@recd/shared -Target packages/shared`.
+5. `npx vercel deploy --prebuilt --prod`, then immediately delete that junction again
+   (`(Get-Item ...).Delete()` - plain `Remove-Item` on a junction can silently no-op) so local
+   dev doesn't regress into the original node_modules-shadow-copy bug from earlier this session.
+6. **Verify with more than a health check** - `GET /health` can return 200 from a container
+   that still 500s on real routes if the crash is inside a specific route's dependency chain
+   rather than the module's top-level import. Hit a real authenticated route (e.g.
+   `POST /auth/login` with any credentials - a 401 proves the DB/bcrypt code path actually ran)
+   and check `vercel logs <url>` for fresh errors before considering the deploy good.
+
+**Compounding issue found in the same breath**: once the API was back up, `GET /notifications`
+was still 500ing - production's Supabase DB never got the `20260905070218_add_notification_
+read_and_customer_order_fields` migration (applied locally only, see above). Since there's no
+direct `DATABASE_URL` access from this session (`vercel env pull` redacts Sensitive-type vars),
+applied the DDL directly via the Supabase MCP connector's `apply_migration` tool against
+project `idqzupopsuusoihpmoqc` (with `IF NOT EXISTS` guards, safe to rerun), then manually
+inserted a matching row into `_prisma_migrations` (SHA-256 checksum of the local
+`migration.sql`, computed via a throwaway Node script) so a future real `prisma migrate
+deploy` sees it as already-applied instead of re-running the DDL and erroring on existing
+columns. Confirmed via `information_schema.columns` that `NotificationLog.readAt` now exists.
+
+**Verified fully recovered**: `GET /health` → `200 {"ok":true}`; `POST /auth/login` with bad
+creds → `401` (real logic executing, not a crash); `vercel logs` shows no new errors after the
+fix. No further production changes needed for this incident, but see the standing "apply
+pending migrations to production" gap noted throughout this doc - it's the same root cause
+class (local-only migrations) as this `/notifications` failure, just not yet triggered for the
+other pending ones.
+
 ### Fix: agent had no read tool for SITC timeline entries (2026-09-05)
 User-reported: the in-app agent could `create_site_status_update` (post a new SITC timeline
 entry) but had no way to list/summarise past ones for a site - asked to show the history for
