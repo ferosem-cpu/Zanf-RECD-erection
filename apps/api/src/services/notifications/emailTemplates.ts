@@ -75,6 +75,38 @@ export function renderEmail(templateKey: string, data: Record<string, unknown>):
     };
   }
 
+  if (templateKey === "new_order_placed") {
+    const orderNumber = String(data.orderNumber ?? "");
+    const customer = String(data.customer ?? "");
+    const product = String(data.product ?? "");
+    const quantity = data.quantity != null ? String(data.quantity) : null;
+    const notes = data.notes ? String(data.notes) : null;
+
+    const rows = [
+      `Order: ${orderNumber}`,
+      `Customer: ${customer}`,
+      `Product: ${product}${quantity ? ` x${quantity}` : ""}`,
+      notes ? `Customer notes: ${notes}` : null,
+    ].filter((l): l is string => l !== null);
+
+    return {
+      subject: `${BRAND} — new order request: ${orderNumber} (${customer})`,
+      text: `A customer submitted a new order request via the Customer Portal.\n\n${rows.join("\n")}\n\nNo price has been set yet - review and price it from the Orders page.`,
+      html: wrap(`
+        <p>A customer submitted a new order request via the Customer Portal:</p>
+        <div style="background: #f9fafb; border-radius: 6px; padding: 10px 14px; margin: 12px 0; font-size: 13px; color: #374151;">
+          ${[
+            `<div><strong>Order:</strong> ${escapeHtml(orderNumber)}</div>`,
+            `<div><strong>Customer:</strong> ${escapeHtml(customer)}</div>`,
+            `<div><strong>Product:</strong> ${escapeHtml(product)}${quantity ? ` x${escapeHtml(quantity)}` : ""}</div>`,
+            notes ? `<div><strong>Customer notes:</strong> ${escapeHtml(notes)}</div>` : "",
+          ].join("")}
+        </div>
+        <p style="color: #6b7280; font-size: 13px;">No price has been set yet - review and price it from the Orders page.</p>
+      `),
+    };
+  }
+
   if (templateKey === "vendor_assigned_site") {
     const orderNumber = String(data.orderNumber ?? "");
     const customerName = String(data.customerName ?? "");

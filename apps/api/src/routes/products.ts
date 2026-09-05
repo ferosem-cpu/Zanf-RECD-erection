@@ -7,8 +7,9 @@ import { asString } from "../lib/params";
 export const productsRouter = Router();
 productsRouter.use(authenticate);
 
-// Read access: anyone who can place an order needs to pick a product.
-productsRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (_req, res) => {
+// Read access: anyone who can place an order needs to pick a product - staff (MANAGE_ORDERS)
+// or a customer self-submitting an order request (PLACE_ORDER).
+productsRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.PLACE_ORDER), async (_req, res) => {
   const products = await prisma.product.findMany({ orderBy: { model: "asc" } });
   res.json(products);
 });

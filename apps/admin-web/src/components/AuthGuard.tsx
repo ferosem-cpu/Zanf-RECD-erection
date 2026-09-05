@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import Nav from "./Nav";
 import BottomNav from "./BottomNav";
 import AgentChatBubble from "./AgentChatBubble";
+import NotificationBell from "./NotificationBell";
 
 // Each protected route lists the permissions that grant access. Holding ANY of them is enough.
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
@@ -89,7 +90,11 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (user.mustChangePassword) {
+    // Customers never have a password (they sign in via OTP), so mustChangePassword is
+    // meaningless for them - never send a customer to /change-password, regardless of what
+    // that flag says (it can be stuck true on legacy/manually-created records, and a
+    // customer landing there is a dead end since they have no current password to enter).
+    if (user.mustChangePassword && user.role.key !== "customer") {
       if (pathname !== "/change-password") router.push("/change-password");
       return;
     }
@@ -138,7 +143,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     return isLoginPage ? <>{children}</> : null;
   }
 
-  if (user.mustChangePassword) {
+  if (user.mustChangePassword && user.role.key !== "customer") {
     return isChangePasswordPage ? <>{children}</> : null;
   }
 
@@ -191,7 +196,7 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
           <div className="flex-1 min-w-0 text-center">
             <p className="text-sm font-semibold tracking-tight text-gray-900 truncate">RECD Tracker</p>
           </div>
-          <div className="w-9" aria-hidden />
+          <NotificationBell />
         </header>
         <main className="flex-1 p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8 print:p-0 overflow-auto">{children}</main>
       </div>

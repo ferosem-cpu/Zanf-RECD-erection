@@ -1,8 +1,11 @@
 import { Router } from "express";
-import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, STAGE_KEY } from "@recd/shared";
+import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, ROLE_KEY, STAGE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
+import { send as sendNotification } from "../services/notifications/notificationService";
+import { sendEmail } from "../lib/email";
+import { renderEmail } from "../services/notifications/emailTemplates";
 
 export const ordersRouter = Router();
 ordersRouter.use(authenticate);
@@ -45,10 +48,25 @@ ordersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async 
   res.json({ ...order, otherCustomerSites: otherSites });
 });
 
-ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+/**
+ * Staff (Sales/Management/Super Admin, via MANAGE_ORDERS) create a fully-specified order.
+ * Customers (via PLACE_ORDER) self-submit a request from the Customer Portal - no price is
+ * ever set by the customer (`value` stays null pending Sales review), the order is flagged
+ * `requestedByCustomer`, and Management + Super Admin get an in-app popup while info@zanf.org
+ * gets an email, so someone actually notices and follows up on pricing/scheduling.
+ */
+ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.PLACE_ORDER), async (req: AuthenticatedRequest, res) => {
   const parsed = createOrderSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
+
+  // A customer is anyone signed in with a customerId - staff accounts never have one. Customer
+  // submissions are pinned to their own customerId regardless of what the body says, and never
+  // get to set commercial figures or claim a sales engineer for themselves.
+  const isCustomer = !!req.auth!.customerId;
+  if (isCustomer && data.customerId !== req.auth!.customerId) {
+    return res.status(403).json({ error: "You can only place an order for your own account." });
+  }
 
   const firstStage = await prisma.stageDefinition.findUniqueOrThrow({ where: { key: STAGE_KEY.ORDER_RECEIVED } });
   const orderNumber = `ORD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -56,18 +74,53 @@ ordersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (r
   const order = await prisma.order.create({
     data: {
       orderNumber,
-      customerId: data.customerId,
+      customerId: isCustomer ? req.auth!.customerId! : data.customerId,
       productId: data.productId,
       quantity: data.quantity,
-      value: data.value,
+      value: isCustomer ? undefined : data.value,
       orderDate: data.orderDate ? new Date(data.orderDate) : undefined,
       promisedDeliveryDate: data.promisedDeliveryDate ? new Date(data.promisedDeliveryDate) : undefined,
-      plannedExhaustHookupType: data.plannedExhaustHookupType,
-      salesEngineerId: req.auth!.userId,
-      site: { create: { currentStageId: firstStage.id } },
+      plannedExhaustHookupType: isCustomer ? undefined : data.plannedExhaustHookupType,
+      salesEngineerId: isCustomer ? undefined : req.auth!.userId,
+      requestedByCustomer: isCustomer,
+      customerNotes: isCustomer ? data.customerNotes : undefined,
+      site: { create: { currentStageId: firstStage.id, address: isCustomer ? data.siteAddress : undefined } },
     },
-    include: { site: true },
+    include: { site: true, customer: { select: { name: true } }, product: { select: { name: true, model: true } } },
   });
+
+  if (isCustomer) {
+    const managers = await prisma.user.findMany({
+      where: { isActive: true, role: { key: { in: [ROLE_KEY.MANAGEMENT, ROLE_KEY.OWNER_ADMIN, ROLE_KEY.SUPER_ADMIN] } } },
+      select: { id: true },
+    });
+
+    const notificationData = {
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      customer: order.customer.name,
+      product: `${order.product.name} (${order.product.model})`,
+      quantity: order.quantity,
+      notes: order.customerNotes,
+    };
+
+    // In-app popup only, per spec - management/super admin don't need a separate email on
+    // top of the one going to info@zanf.org below.
+    await Promise.all(
+      managers.map((m) =>
+        sendNotification({ recipientId: m.id, templateKey: "new_order_placed", data: notificationData, channels: ["in_app"] }),
+      ),
+    );
+
+    // Fixed company mailbox, not a per-user notification - always info@zanf.org regardless
+    // of who's configured as the "email" in CompanySettings.
+    try {
+      const { subject, text, html } = renderEmail("new_order_placed", notificationData);
+      await sendEmail({ to: "info@zanf.org", subject, text, html });
+    } catch (err) {
+      console.error("Failed to email info@zanf.org about new customer order request", err);
+    }
+  }
 
   res.status(201).json(order);
 });

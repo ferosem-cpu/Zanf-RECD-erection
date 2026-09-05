@@ -28,6 +28,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.MANAGE_VENDORS, name: "Approve and manage external vendors" },
     { key: PERMISSION_KEY.MANAGE_WORK_ORDERS, name: "Create and assign work orders to field crews" },
     { key: PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS, name: "Act on work orders assigned to you" },
+    { key: PERMISSION_KEY.PLACE_ORDER, name: "Submit a new order request (Customer Portal)" },
     { key: PERMISSION_KEY.MANAGE_QUOTATIONS, name: "Create and manage quotations" },
     { key: PERMISSION_KEY.MANAGE_INVOICES, name: "Create and issue invoices (proforma + tax)" },
     { key: PERMISSION_KEY.RECORD_PAYMENTS, name: "Record payments received and made" },
@@ -124,8 +125,13 @@ async function seedRoles() {
     },
     [ROLE_KEY.CUSTOMER]: {
       name: "Customer",
-      description: "Views only their own orders/sites, raises complaints, resolves their own pending actions.",
-      permissions: [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.RAISE_COMPLAINT, PERMISSION_KEY.RESOLVE_PENDING_ACTION],
+      description: "Views only their own orders/sites, raises complaints, resolves their own pending actions, and can submit new order requests.",
+      permissions: [
+        PERMISSION_KEY.VIEW_SITE_STATUS,
+        PERMISSION_KEY.RAISE_COMPLAINT,
+        PERMISSION_KEY.RESOLVE_PENDING_ACTION,
+        PERMISSION_KEY.PLACE_ORDER,
+      ],
     },
   };
 

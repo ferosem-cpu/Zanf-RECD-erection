@@ -189,10 +189,17 @@ authRouter.post("/customer/verify", authLimiter, async (req, res) => {
     data: { consumedAt: new Date() },
   });
 
+  // Customers never set a password (OTP-only login) - self-heal any stray mustChangePassword
+  // flag (defaults true at the DB level; only explicitly cleared on the normal creation path)
+  // so a legacy/manually-created customer record never gets bounced to the change-password
+  // page, which would be a dead end since they have no current password to enter.
   const userWithRole = await prisma.user.findUniqueOrThrow({
     where: { id: contact.id },
     include: { role: true },
   });
+  if (userWithRole.mustChangePassword) {
+    await prisma.user.update({ where: { id: contact.id }, data: { mustChangePassword: false } });
+  }
 
   const token = signToken({
     userId: contact.id,
@@ -253,6 +260,12 @@ authRouter.post("/otp/verify", authLimiter, async (req, res) => {
   if (!otp) return res.status(401).json({ error: "Invalid or expired code" });
 
   await prisma.otpCode.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
+
+  // Same self-heal as /customer/verify - a customer signing in this way should never carry
+  // a stray mustChangePassword flag, since they have no password to change.
+  if (user.customerId && user.mustChangePassword) {
+    await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: false } });
+  }
 
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({ token, user: { id: user.id, name: user.name, role: user.role.key } });
@@ -333,6 +346,12 @@ authRouter.post("/email-otp/verify", authLimiter, async (req, res) => {
   if (!otp) return res.status(401).json({ error: "Invalid or expired OTP code" });
 
   await prisma.otpCode.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
+
+  // Same self-heal as /customer/verify, but only for customers - a vendor engineer logging
+  // in via this route still legitimately has a temp password to change, so their flag stays.
+  if (user.customerId && user.mustChangePassword) {
+    await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: false } });
+  }
 
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({

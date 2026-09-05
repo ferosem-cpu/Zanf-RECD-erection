@@ -566,6 +566,137 @@ same session:
 
 ## Changelog (condensed)
 
+### Fix: case-sensitive email lookup silently swallowed customer OTP requests (2026-09-03)
+User-reported: a customer trying to sign in wasn't receiving their OTP email. Root cause:
+`/auth/email-otp/request` (and `/login`, `/auth/google`) matched email against `User.email` - a
+plain Postgres `text` column, no `citext` - with no case/whitespace normalization anywhere in
+`packages/shared/src/schemas.ts`. `findEmailOtpEligibleUser` deliberately returns the same
+generic `{ ok: true, message: "If that email is registered..." }` whether or not the email
+matches (to avoid leaking which accounts exist), so a customer typing their email in different
+case than stored got a convincing "sent" response while nothing was actually created - no
+`OtpCode` row, no `NotificationLog` row, no error anywhere to debug from. Confirmed via
+production DB query: the only customer contact (`sales.mangalore@ethengroup.com`, created
+2026-08-13) had **zero** OTP attempts ever recorded against it. SMTP itself was never the
+problem - every `NotificationLog` row that ever existed shows `status: sent`.
+
+**Fix**: added a shared `normalizedEmail` Zod schema (`.trim().toLowerCase().pipe(z.string().email())`)
+used by `loginSchema`/`requestEmailOtpSchema`/`verifyEmailOtpSchema`, and lowercased the
+Google-verified email before the `/auth/google` lookup. No DB backfill needed - every existing
+`User.email` in production was already lowercase (checked via `email <> lower(email)`).
+
+**Deployed and verified live** (full manual deploy dance from `apps/api`, build took only ~6 min
+this run, all 5 `@recd/shared` node_modules spots patched - the bare `functions/index.func`
+tree existed again this build alongside `functions/api/index.func`, patched both defensively):
+`GET /health` → 200, `GET /agent/providers` → 401. Then proved the fix itself by calling
+`POST /auth/email-otp/request` with the real customer's email in mixed case
+(`Sales.Mangalore@EthenGroup.com`) against the live prod URL and confirming a fresh `OtpCode` +
+`NotificationLog` row (`status: sent`) appeared for that customer's real user id immediately
+after - before this fix that exact request would have silently done nothing. Pushed to `master`
+(commit `0f96d3f`).
+
+### Fix: agent had no read tool for SITC timeline entries (2026-09-05)
+User-reported: the in-app agent could `create_site_status_update` (post a new SITC timeline
+entry) but had no way to list/summarise past ones for a site - asked to show the history for
+Interglobe Aviation - Devanahalli Airport, it correctly reported it had no tool for that rather
+than guessing, and pointed the user to the site's own "Status updates" section in the app.
+
+Added `search_site_status_updates` to `zanAppReadTools.ts` - takes a `siteId` (from
+`search_orders_and_sites`), returns the site's `SiteStageEvent` history (stage, status,
+comment, who posted it, when) newest-first. Access mirrors `create_site_status_update` exactly:
+customers see only their own site (`auth.customerId`), vendor engineers see only sites
+assigned to their own vendor (`auth.vendorId` vs `site.vendorId`), staff need
+`view_site_status`, `change_site_status`, or `manage_orders`. Registered automatically via the
+existing `zanAppReadTools` spread in `registry.ts` (no registry change needed) and added to
+`systemPrompt.ts`'s tool list, with a note telling the model to check it before calling
+`create_site_status_update` so it can see the last-logged stage instead of guessing.
+`tsc --noEmit` clean.
+
+### Feature: Customer Portal - multi-site view, self-service orders, in-app notification bell (2026-09-05)
+Three user-reported issues fixed in one pass, plus a small infra bug found along the way.
+
+**1. Customer portal only showed one site.** `GET /sites` already returned every site scoped
+to the logged-in customer correctly - the bug was purely in
+`apps/admin-web/src/app/customer/portal/page.tsx`, which did `sitesData[0]` and threw the rest
+away. Fixed: the page now loads the full site list, shows a site switcher `<select>` above the
+order banner (only rendered when there's more than one site), and the "Which site" selector on
+the Raise Support Ticket form now appears whenever there's more than one site too (previously
+every complaint silently went against whichever site happened to load first).
+
+**2. Customers couldn't create orders.** `POST /orders` was gated to `manage_orders`, which
+the Customer role never had. Added a new permission `place_order` (granted to the Customer
+role in `seed.ts`), and branched `POST /orders`/`GET /products` to accept it. A customer
+submission is pinned server-side to their own `customerId` (never trusts the body), never sets
+`value` (price stays null, pending Sales review), and is flagged `Order.requestedByCustomer`
+(new column) with an optional `Order.customerNotes` (new column) and an optional
+`Site.address` seeded from the form. On submit: every active Management/Owner-Admin/Super
+Admin user gets an **in-app** notification (see #3), and a fixed email goes to
+`info@zanf.org` (bespoke `new_order_placed` template in `emailTemplates.ts`) - both fired only
+for customer submissions, not staff-created orders. New "Request New Order" form added to the
+customer portal (product + quantity + optional site address + optional notes).
+
+**3. No in-app notification system existed at all** - built one, since #2 needed it.
+`NotificationLog` gained a `readAt` column; new `apps/api/src/routes/notifications.ts`
+(`GET /notifications` with unread count, `POST /:id/read`, `POST /read-all`), and a new
+`NotificationBell.tsx` component (bell icon, unread badge, 30s poll, dropdown with mark-read/
+mark-all-read) wired into both the desktop sidebar header (`Nav.tsx`) and the mobile top bar
+(`AuthGuard.tsx`). Generic - any future `channels: ["in_app"]` notification automatically shows
+up here, not just new-order alerts.
+
+**4. Forced password-change loop for customers (reported: customer "Ethen").** Root cause:
+`User.mustChangePassword` defaults `true` at the DB level; the normal customer-creation path
+(`customers.ts`) explicitly sets it `false`, but customers have **no password at all** (OTP-only
+login), so any customer record that ends up with a stray `true` (legacy data, manual creation)
+hits a dead end - `/change-password` requires a current password to compare against, which
+doesn't exist for a customer. Fixed two ways: `AuthGuard.tsx` now never redirects a customer to
+`/change-password` regardless of the flag, and all three customer-facing OTP-verify routes
+(`/customer/verify`, `/otp/verify`, `/email-otp/verify`) self-heal by flipping the flag back to
+`false` on successful login whenever `user.customerId` is set (vendors, who legitimately have a
+temp password, are left alone).
+
+**Infra bug found and fixed along the way**: `apps/api/node_modules/@recd/shared` had a stale,
+real (non-symlinked) copy of the package shadowing the correct workspace-linked one at the repo
+root - Node resolves `node_modules` closest-directory-first, so every `packages/shared` rebuild
+was silently *not* reaching the API even though `npm run build` succeeded. Deleted the stale
+copy; `apps/api` now correctly resolves to the workspace symlink again. Worth remembering: if a
+`packages/shared` change ever seems to have "no effect" despite a clean rebuild, check for this
+shadow copy before assuming the change itself is wrong.
+
+Migration `20260905070218_add_notification_read_and_customer_order_fields` applied locally
+(non-interactive `prisma migrate dev` isn't supported in this environment - used
+`prisma migrate diff --from-url ... --script` to generate the SQL, `prisma db execute` to apply
+it, then `prisma migrate resolve --applied` to record it in migration history). **Not yet
+applied to production** - needs `prisma migrate deploy` against the real prod `DATABASE_URL`
+before or during the next deploy, same standing gap as every other pending migration.
+
+Verified locally end-to-end against a real running API (not just typechecked): customer OTP
+login → `mustChangePassword: false` confirmed on the session → `GET /sites` returns all of the
+customer's sites → `GET /products` succeeds via the new permission → `POST /orders` as that
+customer returns `201` with `value: null`, `requestedByCustomer: true`, the notes/address
+stored → the in-app notification appeared in Super Admin's `/notifications` with the right
+payload. `tsc --noEmit` clean on both `apps/api` and `apps/admin-web`, `next build` clean (all
+41 routes). Test order/site and notification row deleted afterward as throwaway verification
+artifacts. Note: local `.env` has real Zoho SMTP credentials configured, so the `info@zanf.org`
+smoke-test email was a genuine live send, not a stub - worth remembering before running similar
+smoke tests locally in future sessions.
+
+**Also cleaned up**: a handful of throwaway one-off PowerShell deploy/verification scripts
+(`commit-push.ps1`, `run-deploy.ps1`, `verify-deploy.ps1`, `verify-admin*.ps1`) and an empty
+stray `prisma/migrations/_pending.sql` left over from an earlier, already-committed session
+(the backup-feature deploy) - deleted rather than committed, since their one-off job was done.
+Two genuinely useful docs from the email-casing-fix session that had never been committed -
+`docs/ADMIN_ENABLE_CUSTOMER_LOGIN.md` and `docs/CUSTOMER_LOGIN_GUIDE.md` - are committed now
+alongside this entry.
+
+**Not yet done:**
+- Production migration deploy (see above).
+- No management/super-admin-facing UI to review/price a `requestedByCustomer` order
+  differently from a normal one (e.g. a filter or badge on the Orders list) - the flag exists
+  in the data but isn't surfaced anywhere in the admin UI yet.
+- The customer-facing product picker shows every product in the catalog with no
+  customer-specific pricing hint (unlike the staff quotation/invoice flow, which calls
+  `get_customer_pricing`) - fine for a request-only flow with no price shown, but worth
+  knowing if this ever grows a price display.
+
 ### Feature: Order-ID tagging on vendor advances (2026-08-28)
 Follow-on to vendor advances (below), raised by the user working through the real end-to-end
 flow: assign a vendor to work on one or more order IDs, pay them an advance, then when their

@@ -36,12 +36,15 @@ it's been raised until they confirm.`
 search_documents / list_documents / get_document_content.
 - Search live Zan-APP records with search_customers, search_vendors, search_quotations, \
 search_invoices, search_purchase_orders, search_expenses, search_orders_and_sites, \
-search_work_orders, search_complaints, search_products, and search_credit_notes - each \
-returns a short list of lightweight summaries (never guess ids or numbers, always search \
-first). search_products is the RECD product catalog (model, rating, warranty, shape, \
-dimensions, weightKg) - use it for any question about a product's specs or weight instead of \
-assuming the data isn't stored. search_credit_notes finds GST credit notes by note number, \
-invoice number, or customer name.
+search_site_status_updates, search_work_orders, search_complaints, search_products, and \
+search_credit_notes - each returns a short list of lightweight summaries (never guess ids or \
+numbers, always search first). search_products is the RECD product catalog (model, rating, \
+warranty, shape, dimensions, weightKg) - use it for any question about a product's specs or \
+weight instead of assuming the data isn't stored. search_credit_notes finds GST credit notes \
+by note number, invoice number, or customer name. search_site_status_updates lists the SITC \
+timeline entries already posted for a site (stage, status, comment, who, when) - use this \
+whenever asked to view/summarise a site's status-update history, and check it before calling \
+create_site_status_update to see the last-logged stage rather than guessing.
 - Get full detail (all line items, payments, issued credit notes, contacts) on one specific \
 record with get_document_detail, using the id a search_* tool gave you. For an invoice this \
 includes amountPaid/creditNoteTotal/balance already computed net of credit notes and \
@@ -101,8 +104,10 @@ user first agreeing to save the specific item.
 - create_complaint - a new complaint ticket, but only a customer can actually raise one \
 (staff should direct a customer's issue to the Complaints page instead of trying this tool).
 - create_site_status_update - a new SITC timeline entry (progress note) on a site, same as \
-'Post a status update' in the app - the only way to add one, since search/detail tools are \
-read-only. Resolve the siteId with search_orders_and_sites first. Needs a stageKey (which SITC \
+'Post a status update' in the app - the only way to add one; search_site_status_updates and \
+get_document_detail are read-only. Resolve the siteId with search_orders_and_sites first, and \
+call search_site_status_updates if you need to see what's already been logged for that site. \
+Needs a stageKey (which SITC \
 stage this reflects - reuse the site's current stage key to log a note without moving it \
 forward) and a statusKey (why/how, e.g. 'pending' for a general note, 'done' for a completed \
 step, or a delay reason) alongside the free-text comment - if either key is rejected, the \

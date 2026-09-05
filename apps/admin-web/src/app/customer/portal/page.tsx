@@ -56,6 +56,26 @@ interface SiteDetail {
   pendingActions: PendingAction[];
 }
 
+// Lightweight shape from GET /sites (the list endpoint) - enough to power the site switcher
+// without pulling every site's full detail (events/photos/pending actions) up front.
+interface SiteSummary {
+  id: string;
+  address: string | null;
+  companyName: string | null;
+  currentStage: { label: string };
+  order: {
+    orderNumber: string;
+    product: { name: string; model: string };
+  };
+}
+
+interface Product {
+  id: string;
+  name: string;
+  model: string;
+  ratingSpec: string | null;
+}
+
 interface Complaint {
   id: string;
   ticketNumber: string;
@@ -66,14 +86,21 @@ interface Complaint {
   createdAt: string;
 }
 
+function siteLabel(s: SiteSummary): string {
+  return s.companyName || s.address || s.order.orderNumber;
+}
+
 export default function CustomerPortalPage() {
   const { user, logout } = useAuth();
+  const [sites, setSites] = useState<SiteSummary[]>([]);
+  const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [site, setSite] = useState<SiteDetail | null>(null);
   const [stages, setStages] = useState<StageDefinition[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [loading, setLoading] = useState(true);
 
   // New Complaint Form
+  const [complaintSiteId, setComplaintSiteId] = useState<string | null>(null);
   const [category, setCategory] = useState("erection_commissioning");
   const [severity, setSeverity] = useState("medium");
   const [description, setDescription] = useState("");
@@ -82,25 +109,45 @@ export default function CustomerPortalPage() {
   const [complaintError, setComplaintError] = useState<string | null>(null);
   const [resolvingAction, setResolvingAction] = useState<string | null>(null);
 
+  // New Order Request Form
+  const [products, setProducts] = useState<Product[]>([]);
+  const [showOrderForm, setShowOrderForm] = useState(false);
+  const [orderProductId, setOrderProductId] = useState("");
+  const [orderQuantity, setOrderQuantity] = useState(1);
+  const [orderSiteAddress, setOrderSiteAddress] = useState("");
+  const [orderNotes, setOrderNotes] = useState("");
+  const [submittingOrder, setSubmittingOrder] = useState(false);
+  const [orderSuccess, setOrderSuccess] = useState<string | null>(null);
+  const [orderError, setOrderError] = useState<string | null>(null);
+
+  async function loadSiteDetail(id: string) {
+    const detail = await api<SiteDetail>(`/sites/${id}`);
+    setSite(detail);
+  }
+
   async function loadData() {
     try {
       setLoading(true);
-      // Fetch stages
       const stagesData = await api<StageDefinition[]>("/meta/stages");
       setStages(stagesData);
 
-      // Fetch customer sites
-      const sitesData = await api<any[]>("/sites");
-      if (sitesData.length > 0) {
-        // Fetch detailed site view (includes events, photos, pendingActions)
-        const detail = await api<SiteDetail>(`/sites/${sitesData[0].id}`);
-        setSite(detail);
+      const sitesData = await api<SiteSummary[]>("/sites");
+      setSites(sitesData);
+
+      // Keep whichever site was already selected if it still exists (e.g. after a reload
+      // triggered by resolving a pending action), otherwise default to the first one.
+      const stillExists = sitesData.some((s) => s.id === selectedSiteId);
+      const nextSelectedId = stillExists ? selectedSiteId : (sitesData[0]?.id ?? null);
+      setSelectedSiteId(nextSelectedId);
+      setComplaintSiteId((prev) => (sitesData.some((s) => s.id === prev) ? prev : nextSelectedId));
+      if (nextSelectedId) {
+        await loadSiteDetail(nextSelectedId);
+      } else {
+        setSite(null);
       }
 
-      // Fetch complaints
       const complaintsData = await api<Complaint[]>("/complaints");
       setComplaints(complaintsData);
-
     } catch (err) {
       console.error("Failed to load customer portal data", err);
     } finally {
@@ -110,7 +157,18 @@ export default function CustomerPortalPage() {
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function handleSelectSite(id: string) {
+    if (id === selectedSiteId) return;
+    setSelectedSiteId(id);
+    try {
+      await loadSiteDetail(id);
+    } catch (err) {
+      console.error("Failed to load site detail", err);
+    }
+  }
 
   async function resolvePending(actionId: string, resolution: string) {
     setResolvingAction(actionId);
@@ -119,7 +177,7 @@ export default function CustomerPortalPage() {
         method: "POST",
         body: JSON.stringify({ resolution }),
       });
-      await loadData();
+      if (selectedSiteId) await loadSiteDetail(selectedSiteId);
     } catch (err) {
       console.error("Failed to resolve pending action", err);
     } finally {
@@ -129,7 +187,8 @@ export default function CustomerPortalPage() {
 
   async function handleComplaintSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!site) return;
+    const targetSiteId = complaintSiteId ?? site?.id;
+    if (!targetSiteId) return;
     setSubmittingComplaint(true);
     setComplaintSuccess(null);
     setComplaintError(null);
@@ -138,7 +197,7 @@ export default function CustomerPortalPage() {
       await api("/complaints", {
         method: "POST",
         body: JSON.stringify({
-          siteId: site.id,
+          siteId: targetSiteId,
           category,
           severity,
           description,
@@ -146,13 +205,57 @@ export default function CustomerPortalPage() {
       });
       setComplaintSuccess("Support ticket raised successfully!");
       setDescription("");
-      // Reload complaints
       const complaintsData = await api<Complaint[]>("/complaints");
       setComplaints(complaintsData);
     } catch (err) {
       setComplaintError(err instanceof Error ? err.message : "Failed to raise support ticket");
     } finally {
       setSubmittingComplaint(false);
+    }
+  }
+
+  async function openOrderForm() {
+    setShowOrderForm(true);
+    setOrderSuccess(null);
+    setOrderError(null);
+    if (products.length === 0) {
+      try {
+        const productsData = await api<Product[]>("/products");
+        setProducts(productsData);
+        if (productsData.length > 0) setOrderProductId((prev) => prev || productsData[0].id);
+      } catch (err) {
+        console.error("Failed to load products", err);
+      }
+    }
+  }
+
+  async function handleOrderSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user?.customerId || !orderProductId) return;
+    setSubmittingOrder(true);
+    setOrderSuccess(null);
+    setOrderError(null);
+
+    try {
+      await api("/orders", {
+        method: "POST",
+        body: JSON.stringify({
+          customerId: user.customerId,
+          productId: orderProductId,
+          quantity: orderQuantity,
+          siteAddress: orderSiteAddress || undefined,
+          customerNotes: orderNotes || undefined,
+        }),
+      });
+      setOrderSuccess("Your order request has been submitted. Our team will review it and get in touch about pricing and scheduling.");
+      setOrderQuantity(1);
+      setOrderSiteAddress("");
+      setOrderNotes("");
+      await loadData();
+    } catch (err) {
+      setOrderError(err instanceof Error ? err.message : "Failed to submit order request");
+    } finally {
+      setSubmittingOrder(false);
     }
   }
 
@@ -197,6 +300,133 @@ export default function CustomerPortalPage() {
         </div>
       </header>
 
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 sm:mt-8 flex flex-wrap items-center justify-between gap-3">
+        {sites.length > 0 ? (
+          <div className="flex items-center gap-2 flex-wrap">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Site</label>
+            <select
+              className="field text-sm py-1.5"
+              data-testid="portal-site-select"
+              value={selectedSiteId ?? ""}
+              onChange={(e) => handleSelectSite(e.target.value)}
+            >
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {siteLabel(s)} — {s.order.orderNumber} ({s.currentStage.label})
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div />
+        )}
+        <button
+          type="button"
+          data-testid="portal-new-order-button"
+          onClick={openOrderForm}
+          className="btn-primary px-4 py-2 text-sm font-semibold flex items-center gap-1.5"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          Request New Order
+        </button>
+      </div>
+
+      {showOrderForm && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+          <section className="card p-6 border-l-4 border-[var(--theme-accent)]">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h3 className="text-lg font-bold">Request a new order</h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  Tell us what you need - our Sales team will review it, confirm pricing, and follow up with you.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowOrderForm(false)}
+                aria-label="Close"
+                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <form onSubmit={handleOrderSubmit} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Product</label>
+                  <select
+                    required
+                    className="field w-full"
+                    value={orderProductId}
+                    onChange={(e) => setOrderProductId(e.target.value)}
+                  >
+                    <option value="" disabled>Select a product</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.model}){p.ratingSpec ? ` — ${p.ratingSpec}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Quantity</label>
+                  <input
+                    type="number"
+                    min={1}
+                    required
+                    className="field w-full"
+                    value={orderQuantity}
+                    onChange={(e) => setOrderQuantity(Math.max(1, Number(e.target.value) || 1))}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Site address (optional)</label>
+                <input
+                  type="text"
+                  placeholder="Where should this be installed?"
+                  className="field w-full"
+                  value={orderSiteAddress}
+                  onChange={(e) => setOrderSiteAddress(e.target.value)}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Notes (optional)</label>
+                <textarea
+                  rows={3}
+                  placeholder="Any special requirements or scheduling preferences..."
+                  className="field w-full"
+                  value={orderNotes}
+                  onChange={(e) => setOrderNotes(e.target.value)}
+                />
+              </div>
+
+              {orderSuccess && (
+                <div className="rounded-lg bg-green-50 p-3 text-xs text-green-700">{orderSuccess}</div>
+              )}
+              {orderError && (
+                <div className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{orderError}</div>
+              )}
+
+              <button
+                type="submit"
+                disabled={submittingOrder || !orderProductId}
+                className="btn-primary px-4 py-2 text-sm font-semibold disabled:opacity-50"
+              >
+                {submittingOrder ? "Submitting..." : "Submit Request"}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 sm:mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8">
         
         {/* Left 2 Columns: Tracking and Timeline */}
@@ -239,7 +469,7 @@ export default function CustomerPortalPage() {
             </div>
           ) : (
             <div className="card p-8 text-center text-gray-500">
-              No orders found for this account.
+              No orders found for this account yet. Use "Request New Order" above to get started.
             </div>
           )}
 
@@ -389,6 +619,23 @@ export default function CustomerPortalPage() {
             <p className="text-xs text-gray-500 mb-4">Encountered an issue? Raise a support request, and our service team will contact you.</p>
 
             <form onSubmit={handleComplaintSubmit} className="space-y-4">
+              {sites.length > 1 && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Which site</label>
+                  <select
+                    className="field w-full"
+                    value={complaintSiteId ?? ""}
+                    onChange={(e) => setComplaintSiteId(e.target.value)}
+                  >
+                    {sites.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {siteLabel(s)} — {s.order.orderNumber}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Issue Category</label>
                 <select

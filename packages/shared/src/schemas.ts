@@ -57,6 +57,11 @@ export const createOrderSchema = z.object({
   orderDate: z.string().datetime().optional(),
   promisedDeliveryDate: z.string().datetime().optional(),
   plannedExhaustHookupType: z.string().optional(),
+  // Customer self-service order requests (Customer Portal "New Order") only - ignored/unused
+  // for staff-created orders. siteAddress seeds the new site's address so Ops isn't starting
+  // from a blank site; customerNotes is a free-text field for site details/special requests.
+  siteAddress: z.string().optional(),
+  customerNotes: z.string().optional(),
 });
 
 /** Adds another RECD product to an existing order/site (same order, multiple units). */

@@ -195,6 +195,10 @@ export const PERMISSION_KEY = {
   MANAGE_WORK_ORDERS: "manage_work_orders",
   /** Act on work orders assigned to you (field engineers updating status/completing their own). */
   ACT_ASSIGNED_WORK_ORDERS: "act_assigned_work_orders",
+  /** Customer self-service: submit a new order request via the Customer Portal. Distinct from
+   * MANAGE_ORDERS (staff order management) - a customer with only this key can create their
+   * own order (no price, pending Sales review) but can't list/edit/delete anyone's orders. */
+  PLACE_ORDER: "place_order",
   ...PERMISSION_KEY_FINANCE,
 } as const;
 export type PermissionKey = (typeof PERMISSION_KEY)[keyof typeof PERMISSION_KEY];

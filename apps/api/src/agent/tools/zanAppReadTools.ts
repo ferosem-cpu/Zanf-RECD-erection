@@ -328,6 +328,71 @@ const searchOrdersAndSites: AgentTool = {
   },
 };
 
+const searchSiteStatusUpdates: AgentTool = {
+  name: "search_site_status_updates",
+  description:
+    "List the SITC timeline entries (status-update history) already posted for a site - the " +
+    "read-only counterpart to create_site_status_update. Resolve siteId first with " +
+    "search_orders_and_sites (use the site's own \"id\" field, not the order's id). Returns " +
+    "each entry's stage, status, comment, who posted it, and when, most recent first. Use " +
+    "this whenever asked to view/summarise/recall past updates for a site, or to check the " +
+    "current/last-logged stage before calling create_site_status_update.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      siteId: { type: "string", description: "Site id, from search_orders_and_sites' site.id field (not the order id)." },
+    },
+    required: ["siteId"],
+  },
+  handler: async (input, auth) => {
+    const siteId = String(input.siteId ?? "").trim();
+    if (!siteId) return { error: "siteId is required - look it up with search_orders_and_sites first." };
+
+    const site = await prisma.site.findUnique({
+      where: { id: siteId },
+      include: { order: { select: { customerId: true, orderNumber: true } } },
+    });
+    if (!site) return { error: `No site found with id ${siteId}. Use search_orders_and_sites first.` };
+
+    if (auth.customerId) {
+      // A customer's own id comes from their authenticated session, never tool input - they
+      // can only ever view their own site's timeline.
+      if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("site status updates");
+      if (site.order.customerId !== auth.customerId) return forbidden("this site's status updates");
+    } else {
+      if (!hasAny(auth, [PERMISSION_KEY.VIEW_SITE_STATUS, PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.MANAGE_ORDERS]))
+        return forbidden("site status updates");
+      // Vendor isolation, mirroring create_site_status_update: an erection vendor's engineers
+      // only see updates for sites assigned to their own vendor.
+      if (auth.vendorId && site.vendorId !== auth.vendorId) return forbidden("this site's status updates");
+    }
+
+    const events = await prisma.siteStageEvent.findMany({
+      where: { siteId },
+      include: {
+        stageDefinition: { select: { label: true } },
+        statusOption: { select: { label: true } },
+        createdBy: { select: { name: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: RESULT_LIMIT,
+    });
+
+    return {
+      site: site.companyName ?? site.address,
+      orderNumber: site.order.orderNumber,
+      updates: events.map((e) => ({
+        id: e.id,
+        stage: e.stageDefinition.label,
+        status: e.statusOption.label,
+        comment: e.comment,
+        postedBy: e.createdBy.name,
+        postedAt: e.createdAt,
+      })),
+    };
+  },
+};
+
 const searchWorkOrders: AgentTool = {
   name: "search_work_orders",
   description:
@@ -629,6 +694,7 @@ export const zanAppReadTools: AgentTool[] = [
   searchPurchaseOrders,
   searchExpenses,
   searchOrdersAndSites,
+  searchSiteStatusUpdates,
   searchWorkOrders,
   searchComplaints,
   searchSavedItems,

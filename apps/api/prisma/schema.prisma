@@ -268,6 +268,13 @@ model Order {
   /// Customer-issued PO to us (they order via their own PO number).
   customerPoNumber        String?
   customerPoDate          DateTime?
+  /// True when a customer self-submitted this via their portal (Customer Portal "New Order"),
+  /// rather than a staff member creating it - flags it for Sales to review/price, since a
+  /// customer submission never sets `value`.
+  requestedByCustomer      Boolean   @default(false)
+  /// Free-text notes the customer typed when self-requesting an order (site details, special
+  /// requirements) - staff-created orders don't use this.
+  customerNotes            String?
   createdAt                DateTime  @default(now())
 
   site Site?
@@ -655,7 +662,12 @@ model NotificationLog {
   /// "sent" for live channels, "pending_provider_setup" for stubbed channels (sms/whatsapp/telegram)
   status        String
   sentAt        DateTime?
+  /// Set when the recipient has seen/dismissed this in the in-app notification bell. Only
+  /// meaningful for channel "in_app" - other channels are fire-and-forget, nothing to mark read.
+  readAt        DateTime?
   createdAt     DateTime @default(now())
+
+  @@index([recipientId, channel, readAt])
 }
 
 model CompanySettings {

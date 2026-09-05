@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { getSavedLogo } from "@/lib/settingsStore";
 import { useAuth } from "./AuthContext";
+import NotificationBell from "./NotificationBell";
 
 const liveLinks = [
   {
@@ -422,18 +423,21 @@ export default function Nav({ mobileOpen = false, onMobileClose }: NavProps) {
               RECD Tracker
             </div>
           </div>
-          {/* Close button on mobile */}
-          <button
-            data-testid="nav-close-button"
-            onClick={onMobileClose}
-            className="lg:hidden p-1.5 -mr-1 rounded-md hover:bg-white/5 transition-colors"
-            style={{ color: "var(--theme-sidebar-text-muted)" }}
-            aria-label="Close navigation"
-          >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          {/* Bell + close button on mobile */}
+          <div className="flex items-center gap-1 shrink-0">
+            <NotificationBell buttonClassName="text-[color:var(--theme-sidebar-text-muted)] hover:bg-white/5" />
+            <button
+              data-testid="nav-close-button"
+              onClick={onMobileClose}
+              className="lg:hidden p-1.5 -mr-1 rounded-md hover:bg-white/5 transition-colors"
+              style={{ color: "var(--theme-sidebar-text-muted)" }}
+              aria-label="Close navigation"
+            >
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* ── Divider ───────────────────────────────────────────────────── */}
