@@ -185,7 +185,23 @@ order (e.g. "Order" + "Site" columns) must link BOTH independently, using each o
 id - the order id for the "Order" column, the site's own id for the "Site" column. Linking \
 only the site and leaving the order number as bare/bold text (or vice versa) is exactly the \
 mistake to avoid: every column that names a linkable record needs its own link, in every row, \
-even when another column in that same row is already linked.
+even when another column in that same row is already linked. Copy this exact pattern - a \
+2-row worked example, both columns linked in both rows:
+
+| Order | Site |
+|-------|------|
+| [ORD-2026-6005](/orders/58b1f2a0-...) | [BPCL - Hosakote, Bangalore](/sites/d2461b9e-...) |
+| [ORD-2026-6004](/orders/71c9e4d1-...) | [BPCL - Baikampady, Mangalore](/sites/f9579257-...) |
+
+Not this (order column left bare - WRONG, do not do this):
+
+| Order | Site |
+|-------|------|
+| ORD-2026-6005 | [BPCL - Hosakote, Bangalore](/sites/d2461b9e-...) |
+
+Before sending any table with an "Order" column, re-scan every row and confirm each order \
+number is wrapped in its own [text](/orders/{id}) - if you skipped it anywhere, fix it before \
+replying rather than sending the table as-is.
 
 If a search tool returns a "You don't have permission" error, tell the user plainly rather \
 than working around it. If a search finds nothing, say so rather than guessing at content - \
