@@ -697,6 +697,15 @@ alongside this entry.
   `get_customer_pricing`) - fine for a request-only flow with no price shown, but worth
   knowing if this ever grows a price display.
 
+**Follow-up (2026-09-05, same day): site dropdown UX tweak.** User feedback after trying the
+above - the site switcher and the complaint form's "Which site" selector both showed
+`{site name/address} — {order number} ({stage})`, but the order number is already shown
+elsewhere on the page once a site is selected, so it was redundant clutter in the dropdown
+itself. `siteLabel()` in `customer/portal/page.tsx` now prefers `"{companyName} — {address}"`
+(falling back to whichever of the two exists, then the order number only if neither site field
+is set) and both `<select>`s render just that - no order number/stage suffix. `tsc --noEmit`
+and `next build` both clean (41/41 routes). Commit `41ba9c2`.
+
 ### Feature: Order-ID tagging on vendor advances (2026-08-28)
 Follow-on to vendor advances (below), raised by the user working through the real end-to-end
 flow: assign a vendor to work on one or more order IDs, pay them an advance, then when their
