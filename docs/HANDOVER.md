@@ -686,6 +686,45 @@ pending migrations to production" gap noted throughout this doc - it's the same 
 class (local-only migrations) as this `/notifications` failure, just not yet triggered for the
 other pending ones.
 
+### Follow-up: link rule needed three rounds to actually stick in tables (2026-09-05)
+The InterGlobe fix above got the agent finding records it previously missed, but a separate
+problem surfaced once results came back as tables: the model rendered site names as proper
+`[label](/sites/{id})` links but left the adjacent order number as bare/bold text in the same
+row. Took three iterations on `systemPrompt.ts` to fully fix, each redeployed via the same
+`vercel build` → strip `filePathMap` → patch `node_modules/@recd/shared` → deploy sequence
+documented in the incident above (no further outages - the sequence held up cleanly every
+time once known):
+
+1. **First pass** (commit `74859ed`): added an explicit paragraph saying the linking rule
+   applies inside table cells and bullet lists, not just prose. Partial fix - it made the
+   model link *something* in tables, but per the next user report it was inconsistent about
+   *which* column.
+2. **Second pass** (commit `c6e0b0b`): added a CRITICAL callout naming the actual failure
+   mode directly - "do not treat one linked column as covering the whole row" - since the
+   model was treating a linked Site column as satisfying the rule for the whole row and
+   leaving the Order column bare. Still not fully reliable per the next live report (a real
+   BPCL/Ethen multi-site table came back with every Site linked but every Order still bare).
+3. **Third pass** (commit `b9bf646`): abstract instructions clearly weren't landing, so added
+   a literal 2-row worked example (both columns linked, copy this exact pattern) immediately
+   followed by a labeled "Not this (WRONG)" counter-example showing the exact bare-order
+   mistake, plus a closing instruction to re-scan every row before sending. Concrete examples
+   over abstract rules, once again, for the same reason `create_site_status_update`'s prior
+   fixes needed real stage-key lists rather than descriptions.
+
+**Verified live end-to-end after the third pass** (previous two passes were deployed on
+prompt-review confidence only, since both configured LLM providers - Gemini and NVIDIA - were
+down at the time; see below): seeded a throwaway customer with 3 orders/sites locally, asked
+the agent for exactly the reported shape ("table with order and site"), and inspected the raw
+markdown - all 3 rows had both the order number and the site name wrapped in real
+`/orders/{id}` and `/sites/{id}` links, zero bare order mentions. Test data deleted afterward.
+`tsc --noEmit` clean on all three commits.
+
+**Also found along the way, not yet fixed**: NVIDIA (the configured fallback LLM provider,
+priority 2) is returning a persistent `410 Gone` on every call - looks like a dead/deprecated
+endpoint rather than a transient issue, meaning the fallback currently doesn't protect against
+Gemini (priority 1) having a bad moment, since it's already broken on its own. User is aware
+and said they'd look into both providers separately later - flagged here so it isn't lost.
+
 ### Fix: agent had no read tool for SITC timeline entries (2026-09-05)
 User-reported: the in-app agent could `create_site_status_update` (post a new SITC timeline
 entry) but had no way to list/summarise past ones for a site - asked to show the history for
