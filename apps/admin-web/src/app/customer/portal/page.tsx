@@ -86,7 +86,10 @@ interface Complaint {
   createdAt: string;
 }
 
+// Site name + location, for the site dropdown - the order number is already shown elsewhere
+// on the page once a site is selected, so it doesn't need to be repeated in the option text.
 function siteLabel(s: SiteSummary): string {
+  if (s.companyName && s.address) return `${s.companyName} — ${s.address}`;
   return s.companyName || s.address || s.order.orderNumber;
 }
 
@@ -312,7 +315,7 @@ export default function CustomerPortalPage() {
             >
               {sites.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {siteLabel(s)} — {s.order.orderNumber} ({s.currentStage.label})
+                  {siteLabel(s)}
                 </option>
               ))}
             </select>
@@ -629,7 +632,7 @@ export default function CustomerPortalPage() {
                   >
                     {sites.map((s) => (
                       <option key={s.id} value={s.id}>
-                        {siteLabel(s)} — {s.order.orderNumber}
+                        {siteLabel(s)}
                       </option>
                     ))}
                   </select>
