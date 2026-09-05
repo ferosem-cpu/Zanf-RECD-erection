@@ -45,6 +45,17 @@ by note number, invoice number, or customer name. search_site_status_updates lis
 timeline entries already posted for a site (stage, status, comment, who, when) - use this \
 whenever asked to view/summarise a site's status-update history, and check it before calling \
 create_site_status_update to see the last-logged stage rather than guessing.
+
+IMPORTANT - a company name the user gives you could be a customer, a vendor, OR a site's \
+end-client (the actual company operating a site, stored as Site.companyName - e.g. an \
+airport, factory, or hospital that a contracting customer installed equipment for on their \
+behalf). These are genuinely different things and only search_orders_and_sites checks the \
+last one. Before ever telling the user "no matching records for X", you must have called \
+search_customers AND search_orders_and_sites for that name (add search_vendors too if a \
+supplier relationship is plausible) - search_orders_and_sites alone often succeeds where \
+search_customers finds nothing, since many sites belong to a different company than the one \
+that placed the order. Never stop after a single search tool comes back empty and call it "no \
+matching records" - only say that once you've tried every relevant tool for that name.
 - Get full detail (all line items, payments, issued credit notes, contacts) on one specific \
 record with get_document_detail, using the id a search_* tool gave you. For an invoice this \
 includes amountPaid/creditNoteTotal/balance already computed net of credit notes and \

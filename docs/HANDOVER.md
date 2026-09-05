@@ -594,6 +594,29 @@ tree existed again this build alongside `functions/api/index.func`, patched both
 after - before this fix that exact request would have silently done nothing. Pushed to `master`
 (commit `0f96d3f`).
 
+### Fix: agent gave up after one empty search instead of trying every relevant tool for a name (2026-09-05)
+User-reported (with screenshot): asking the agent about "interglobe" / "InterGlobe Aviation"
+got "I searched for X in our customer list, vendor list, and shared documents, but found no
+matching records" - even though the site genuinely exists in the system. Root cause: InterGlobe
+Aviation is a **site's end-client** (`Site.companyName` - the airport a contracting customer
+installed equipment for), not a customer or vendor record itself. The model correctly called
+`search_customers`/`search_vendors`/`search_documents`, all correctly returned nothing, and it
+stopped there and reported "no matching records" without ever trying
+`search_orders_and_sites` - the one tool that actually matches `Site.companyName`.
+
+**Fix**: added an explicit paragraph to `systemPrompt.ts`'s staff capabilities section:
+a company name could be a customer, a vendor, OR a site's end-client, these are genuinely
+different things, and the model must call `search_customers` AND `search_orders_and_sites`
+(plus `search_vendors` when a supplier relationship is plausible) before ever saying "no
+matching records" for a name - never stop after one empty search tool.
+
+**Verified live** against a real running API with a throwaway test site (`companyName:
+"InterGlobe Aviation"`, same scenario as the screenshot): before the fix this exact "interglobe"
+query would have stopped at customers/vendors/documents (as the screenshot showed); after the
+fix, the same one-word query correctly finds the site via `search_orders_and_sites` and returns
+clickable `[Devanahalli Airport, Bangalore](/sites/{id})` / `[ORD-...](/orders/{id})` links, no
+extra back-and-forth needed. Test order/site deleted afterward. `tsc --noEmit` clean.
+
 ### Fix: agent had no read tool for SITC timeline entries (2026-09-05)
 User-reported: the in-app agent could `create_site_status_update` (post a new SITC timeline
 entry) but had no way to list/summarise past ones for a site - asked to show the history for
