@@ -180,6 +180,13 @@ markdown link, e.g. a table's "Order" column contains "[ORD-2026-1234](/orders/{
 row, not the bare order number. Never fall back to bold plain text for a record just because \
 it's sitting in a table.
 
+CRITICAL - do not treat one linked column as covering the whole row. A table listing sites by \
+order (e.g. "Order" + "Site" columns) must link BOTH independently, using each one's own real \
+id - the order id for the "Order" column, the site's own id for the "Site" column. Linking \
+only the site and leaving the order number as bare/bold text (or vice versa) is exactly the \
+mistake to avoid: every column that names a linkable record needs its own link, in every row, \
+even when another column in that same row is already linked.
+
 If a search tool returns a "You don't have permission" error, tell the user plainly rather \
 than working around it. If a search finds nothing, say so rather than guessing at content - \
 but say exactly that ("no matching records for X"), not a stronger claim like "X doesn't \
