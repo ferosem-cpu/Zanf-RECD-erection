@@ -64,6 +64,22 @@ export const createOrderSchema = z.object({
   customerNotes: z.string().optional(),
 });
 
+/** Edit an existing order's own fields - product, commercial figures, dates, customer PO
+ * reference. Deliberately excludes customerId (an order doesn't move between customers -
+ * delete and recreate instead) and the customer-self-service-only fields (siteAddress,
+ * customerNotes, requestedByCustomer) which only make sense at creation time. */
+export const updateOrderSchema = z.object({
+  productId: z.string().optional(),
+  quantity: z.number().int().positive().optional(),
+  value: z.number().nonnegative().nullable().optional(),
+  orderDate: z.string().datetime().optional(),
+  promisedDeliveryDate: z.string().datetime().nullable().optional(),
+  actualDispatchDate: z.string().datetime().nullable().optional(),
+  plannedExhaustHookupType: z.string().nullable().optional(),
+  customerPoNumber: z.string().nullable().optional(),
+  customerPoDate: z.string().datetime().nullable().optional(),
+});
+
 /** Adds another RECD product to an existing order/site (same order, multiple units). */
 export const addOrderLineItemSchema = z.object({
   productId: z.string(),

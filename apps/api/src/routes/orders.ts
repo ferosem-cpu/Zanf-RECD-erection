@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, ROLE_KEY, STAGE_KEY } from "@recd/shared";
+import { addOrderLineItemSchema, createOrderSchema, PERMISSION_KEY, ROLE_KEY, STAGE_KEY, updateOrderSchema } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
@@ -46,6 +46,40 @@ ordersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async 
   });
 
   res.json({ ...order, otherCustomerSites: otherSites });
+});
+
+/**
+ * Edit an existing order's own fields - product, quantity, value, dates, customer PO
+ * reference. Staff only (customers can view but never edit an order once placed - a customer
+ * wanting a change should raise a complaint or contact Sales, same as any other post-order
+ * request). Does not touch the site record at all.
+ */
+ordersRouter.patch("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const parsed = updateOrderSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const data = parsed.data;
+
+  const orderId = asString(req.params.id);
+  const existing = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existing) return res.status(404).json({ error: "Order not found" });
+
+  const order = await prisma.order.update({
+    where: { id: orderId },
+    data: {
+      productId: data.productId,
+      quantity: data.quantity,
+      value: data.value,
+      orderDate: data.orderDate ? new Date(data.orderDate) : undefined,
+      promisedDeliveryDate: data.promisedDeliveryDate === undefined ? undefined : data.promisedDeliveryDate === null ? null : new Date(data.promisedDeliveryDate),
+      actualDispatchDate: data.actualDispatchDate === undefined ? undefined : data.actualDispatchDate === null ? null : new Date(data.actualDispatchDate),
+      plannedExhaustHookupType: data.plannedExhaustHookupType,
+      customerPoNumber: data.customerPoNumber,
+      customerPoDate: data.customerPoDate === undefined ? undefined : data.customerPoDate === null ? null : new Date(data.customerPoDate),
+    },
+    include: { site: true, customer: { select: { name: true } }, product: { select: { name: true, model: true } } },
+  });
+
+  res.json(order);
 });
 
 /**

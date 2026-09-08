@@ -566,6 +566,33 @@ same session:
 
 ## Changelog (condensed)
 
+### Feature: order edit (2026-09-05)
+User-reported: no way to edit an order (e.g. change the product on an order for a particular
+site) - confirmed by reading `orders.ts`: the route only ever had `GET`, `POST` (create), and
+`DELETE`. There was genuinely no `PATCH`, not a hidden/missing UI button - `orders/[id]/page.tsx`
+was read-only + delete.
+
+Added `updateOrderSchema` to the shared package (all fields optional/partial: `productId`,
+`quantity`, `value`, `orderDate`, `promisedDeliveryDate`, `actualDispatchDate`,
+`plannedExhaustHookupType`, `customerPoNumber`, `customerPoDate`) and `PATCH /orders/:id`,
+gated to staff (`manage_orders`) only - a customer can view their order but never edit it once
+placed. Added a full "Edit order" form to the order detail page (product dropdown sourced from
+`GET /products`, quantity, value, three date pickers, exhaust hookup type, customer PO
+number/date) with its own Save/Cancel state, separate from the existing Delete flow.
+
+**Who can use it**: confirmed directly from `seed.ts`'s role definitions rather than assumed -
+Super Admin and Owner/Admin/Management get every permission (Owner/Admin and Management via
+`ALL_PERMISSIONS` minus `manage_settings`), and Sales has `manage_orders` as one of its three
+core permissions - so all of them see the "Edit order" button. Customers never do.
+
+**Verified live end-to-end** against a real running API (not just code review): changed a real
+order's product from RECD-250 to a different product, quantity to 3, and set a customer PO
+number - all three took effect via `PATCH`, then reverted cleanly back to the original values
+in a second call. Separately confirmed a customer session attempting the same `PATCH` gets a
+clean `403 Forbidden`, proving the staff-only gate actually holds rather than just looking
+right in the route code. `tsc --noEmit` clean and `next build` clean (41/41 routes, including
+`/orders/[id]`) on both apps.
+
 ### Fix: case-sensitive email lookup silently swallowed customer OTP requests (2026-09-03)
 User-reported: a customer trying to sign in wasn't receiving their OTP email. Root cause:
 `/auth/email-otp/request` (and `/login`, `/auth/google`) matched email against `User.email` - a

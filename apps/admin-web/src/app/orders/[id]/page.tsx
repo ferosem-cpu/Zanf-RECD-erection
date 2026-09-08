@@ -50,10 +50,23 @@ interface OrderDetail {
   otherCustomerSites: OtherSite[];
 }
 
+interface Product {
+  id: string;
+  name: string;
+  model: string;
+  ratingSpec: string | null;
+}
+
 function mapsUrl(address: string | null, lat: string | null, lng: string | null): string | null {
   if (lat && lng) return `https://www.google.com/maps?q=${lat},${lng}`;
   if (address) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
   return null;
+}
+
+// yyyy-MM-dd for a <input type="date"> value - undefined/null becomes "" (empty date input).
+function toDateInputValue(iso: string | null | undefined): string {
+  if (!iso) return "";
+  return iso.slice(0, 10);
 }
 
 export default function OrderDetailPage() {
@@ -64,6 +77,21 @@ export default function OrderDetailPage() {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Edit form
+  const [editing, setEditing] = useState(false);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [editProductId, setEditProductId] = useState("");
+  const [editQuantity, setEditQuantity] = useState(1);
+  const [editValue, setEditValue] = useState("");
+  const [editOrderDate, setEditOrderDate] = useState("");
+  const [editPromisedDate, setEditPromisedDate] = useState("");
+  const [editDispatchDate, setEditDispatchDate] = useState("");
+  const [editExhaustHookup, setEditExhaustHookup] = useState("");
+  const [editPoNumber, setEditPoNumber] = useState("");
+  const [editPoDate, setEditPoDate] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -87,6 +115,59 @@ export default function OrderDetailPage() {
     }
   }
 
+  async function openEdit() {
+    if (!order) return;
+    setSaveError(null);
+    setEditProductId(order.product ? products.find((p) => p.name === order.product.name && p.model === order.product.model)?.id ?? "" : "");
+    setEditQuantity(order.quantity);
+    setEditValue(order.value != null ? String(order.value) : "");
+    setEditOrderDate(toDateInputValue(order.orderDate));
+    setEditPromisedDate(toDateInputValue(order.promisedDeliveryDate));
+    setEditDispatchDate(toDateInputValue(order.actualDispatchDate));
+    setEditExhaustHookup(order.plannedExhaustHookupType ?? "");
+    setEditPoNumber(order.customerPoNumber ?? "");
+    setEditPoDate(toDateInputValue(order.customerPoDate));
+    setEditing(true);
+    if (products.length === 0) {
+      try {
+        const productsData = await api<Product[]>("/products");
+        setProducts(productsData);
+        const match = productsData.find((p) => p.name === order.product.name && p.model === order.product.model);
+        if (match) setEditProductId(match.id);
+      } catch (err) {
+        console.error("Failed to load products", err);
+      }
+    }
+  }
+
+  async function saveEdit() {
+    if (!order) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const updated = await api<OrderDetail>(`/orders/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          productId: editProductId || undefined,
+          quantity: editQuantity,
+          value: editValue === "" ? null : Number(editValue),
+          orderDate: editOrderDate ? new Date(editOrderDate).toISOString() : undefined,
+          promisedDeliveryDate: editPromisedDate ? new Date(editPromisedDate).toISOString() : null,
+          actualDispatchDate: editDispatchDate ? new Date(editDispatchDate).toISOString() : null,
+          plannedExhaustHookupType: editExhaustHookup || null,
+          customerPoNumber: editPoNumber || null,
+          customerPoDate: editPoDate ? new Date(editPoDate).toISOString() : null,
+        }),
+      });
+      setOrder({ ...order, ...updated });
+      setEditing(false);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save changes");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (error && !order) return <p className="text-sm text-red-600">{error}</p>;
   if (!order) return <p className="text-sm text-gray-500">Loading...</p>;
 
@@ -107,18 +188,95 @@ export default function OrderDetailPage() {
           </p>
         </div>
         {canManage && (
-          <button
-            type="button"
-            onClick={deleteOrder}
-            disabled={deleting}
-            className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
-          >
-            {deleting ? "Deleting…" : "Delete order"}
-          </button>
+          <div className="flex gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={openEdit}
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+            >
+              Edit order
+            </button>
+            <button
+              type="button"
+              onClick={deleteOrder}
+              disabled={deleting}
+              className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
+            >
+              {deleting ? "Deleting…" : "Delete order"}
+            </button>
+          </div>
         )}
       </div>
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
+
+      {editing && (
+        <section className="card p-5 space-y-4 border-l-4" style={{ borderLeftColor: "var(--theme-accent)" }}>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Edit order</h2>
+            <button type="button" onClick={() => setEditing(false)} className="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Product</label>
+              <select className="field w-full" value={editProductId} onChange={(e) => setEditProductId(e.target.value)}>
+                <option value="">Keep current ({order.product.name} {order.product.model})</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.model}){p.ratingSpec ? ` — ${p.ratingSpec}` : ""}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Quantity</label>
+              <input type="number" min={1} className="field w-full" value={editQuantity} onChange={(e) => setEditQuantity(Math.max(1, Number(e.target.value) || 1))} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Order value (₹)</label>
+              <input type="number" min={0} className="field w-full" value={editValue} onChange={(e) => setEditValue(e.target.value)} placeholder="Leave blank to clear" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Order date</label>
+              <input type="date" className="field w-full" value={editOrderDate} onChange={(e) => setEditOrderDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Promised delivery</label>
+              <input type="date" className="field w-full" value={editPromisedDate} onChange={(e) => setEditPromisedDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Actual dispatch</label>
+              <input type="date" className="field w-full" value={editDispatchDate} onChange={(e) => setEditDispatchDate(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Planned exhaust hookup</label>
+              <select className="field w-full" value={editExhaustHookup} onChange={(e) => setEditExhaustHookup(e.target.value)}>
+                <option value="">Not set</option>
+                <option value="replace_existing_silencer">Replace existing silencer</option>
+                <option value="add_after_existing_exhaust">Add after existing exhaust</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Customer PO number</label>
+              <input type="text" className="field w-full" value={editPoNumber} onChange={(e) => setEditPoNumber(e.target.value)} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Customer PO date</label>
+              <input type="date" className="field w-full" value={editPoDate} onChange={(e) => setEditPoDate(e.target.value)} />
+            </div>
+          </div>
+
+          {saveError && <div className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{saveError}</div>}
+
+          <div className="flex gap-2">
+            <button type="button" onClick={saveEdit} disabled={saving} className="btn-primary px-4 py-2 text-sm font-semibold disabled:opacity-50">
+              {saving ? "Saving…" : "Save changes"}
+            </button>
+            <button type="button" onClick={() => setEditing(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+              Cancel
+            </button>
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <section className="card p-5 space-y-2">
