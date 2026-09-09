@@ -594,6 +594,27 @@ same session:
 
 ## Changelog (condensed)
 
+### Fix: "Save changes" on the order edit form crashed the whole page (2026-09-09)
+
+User-reported: clicking Save on an order's Edit form threw "Application error: a client-side
+exception has occurred" - a hard Next.js error boundary, not a form validation message.
+Root cause: `saveEdit()` merged the `PATCH /orders/:id` response straight into state
+(`setOrder({ ...order, ...updated })`), but the PATCH route's own `include` is a thin echo
+(`site: true` with no nested `currentStage`/`assignedEngineer`/`vendor`, `product: { select:
+{ name, model } }` with no `id`/`ratingSpec`, no `lineItems` at all) - it was written as a
+save-confirmation payload, not the full detail shape `OrderDetail` claims. The merge silently
+replaced `order.site` with the shallow version, and the page reads
+`order.site.currentStage.label` with **no optional chaining** a few lines down - `undefined`
+`.label` threw immediately on the next render, right after every successful save. This bug
+predates today's session (untouched code from the original 2026-09-05 order-edit feature) but
+was only now being hit, apparently the first real "Save changes" click since that feature and
+today's customer-pricing work shipped. Fix, in `orders/[id]/page.tsx`'s `saveEdit()`: stop
+trusting the PATCH response's shape entirely - fire the PATCH, then call the existing `load()`
+(the same full-include `GET /orders/:id` the page starts with) to refresh state instead of a
+manual merge. No backend change needed. Verified with `tsc --noEmit` (clean); not yet
+click-tested live (the exact repro - edit an order, Save, confirm no crash and the page shows
+the update - is owed).
+
 ### Follow-up: "Populate cost" replaces the single-product "Use" button on the order edit form (2026-09-09)
 
 User feedback on the feature just below: the edit form's per-product "Use (₹X)" button and

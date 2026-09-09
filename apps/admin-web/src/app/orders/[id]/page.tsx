@@ -161,7 +161,15 @@ export default function OrderDetailPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      const updated = await api<OrderDetail>(`/orders/${id}`, {
+      // PATCH only returns a thin echo of the order (site: true with no nested
+      // currentStage/assignedEngineer/vendor, product with just name/model, no lineItems) -
+      // it's meant as a save confirmation, not the full detail shape. Merging it straight
+      // into state (the old `setOrder({ ...order, ...updated })`) silently dropped
+      // order.site.currentStage, which the page reads as `order.site.currentStage.label`
+      // with no optional chaining - crashed the whole page right after a successful save.
+      // Re-fetching via `load()` (the same GET with full includes the page started with)
+      // avoids ever trusting the PATCH response's shape.
+      await api(`/orders/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
           productId: editProductId || undefined,
@@ -175,7 +183,7 @@ export default function OrderDetailPage() {
           customerPoDate: editPoDate ? new Date(editPoDate).toISOString() : null,
         }),
       });
-      setOrder({ ...order, ...updated });
+      load();
       setEditing(false);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Failed to save changes");
