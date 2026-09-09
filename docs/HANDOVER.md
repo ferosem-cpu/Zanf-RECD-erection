@@ -593,6 +593,75 @@ clean `403 Forbidden`, proving the staff-only gate actually holds rather than ju
 right in the route code. `tsc --noEmit` clean and `next build` clean (41/41 routes, including
 `/orders/[id]`) on both apps.
 
+### INCIDENT: order-edit feature was never actually deployed, plus two real environment bugs found (2026-09-08/09)
+User-reported: couldn't see the "Edit order" button after the feature above shipped. Root
+cause was simple but important - **`admin-web`'s git-connected auto-deploy never fired** for
+that push. Checked `vercel ls admin-web` directly: every production deployment was 4 days old,
+nothing from the recent pushes. The code was correct the whole time; it just never went out.
+Root cause of the auto-deploy gap itself was not found this session (didn't get to check
+GitHub webhook delivery logs or Vercel's Git integration settings) - flagged as still open
+below.
+
+**Fix applied**: manually deployed `admin-web` instead of relying on auto-deploy, and along
+the way found two real, independent local-environment bugs worth knowing for every future
+session on this machine:
+
+**1. `NODE_ENV=production` is set persistently at the Windows user/system level on this
+machine.** npm auto-omits all devDependencies (`omit: ["dev"]`) whenever that's set. This
+silently strips `typescript`, `tailwindcss`, and anything else in devDependencies on *every*
+`npm install` - including ones run as part of `vercel build`'s own install step - and does so
+with **zero error output**: `npm install typescript` reports "up to date" and exits 0 even
+though the package is nowhere on disk, because npm's dependency resolution genuinely considers
+the omit-dev tree "satisfied." This wasted a huge amount of time this session (multiple full
+`node_modules` wipes, `npm ci`, `npm cache verify`, and direct targeted installs all failed
+identically before the actual cause - `npm config get omit` → `dev` - was found). **Fixed for
+good** with a new root `.npmrc` containing `include=dev`, which forces npm to always install
+devDependencies for this project regardless of `NODE_ENV` - confirmed working both for local
+installs and inside Vercel's own remote build environment. If a future session ever sees
+`tsc`/`tailwindcss`/any dev tool "not recognized" right after an install that reported success,
+check `npm config get omit` before assuming node_modules is merely stale.
+
+**2. Local (`vercel build --prod` on this Windows machine, no `--prod` remote build) admin-web
+builds fail at the very last step** with `Error: EPERM: operation not permitted, symlink
+'..\_not-found.func' -> '...\functions\orders\[id].func'` - Next.js's build-output step tries
+to symlink shared route chunks together, and Windows requires either Developer Mode enabled or
+admin elevation to create symlinks as a normal user; neither is available in this environment
+(a `New-ItemProperty` attempt on the Developer Mode registry key was denied). The build itself
+completes successfully (all 41 routes compile and generate fine) - only this final
+build-output packaging step fails, so `tsc --noEmit`/`next build` alone won't catch it.
+
+**Working fix, and the better path going forward**: `vercel deploy --prod` **without**
+`--prebuilt` uploads the source and builds entirely on Vercel's own Linux infrastructure,
+which has no such symlink restriction. This is simpler than the local-build dance and is now
+the preferred method for `admin-web` deploys on this machine. Confirmed working end to end:
+uploaded, built remotely (`tsc` succeeded there too, confirming `.npmrc` applies remotely as
+well), all 41 routes generated, deployed, aliased to `app.zanf.org`.
+
+**Verified live, concretely, not just "Ready" status**: fetched the actual deployed
+`/orders/[id]` page bundle from `app.zanf.org` and confirmed the literal string "Edit order"
+is present in the shipped JS - not inferred from deployment status, actually read from the
+production bundle.
+
+**Worth trying for `apps/api` too, next time it needs a deploy**: this whole session's
+`filePathMap`/`node_modules/@recd/shared` saga (documented further up this doc) was entirely a
+consequence of building **locally on Windows** via `vercel build --prebuilt`. A plain
+`vercel deploy --prod` (remote build, no `--prebuilt`) for `apps/api` was never tried - it may
+sidestep that entire class of problem the same way it did here for `admin-web`, since the
+symlink-through-a-workspace issue is fundamentally a Windows-vs-Linux difference. Worth trying
+that first before reaching for the local-build-and-patch procedure again.
+
+**Still open / not done this session:**
+- Root cause of why `admin-web`'s git auto-deploy stopped firing was not found - only worked
+  around via manual `vercel deploy --prod`. Next session should check the GitHub App/webhook
+  connection on the repo and Vercel's project Git settings before assuming manual deploys are
+  the permanent answer.
+- Windows Developer Mode is still not enabled on this machine (blocked on missing admin
+  rights) - local `admin-web` builds will keep hitting the symlink EPERM until either that's
+  enabled or the team standardizes on remote builds for this app.
+- A one-off accidental `typescript` `^5.6.0` → `^5.6.3` bump in root `package.json` from
+  mid-session debugging was caught and reverted (`git checkout -- package.json
+  package-lock.json`) before committing - not shipped.
+
 ### Fix: case-sensitive email lookup silently swallowed customer OTP requests (2026-09-03)
 User-reported: a customer trying to sign in wasn't receiving their OTP email. Root cause:
 `/auth/email-otp/request` (and `/login`, `/auth/google`) matched email against `User.email` - a
