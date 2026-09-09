@@ -67,7 +67,6 @@ function OrdersPageInner() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [newCustomer, setNewCustomer] = useState(false);
-  const [newProduct, setNewProduct] = useState(false);
   const [form, setForm] = useState({
     customerId: "",
     customerName: "",
@@ -75,15 +74,16 @@ function OrdersPageInner() {
     contactName: "",
     contactPhone: "",
     contactEmail: "",
-    productId: "",
-    productName: "",
-    productModel: "",
-    productRatingSpec: "",
-    quantity: "1",
     value: "",
     orderDate: today(),
     plannedExhaustHookupType: EXHAUST_OPTIONS[0].value,
   });
+  // One row per product on this order - the first row becomes the order's own
+  // productId/quantity, any further rows are added as OrderLineItems (extra RECD units on
+  // the same order/site) right after the order itself is created. Replaces the old inline
+  // "+ New product" (create-a-catalog-product) flow - new catalog products are still added
+  // from the Products page, this form only picks from what's already there.
+  const [productLines, setProductLines] = useState([{ productId: "", quantity: "1" }]);
   // This customer's negotiated product prices (productId -> price) - drives the Value
   // auto-fill below and the "Update pricing" hint, same source as the Quotations form.
   const [customerProductPrices, setCustomerProductPrices] = useState<Record<string, string>>({});
@@ -122,16 +122,31 @@ function OrdersPageInner() {
       .catch(() => setCustomerProductPrices({}));
   }, [canViewPricing, form.customerId, newCustomer]);
 
-  // Auto-fill Value from this customer's negotiated price for the selected product
-  // (price x quantity) whenever customer/product/quantity change - leaves it blank when
-  // there's no override, so staff can fill it in later. Stops once the user edits Value
-  // by hand (valueTouched).
+  // Auto-fill Value from this customer's negotiated price for every product line (price x
+  // quantity, summed across all rows) whenever a product/quantity changes - leaves it blank
+  // when none of the selected products have an override, so staff can fill it in later.
+  // Stops once the user edits Value by hand (valueTouched).
   useEffect(() => {
-    if (valueTouched || newProduct) return;
-    const price = form.productId ? customerProductPrices[form.productId] : undefined;
-    const suggested = price ? (parseFloat(price) * (parseFloat(form.quantity) || 1)).toFixed(2) : "";
+    if (valueTouched) return;
+    const selected = productLines.filter((l) => l.productId);
+    const anyPriced = selected.some((l) => customerProductPrices[l.productId]);
+    const total = selected.reduce((sum, l) => {
+      const price = customerProductPrices[l.productId];
+      return price ? sum + parseFloat(price) * (parseFloat(l.quantity) || 1) : sum;
+    }, 0);
+    const suggested = anyPriced ? total.toFixed(2) : "";
     setForm((f) => (f.value === suggested ? f : { ...f, value: suggested }));
-  }, [form.productId, form.quantity, customerProductPrices, valueTouched, newProduct]);
+  }, [productLines, customerProductPrices, valueTouched]);
+
+  function addProductLine() {
+    setProductLines((lines) => [...lines, { productId: "", quantity: "1" }]);
+  }
+  function updateProductLine(i: number, patch: Partial<{ productId: string; quantity: string }>) {
+    setProductLines((lines) => lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  }
+  function removeProductLine(i: number) {
+    setProductLines((lines) => lines.filter((_, idx) => idx !== i));
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -154,34 +169,41 @@ function OrdersPageInner() {
       }
       if (!customerId) throw new Error("Please choose or create a customer");
 
-      let productId = form.productId;
-      if (newProduct) {
-        const created = await api<{ id: string }>("/products", {
-          method: "POST",
-          body: JSON.stringify({
-            name: form.productName,
-            model: form.productModel,
-            ratingSpec: form.productRatingSpec || undefined,
-          }),
-        });
-        productId = created.id;
-      }
-      if (!productId) throw new Error("Please choose or create a product");
+      const selectedLines = productLines.filter((l) => l.productId);
+      if (selectedLines.length === 0) throw new Error("Please choose at least one product");
+      const [firstLine, ...extraLines] = selectedLines;
 
-      await api("/orders", {
+      const createdOrder = await api<{ id: string }>("/orders", {
         method: "POST",
         body: JSON.stringify({
           customerId,
-          productId,
-          quantity: parseInt(form.quantity, 10) || 1,
+          productId: firstLine.productId,
+          quantity: parseInt(firstLine.quantity, 10) || 1,
           value: form.value === "" ? undefined : parseFloat(form.value),
           orderDate: new Date(form.orderDate).toISOString(),
           plannedExhaustHookupType: form.plannedExhaustHookupType,
         }),
       });
+
+      // Any further selected products become extra units on the same order/site
+      // (OrderLineItem) - the order itself already exists at this point, so a failure here
+      // is surfaced but doesn't roll anything back (retrying would create a duplicate order).
+      for (const line of extraLines) {
+        try {
+          await api(`/orders/${createdOrder.id}/line-items`, {
+            method: "POST",
+            body: JSON.stringify({ productId: line.productId, quantity: parseInt(line.quantity, 10) || 1 }),
+          });
+        } catch (err) {
+          alert(
+            `Order created, but failed to add an extra product: ${err instanceof Error ? err.message : "unknown error"}. Open the order to add it from there.`,
+          );
+          break;
+        }
+      }
+
       setOpen(false);
       setNewCustomer(false);
-      setNewProduct(false);
       setForm((f) => ({
         ...f,
         customerName: "",
@@ -189,12 +211,9 @@ function OrdersPageInner() {
         contactName: "",
         contactPhone: "",
         contactEmail: "",
-        productName: "",
-        productModel: "",
-        productRatingSpec: "",
         value: "",
-        quantity: "1",
       }));
+      setProductLines([{ productId: "", quantity: "1" }]);
       setValueTouched(false);
       load();
     } catch (err) {
@@ -353,32 +372,54 @@ function OrdersPageInner() {
 
               <div>
                 <div className="mb-1 flex items-center justify-between">
-                  <label className="block text-xs font-medium text-gray-500">Product</label>
-                  <button type="button" onClick={() => setNewProduct((v) => !v)} className="text-xs font-medium text-[var(--theme-accent)]">
-                    {newProduct ? "Choose existing" : "+ New product"}
+                  <label className="block text-xs font-medium text-gray-500">Products</label>
+                  <button type="button" onClick={addProductLine} className="text-xs font-medium text-[var(--theme-accent)]">
+                    + Add product
                   </button>
                 </div>
-                {newProduct ? (
-                  <div className="space-y-2 rounded-lg border border-gray-200 p-3">
-                    <input required placeholder="Product name" className="field w-full" value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} />
-                    <input required placeholder="Model (unique)" className="field w-full" value={form.productModel} onChange={(e) => setForm({ ...form, productModel: e.target.value })} />
-                    <input placeholder="Rating spec (optional)" className="field w-full" value={form.productRatingSpec} onChange={(e) => setForm({ ...form, productRatingSpec: e.target.value })} />
-                  </div>
-                ) : (
-                  <select required className="field w-full" value={form.productId} onChange={(e) => setForm({ ...form, productId: e.target.value })}>
-                    <option value="">Select a product</option>
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
-                    ))}
-                  </select>
+                <div className="space-y-2">
+                  {productLines.map((line, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <select
+                        required
+                        className="field flex-1"
+                        value={line.productId}
+                        onChange={(e) => updateProductLine(i, { productId: e.target.value })}
+                      >
+                        <option value="">Select a product</option>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name} ({p.model})</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={1}
+                        className="field w-20"
+                        title="Quantity"
+                        value={line.quantity}
+                        onChange={(e) => updateProductLine(i, { quantity: e.target.value })}
+                      />
+                      {productLines.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeProductLine(i)}
+                          className="shrink-0 text-gray-400 hover:text-red-600 px-1"
+                          aria-label="Remove product"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {productLines.length > 1 && (
+                  <p className="mt-1 text-[11px] text-gray-400">
+                    The first product becomes the order&apos;s main product; the rest are added as additional units on the same order/site.
+                  </p>
                 )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Quantity</label>
-                  <input type="number" min={1} className="field w-full" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Value (₹)</label>
                   <input
@@ -392,17 +433,26 @@ function OrdersPageInner() {
                       setForm({ ...form, value: e.target.value });
                     }}
                   />
-                  {canViewPricing && form.customerId && !newCustomer && form.productId && !newProduct && (
-                    customerProductPrices[form.productId] ? (
+                  {canViewPricing && form.customerId && !newCustomer && productLines.some((l) => l.productId) && (
+                    productLines.some((l) => l.productId && customerProductPrices[l.productId]) ? (
                       <p className="mt-1 text-[11px] text-gray-400">
-                        Customer price: ₹{Number(customerProductPrices[form.productId]).toLocaleString("en-IN")}/unit ·{" "}
+                        {productLines.filter((l) => l.productId).length > 1
+                          ? `Cumulative customer price (${productLines.filter((l) => l.productId).length} products): ₹${productLines
+                              .filter((l) => l.productId)
+                              .reduce((sum, l) => {
+                                const price = customerProductPrices[l.productId];
+                                return price ? sum + parseFloat(price) * (parseFloat(l.quantity) || 1) : sum;
+                              }, 0)
+                              .toLocaleString("en-IN")}`
+                          : `Customer price: ₹${Number(customerProductPrices[productLines[0].productId]).toLocaleString("en-IN")}/unit`}
+                        {" · "}
                         <a href={`/finance/customer-pricing?customer=${form.customerId}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
                           Update pricing
                         </a>
                       </p>
                     ) : (
                       <p className="mt-1 text-[11px] text-amber-600">
-                        No customer pricing for this product yet ·{" "}
+                        No customer pricing set for {productLines.filter((l) => l.productId).length > 1 ? "these products" : "this product"} yet ·{" "}
                         <a href={`/finance/customer-pricing?customer=${form.customerId}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
                           Add pricing
                         </a>

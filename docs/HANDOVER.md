@@ -594,6 +594,30 @@ same session:
 
 ## Changelog (condensed)
 
+### Feature: multiple products on a new order, replacing inline "+ New product" (2026-09-09)
+
+User-reported: the New order form only let you pick one product - no way to add a second RECD
+unit (e.g. a 500kva + a 380kva together) at creation time, only after via the order detail
+page's existing `OrderLineItem` support. Also asked to drop the form's "+ New product" inline
+catalog-product-creation toggle in favor of it.
+
+`orders/page.tsx`: replaced the single `productId`/`quantity` fields (plus the whole
+newProduct/productName/productModel/productRatingSpec toggle) with a `productLines` array
+(`{ productId, quantity }[]`, starts with one empty row). "+ Add product" appends a row, each
+row has its own quantity and a ✕ to remove it (hidden when only one row remains). On submit,
+the first selected row becomes the order's own `productId`/`quantity` (`POST /orders`,
+unchanged); every additional row is added right after via the existing `POST
+/orders/:id/line-items` (`addOrderLineItemSchema` - already used by the order detail page's
+"add another RECD unit" flow, just not exposed at creation time before now). If an extra
+line-item call fails, the order itself is NOT rolled back (retrying would just create a
+duplicate order) - the user gets an `alert()` telling them to add it from the order page
+instead. The Value auto-fill and its customer-pricing hint (added earlier today) now sum
+across every selected product line, not just one, mirroring the "Populate cost" cumulative
+logic on the edit page. New catalog products (not yet in `/products`) are no longer created
+from this form - that's still available from the standalone Products page, unchanged.
+Verified with `tsc --noEmit` (clean); not yet click-tested live (create a real order with 2+
+products and confirm both the order and its line item(s) show up correctly).
+
 ### Fix: "Save changes" on the order edit form crashed the whole page (2026-09-09)
 
 User-reported: clicking Save on an order's Edit form threw "Application error: a client-side
