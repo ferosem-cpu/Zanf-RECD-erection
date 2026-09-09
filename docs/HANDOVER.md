@@ -64,12 +64,13 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-**Current state:** working tree clean; latest work is order editing (`PATCH /orders/:id` +
-an "Edit order" form), a project-level `.npmrc` fix for a `NODE_ENV=production`/npm
-devDependency bug on this machine, and a switch to remote (`vercel deploy --prod`, no
-`--prebuilt`) deploys for `admin-web` after local Windows builds started failing on a symlink
-step (see top of Changelog, 2026-09-08/09). Start a new session by reading "Current open
-items" and the top of "Changelog" below.
+**Current state:** working tree clean; latest work is Order value auto-fill from customer
+pricing (2026-09-09, see top of Changelog), order editing (`PATCH /orders/:id` + an "Edit
+order" form), a project-level `.npmrc` fix for a `NODE_ENV=production`/npm devDependency bug
+on this machine, and a switch to remote (`vercel deploy --prod`, no `--prebuilt`) deploys for
+`admin-web` after local Windows builds started failing on a symlink step (see Changelog,
+2026-09-08/09). Start a new session by reading "Current open items" and the top of
+"Changelog" below.
 
 ## Quick facts
 
@@ -389,6 +390,10 @@ same session:
 
 ## Current open items (as of 2026-09-09)
 
+- **Order value auto-fill from customer pricing + "Update pricing" links (shipped and
+  deployed 2026-09-09) not yet click-tested by a real user** - see Changelog for full detail.
+  Owed: verify the auto-fill, the blank-when-no-override case, the edit-form "Use" button, and
+  both "Update pricing"/"Add pricing" deep links against a real customer with pricing set up.
 - **`admin-web` git auto-deploy has stopped firing on push, root cause not found** (discovered
   2026-09-08/09) — 4+ days of commits never auto-deployed before this was caught. Manual
   `vercel deploy --prod` from the repo root works and is the current workaround. Owed: check
@@ -588,6 +593,67 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Follow-up: "Populate cost" replaces the single-product "Use" button on the order edit form (2026-09-09)
+
+User feedback on the feature just below: the edit form's per-product "Use (₹X)" button and
+"Update pricing" link (which just navigated away) didn't help when a site has more than one
+RECD product (`Order.lineItems` - see the multi-RECD-per-site feature) - Order value needed to
+sum every product's customer price, not just the one being edited. Replaced both with a
+single "Populate cost" button in `orders/[id]/page.tsx`: it sums `customer price × quantity`
+across the main product (at `effectiveEditProductId`/`editQuantity`) and every `lineItems`
+entry (each at its own quantity), and writes the total straight into Order value on click.
+Falls back to counting an unpriced product as ₹0 and shows "(no pricing for N of M products —
+counted as ₹0)" rather than blocking, since partial pricing is a real state. The `OrderDetail`
+TS interface didn't carry `product.id` for the main product or `lineItems[].product` (the API
+already returns it - `include: { product: true }` - just wasn't typed), so pricing lookups
+used to match by name+model; added `id` to both and switched the lookups to use it directly.
+The "Add pricing" link (shown when nothing is priced yet) still navigates to
+`/finance/customer-pricing?customer=<id>` since there's nothing to populate from in that case.
+Same `manage_quotations`/`manage_invoices` gate as before. Verified with `tsc --noEmit`
+(clean); not yet click-tested against a real multi-product order.
+
+### Feature: Order value auto-fill from customer pricing, "Update pricing" links (2026-09-09)
+
+Two related asks: auto-populate a new order's Value from the customer's negotiated
+`CustomerProductPrice` for the chosen product (leave blank if none, still editable), and give
+staff a quick way to open/update that customer's pricing from the order screens. No schema or
+API changes needed — `Order.value` was already nullable/optional on both `createOrderSchema`
+and `updateOrderSchema`; this was a frontend-only change (`apps/admin-web`, 3 files).
+
+- **New order form** (`orders/page.tsx`): fetches `/customer-pricing?customerId=` (same call
+  the Quotations form already makes) whenever the selected customer changes, and auto-sets
+  Value to `price × quantity` whenever customer/product/quantity change - mirrors the
+  Quotations pattern but recomputes on quantity changes too (Order.value is a total, not a
+  per-unit price like Quotations' `unitPrice`, so it can't reuse the "only fill if still
+  empty" guard as-is). A `valueTouched` flag (set the moment the user types into Value)
+  stops the auto-fill from clobbering a manual entry; it resets when a different customer is
+  picked. Value is no longer a `required` field (matches the schema, which was already
+  nullable - the old `required` attribute was stricter than the API). A hint under the field
+  shows the per-unit customer price plus an "Update pricing" link when one exists, or an
+  amber "No customer pricing for this product yet · Add pricing" prompt when it doesn't, both
+  linking to `/finance/customer-pricing?customer=<id>` in a new tab. Hidden entirely for users
+  without `manage_quotations`/`manage_invoices` (same gate as that page itself).
+- **Order edit form** (`orders/[id]/page.tsx`): same pricing fetch, keyed off the order's
+  existing customer (customer can't change on an edit). Deliberately does **not** auto-
+  overwrite `editValue` on open/product-change (there's already a real value that may
+  legitimately differ from the current customer rate) - instead shows the same price hint
+  with a "Use (₹X)" button for a one-click apply (`price × current edit quantity`), plus the
+  same "Update pricing"/"Add pricing" link. Also added a standalone "Update customer pricing"
+  link under the read-only Order value display so it's reachable without opening Edit.
+- **`/finance/customer-pricing`**: now reads a `?customer=<id>` query param (via
+  `useSearchParams`, so the page gained the same `Suspense` wrapper `orders/page.tsx` already
+  uses) and preselects that customer once the customer list loads - this is what the new
+  "Update"/"Add pricing" links deep-link into.
+- Verified with `npx tsc --noEmit` (clean) and a full remote `vercel deploy --prod` build
+  (`next build` compiled and type-checked all 41 routes clean, including the 3 changed pages)
+  - not yet click-tested live by a real Sales/Finance user. Owed: create a test order for a
+  customer with an existing `CustomerProductPrice` override and confirm Value auto-fills
+  correctly, confirm it stays blank with no override, and confirm the edit-form "Use" button
+  and both "Update pricing" links actually navigate/preselect correctly.
+- Deployed via the current `vercel deploy --prod` (remote build) workaround, not git
+  auto-deploy - see the auto-deploy-broken item below. Live on `app.zanf.org` as of this
+  session; `git push` to `master` also went through in case auto-deploy has actually resumed.
 
 ### Feature: order edit (2026-09-05)
 User-reported: no way to edit an order (e.g. change the product on an order for a particular

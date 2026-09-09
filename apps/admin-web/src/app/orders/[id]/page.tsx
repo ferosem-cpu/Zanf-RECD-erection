@@ -34,8 +34,8 @@ interface OrderDetail {
     gstin: string | null;
     contacts: { name: string; phone: string | null; email: string | null }[];
   };
-  product: { name: string; model: string; ratingSpec: string | null; capacityKva: string | null };
-  lineItems: Array<{ id: string; quantity: number; product: { name: string; model: string } }>;
+  product: { id: string; name: string; model: string; ratingSpec: string | null; capacityKva: string | null };
+  lineItems: Array<{ id: string; quantity: number; product: { id: string; name: string; model: string } }>;
   salesEngineer: { name: string } | null;
   site: {
     id: string;
@@ -188,11 +188,25 @@ export default function OrderDetailPage() {
   if (!order) return <p className="text-sm text-gray-500">Loading...</p>;
 
   // The product id the edit form is currently pricing against - the explicitly picked
-  // replacement, or (while it's "Keep current") the current product's own id once the
-  // products list has loaded.
-  const effectiveEditProductId =
-    editProductId || products.find((p) => p.name === order.product.name && p.model === order.product.model)?.id || "";
+  // replacement, or (while it's "Keep current") the current product's own id.
+  const effectiveEditProductId = editProductId || order.product.id;
   const editProductPrice = customerProductPrices[effectiveEditProductId];
+
+  // Cumulative customer-price cost across every product on this order/site - the main
+  // product (at effectiveEditProductId/editQuantity) plus every additional RECD unit in
+  // lineItems (each at its own quantity) - so "Populate cost" totals correctly when a site
+  // has more than one product, not just the one currently being edited.
+  const costParts = [
+    { label: `${order.product.name} (${order.product.model})`, price: customerProductPrices[effectiveEditProductId], quantity: editQuantity },
+    ...order.lineItems.map((li) => ({
+      label: `${li.product.name} (${li.product.model})`,
+      price: customerProductPrices[li.product.id],
+      quantity: li.quantity,
+    })),
+  ];
+  const cumulativeCost = costParts.reduce((sum, part) => sum + (part.price ? parseFloat(part.price) * part.quantity : 0), 0);
+  const anyPriced = costParts.some((part) => part.price);
+  const allPriced = costParts.every((part) => part.price);
 
   const contact = order.customer.contacts[0];
   const siteMap = order.site ? mapsUrl(order.site.address, order.site.gpsLat, order.site.gpsLng) : null;
@@ -258,24 +272,28 @@ export default function OrderDetailPage() {
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Order value (₹)</label>
               <input type="number" min={0} className="field w-full" value={editValue} onChange={(e) => setEditValue(e.target.value)} placeholder="Leave blank to clear" />
               {canViewPricing && (
-                editProductPrice ? (
+                anyPriced ? (
                   <p className="mt-1 text-[11px] text-gray-400">
-                    Customer price: ₹{Number(editProductPrice).toLocaleString("en-IN")}/unit ·{" "}
+                    {order.lineItems.length > 0
+                      ? `Cumulative customer price (${costParts.length} products on this order): ₹${cumulativeCost.toLocaleString("en-IN")}`
+                      : `Customer price: ₹${Number(editProductPrice ?? 0).toLocaleString("en-IN")}/unit`}
+                    {" · "}
                     <button
                       type="button"
                       className="font-medium text-[var(--theme-accent)]"
-                      onClick={() => setEditValue((parseFloat(editProductPrice) * editQuantity).toFixed(2))}
+                      onClick={() => setEditValue(cumulativeCost.toFixed(2))}
                     >
-                      Use (₹{(parseFloat(editProductPrice) * editQuantity).toLocaleString("en-IN")})
+                      Populate cost
                     </button>
-                    {" · "}
-                    <a href={`/finance/customer-pricing?customer=${order.customer.id}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
-                      Update pricing
-                    </a>
+                    {!allPriced && (
+                      <span className="text-amber-600">
+                        {" "}(no pricing for {costParts.filter((p) => !p.price).length} of {costParts.length} products — counted as ₹0)
+                      </span>
+                    )}
                   </p>
                 ) : (
                   <p className="mt-1 text-[11px] text-amber-600">
-                    No customer pricing set for this product ·{" "}
+                    No customer pricing set for {order.lineItems.length > 0 ? "any product on this order" : "this product"} ·{" "}
                     <a href={`/finance/customer-pricing?customer=${order.customer.id}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
                       Add pricing
                     </a>
