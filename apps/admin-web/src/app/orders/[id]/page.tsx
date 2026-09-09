@@ -74,6 +74,8 @@ export default function OrderDetailPage() {
   const router = useRouter();
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_orders");
+  // Same gate as /finance/customer-pricing - order-only users won't see pricing hints.
+  const canViewPricing = hasPermission("manage_quotations") || hasPermission("manage_invoices");
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -93,6 +95,10 @@ export default function OrderDetailPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // This customer's negotiated product prices (productId -> price) - drives the "Update
+  // pricing" hint and the "Use ₹X" quick-fill button on the edit form's Order value field.
+  const [customerProductPrices, setCustomerProductPrices] = useState<Record<string, string>>({});
+
   const load = useCallback(() => {
     if (!id) return;
     setError(null);
@@ -100,6 +106,16 @@ export default function OrderDetailPage() {
   }, [id]);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    if (!canViewPricing || !order) {
+      setCustomerProductPrices({});
+      return;
+    }
+    api<{ products: { productId: string; price: string }[] }>(`/customer-pricing?customerId=${order.customer.id}`)
+      .then((data) => setCustomerProductPrices(Object.fromEntries(data.products.map((p) => [p.productId, p.price]))))
+      .catch(() => setCustomerProductPrices({}));
+  }, [canViewPricing, order?.customer.id]);
 
   async function deleteOrder() {
     if (!order) return;
@@ -171,6 +187,13 @@ export default function OrderDetailPage() {
   if (error && !order) return <p className="text-sm text-red-600">{error}</p>;
   if (!order) return <p className="text-sm text-gray-500">Loading...</p>;
 
+  // The product id the edit form is currently pricing against - the explicitly picked
+  // replacement, or (while it's "Keep current") the current product's own id once the
+  // products list has loaded.
+  const effectiveEditProductId =
+    editProductId || products.find((p) => p.name === order.product.name && p.model === order.product.model)?.id || "";
+  const editProductPrice = customerProductPrices[effectiveEditProductId];
+
   const contact = order.customer.contacts[0];
   const siteMap = order.site ? mapsUrl(order.site.address, order.site.gpsLat, order.site.gpsLng) : null;
 
@@ -234,6 +257,31 @@ export default function OrderDetailPage() {
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Order value (₹)</label>
               <input type="number" min={0} className="field w-full" value={editValue} onChange={(e) => setEditValue(e.target.value)} placeholder="Leave blank to clear" />
+              {canViewPricing && (
+                editProductPrice ? (
+                  <p className="mt-1 text-[11px] text-gray-400">
+                    Customer price: ₹{Number(editProductPrice).toLocaleString("en-IN")}/unit ·{" "}
+                    <button
+                      type="button"
+                      className="font-medium text-[var(--theme-accent)]"
+                      onClick={() => setEditValue((parseFloat(editProductPrice) * editQuantity).toFixed(2))}
+                    >
+                      Use (₹{(parseFloat(editProductPrice) * editQuantity).toLocaleString("en-IN")})
+                    </button>
+                    {" · "}
+                    <a href={`/finance/customer-pricing?customer=${order.customer.id}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
+                      Update pricing
+                    </a>
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-amber-600">
+                    No customer pricing set for this product ·{" "}
+                    <a href={`/finance/customer-pricing?customer=${order.customer.id}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
+                      Add pricing
+                    </a>
+                  </p>
+                )
+              )}
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Order date</label>
@@ -303,6 +351,13 @@ export default function OrderDetailPage() {
             <span className="label">Order value</span>
             <span className="value font-semibold">₹{Number(order.value).toLocaleString("en-IN")}</span>
           </div>
+          {canViewPricing && (
+            <p className="text-[11px] text-gray-400">
+              <a href={`/finance/customer-pricing?customer=${order.customer.id}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
+                Update customer pricing
+              </a>
+            </p>
+          )}
           {order.lineItems.length > 0 && (
             <div className="pt-2 border-t border-gray-100 space-y-1">
               <p className="text-xs text-gray-500">Additional units on this order</p>

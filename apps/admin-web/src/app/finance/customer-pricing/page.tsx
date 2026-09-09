@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback, type ReactNode } from "react";
+import { Suspense, useEffect, useState, useCallback, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { downloadCsv } from "@/lib/csvExport";
@@ -37,9 +38,20 @@ interface SavedItemPriceRow {
 }
 
 export default function CustomerPricingPage() {
+  return (
+    <Suspense fallback={null}>
+      <CustomerPricingPageInner />
+    </Suspense>
+  );
+}
+
+function CustomerPricingPageInner() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_quotations") || hasPermission("manage_invoices");
   const company = useCompany();
+  // Deep-linked from an order's "Update pricing" hint, e.g. /finance/customer-pricing?customer=X
+  const searchParams = useSearchParams();
+  const preselectCustomerId = searchParams.get("customer");
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -63,6 +75,12 @@ export default function CustomerPricingPage() {
     api<Product[]>("/meta/products").then(setProducts).catch(() => {});
     api<SavedItem[]>("/saved-items").then(setSavedItems).catch(() => {});
   }, [canManage]);
+
+  useEffect(() => {
+    if (preselectCustomerId && customers.some((c) => c.id === preselectCustomerId)) {
+      setCustomerId(preselectCustomerId);
+    }
+  }, [preselectCustomerId, customers]);
 
   const loadPricing = useCallback(() => {
     if (!customerId) {

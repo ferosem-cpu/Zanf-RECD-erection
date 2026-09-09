@@ -53,6 +53,8 @@ export default function OrdersPage() {
 function OrdersPageInner() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_orders");
+  // Same gate as /finance/customer-pricing - order-only users won't see pricing hints.
+  const canViewPricing = hasPermission("manage_quotations") || hasPermission("manage_invoices");
   const searchParams = useSearchParams();
   const addSiteForCustomerId = searchParams.get("customer");
 
@@ -82,6 +84,12 @@ function OrdersPageInner() {
     orderDate: today(),
     plannedExhaustHookupType: EXHAUST_OPTIONS[0].value,
   });
+  // This customer's negotiated product prices (productId -> price) - drives the Value
+  // auto-fill below and the "Update pricing" hint, same source as the Quotations form.
+  const [customerProductPrices, setCustomerProductPrices] = useState<Record<string, string>>({});
+  // True once the user has hand-edited Value - stops the auto-fill effect below from
+  // overwriting a deliberate entry when customer/product/quantity change afterwards.
+  const [valueTouched, setValueTouched] = useState(false);
 
   function load() {
     api<OrderRow[]>("/orders").then(setOrders).catch((err) => setError(err instanceof Error ? err.message : "Failed to load orders"));
@@ -103,6 +111,27 @@ function OrdersPageInner() {
   }, [addSiteForCustomerId, customers]);
 
   const addSiteForCustomer = addSiteForCustomerId ? customers.find((c) => c.id === addSiteForCustomerId) : undefined;
+
+  useEffect(() => {
+    if (!canViewPricing || !form.customerId || newCustomer) {
+      setCustomerProductPrices({});
+      return;
+    }
+    api<{ products: { productId: string; price: string }[] }>(`/customer-pricing?customerId=${form.customerId}`)
+      .then((data) => setCustomerProductPrices(Object.fromEntries(data.products.map((p) => [p.productId, p.price]))))
+      .catch(() => setCustomerProductPrices({}));
+  }, [canViewPricing, form.customerId, newCustomer]);
+
+  // Auto-fill Value from this customer's negotiated price for the selected product
+  // (price x quantity) whenever customer/product/quantity change - leaves it blank when
+  // there's no override, so staff can fill it in later. Stops once the user edits Value
+  // by hand (valueTouched).
+  useEffect(() => {
+    if (valueTouched || newProduct) return;
+    const price = form.productId ? customerProductPrices[form.productId] : undefined;
+    const suggested = price ? (parseFloat(price) * (parseFloat(form.quantity) || 1)).toFixed(2) : "";
+    setForm((f) => (f.value === suggested ? f : { ...f, value: suggested }));
+  }, [form.productId, form.quantity, customerProductPrices, valueTouched, newProduct]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -145,7 +174,7 @@ function OrdersPageInner() {
           customerId,
           productId,
           quantity: parseInt(form.quantity, 10) || 1,
-          value: parseFloat(form.value) || 0,
+          value: form.value === "" ? undefined : parseFloat(form.value),
           orderDate: new Date(form.orderDate).toISOString(),
           plannedExhaustHookupType: form.plannedExhaustHookupType,
         }),
@@ -166,6 +195,7 @@ function OrdersPageInner() {
         value: "",
         quantity: "1",
       }));
+      setValueTouched(false);
       load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to create order");
@@ -303,7 +333,15 @@ function OrdersPageInner() {
                     <p className="text-[11px] text-gray-400">The phone number is what the customer uses to log in with their Order ID.</p>
                   </div>
                 ) : (
-                  <select required className="field w-full" value={form.customerId} onChange={(e) => setForm({ ...form, customerId: e.target.value })}>
+                  <select
+                    required
+                    className="field w-full"
+                    value={form.customerId}
+                    onChange={(e) => {
+                      setForm({ ...form, customerId: e.target.value });
+                      setValueTouched(false);
+                    }}
+                  >
                     <option value="">Select a customer</option>
                     {customers.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
@@ -343,7 +381,34 @@ function OrdersPageInner() {
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Value (₹)</label>
-                  <input type="number" min={0} required className="field w-full" value={form.value} onChange={(e) => setForm({ ...form, value: e.target.value })} />
+                  <input
+                    type="number"
+                    min={0}
+                    className="field w-full"
+                    placeholder="Auto-filled from customer pricing, if set"
+                    value={form.value}
+                    onChange={(e) => {
+                      setValueTouched(true);
+                      setForm({ ...form, value: e.target.value });
+                    }}
+                  />
+                  {canViewPricing && form.customerId && !newCustomer && form.productId && !newProduct && (
+                    customerProductPrices[form.productId] ? (
+                      <p className="mt-1 text-[11px] text-gray-400">
+                        Customer price: ₹{Number(customerProductPrices[form.productId]).toLocaleString("en-IN")}/unit ·{" "}
+                        <a href={`/finance/customer-pricing?customer=${form.customerId}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
+                          Update pricing
+                        </a>
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-[11px] text-amber-600">
+                        No customer pricing for this product yet ·{" "}
+                        <a href={`/finance/customer-pricing?customer=${form.customerId}`} target="_blank" rel="noreferrer" className="font-medium text-[var(--theme-accent)]">
+                          Add pricing
+                        </a>
+                      </p>
+                    )
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Order date</label>
