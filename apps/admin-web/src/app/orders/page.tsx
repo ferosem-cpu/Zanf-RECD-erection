@@ -53,6 +53,10 @@ export default function OrdersPage() {
 function OrdersPageInner() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_orders");
+  // Order value is commercially sensitive - only Super Admin / Owner Admin / Management /
+  // Sales (manage_orders) and Finance (view_orders, read-only) should ever see it while
+  // searching orders.
+  const canViewOrderValue = canManage || hasPermission("view_orders");
   // Same gate as /finance/customer-pricing - order-only users won't see pricing hints.
   const canViewPricing = hasPermission("manage_quotations") || hasPermission("manage_invoices");
   const searchParams = useSearchParams();
@@ -279,13 +283,17 @@ function OrdersPageInner() {
               </>
             ),
           },
-          {
-            key: "value",
-            label: "Value",
-            accessor: (o) => Number(o.value),
-            filterType: "text",
-            render: (o) => <span className="whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</span>,
-          },
+          ...(canViewOrderValue
+            ? [
+                {
+                  key: "value",
+                  label: "Value",
+                  accessor: (o: OrderRow) => Number(o.value),
+                  filterType: "text" as const,
+                  render: (o: OrderRow) => <span className="whitespace-nowrap">₹{Number(o.value).toLocaleString("en-IN")}</span>,
+                },
+              ]
+            : []),
           { key: "stage", label: "Current stage", accessor: (o) => o.site?.currentStage.label ?? "" },
         ]}
       >
@@ -307,10 +315,12 @@ function OrdersPageInner() {
                   )}
                   <p className="text-xs text-gray-500 truncate">{o.customer.name}</p>
                   <p className="text-xs text-gray-500 mb-2 truncate">{allProducts(o).map((p) => `${p.name} (${p.model})`).join(", ")}</p>
-                  <div className="data-card-row">
-                    <span className="label">Value</span>
-                    <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>
-                  </div>
+                  {canViewOrderValue && (
+                    <div className="data-card-row">
+                      <span className="label">Value</span>
+                      <span className="value font-semibold">₹{Number(o.value).toLocaleString("en-IN")}</span>
+                    </div>
+                  )}
                 </Link>
               ))
             )}

@@ -44,7 +44,14 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
     },
     orderBy: { updatedAt: "desc" },
   });
-  res.json(sites);
+
+  // Order value is a commercially-sensitive field - a customer's own site record should never
+  // expose it (Prisma's `include` returns every scalar field of the related Order by default,
+  // so this has to be stripped explicitly rather than relying on the include shape).
+  const payload = req.auth!.customerId
+    ? sites.map((site) => ({ ...site, order: site.order ? { ...site.order, value: null } : site.order }))
+    : sites;
+  res.json(payload);
 });
 
 sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
@@ -75,7 +82,11 @@ sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), asyn
   if (req.auth!.vendorId && detail.vendorId !== req.auth!.vendorId) {
     return res.status(403).json({ error: "Forbidden" });
   }
-  res.json(detail);
+
+  // See the matching note in GET "/" - strip the commercially-sensitive order value before
+  // it ever reaches a customer-authenticated request.
+  const payload = req.auth!.customerId ? { ...detail, order: { ...detail.order, value: null } } : detail;
+  res.json(payload);
 });
 
 /** Creates a sibling Order+Site for another RECD delivered to this same physical location -

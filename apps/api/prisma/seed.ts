@@ -21,6 +21,7 @@ async function seedPermissions() {
     { key: PERMISSION_KEY.MANAGE_COMPLAINTS, name: "Manage / resolve complaints" },
     { key: PERMISSION_KEY.RAISE_COMPLAINT, name: "Raise a complaint" },
     { key: PERMISSION_KEY.MANAGE_ORDERS, name: "Create / manage orders" },
+    { key: PERMISSION_KEY.VIEW_ORDERS, name: "View orders and order value (read-only)" },
     { key: PERMISSION_KEY.MANAGE_USERS, name: "Add users and assign roles" },
     { key: PERMISSION_KEY.RESOLVE_PENDING_ACTION, name: "Resolve a pending action" },
     { key: PERMISSION_KEY.MANAGE_SETTINGS, name: "Manage company settings and theming" },
@@ -121,6 +122,9 @@ async function seedRoles() {
         PERMISSION_KEY.APPROVE_VENDOR_INVOICE,
         PERMISSION_KEY.VIEW_LEDGERS,
         PERMISSION_KEY.MANAGE_CREDIT_NOTES,
+        // Read-only order access - Finance needs to see order value while searching orders,
+        // but not MANAGE_ORDERS' create/edit/delete powers.
+        PERMISSION_KEY.VIEW_ORDERS,
       ],
     },
     [ROLE_KEY.CUSTOMER]: {

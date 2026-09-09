@@ -11,7 +11,7 @@ import NotificationBell from "./NotificationBell";
 // Each protected route lists the permissions that grant access. Holding ANY of them is enough.
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
   "/dashboard": ["view_dashboard"],
-  "/orders": ["manage_orders"],
+  "/orders": ["manage_orders", "view_orders"],
   "/customers": ["manage_orders", "manage_quotations", "manage_invoices"],
   "/sites": ["view_site_status"],
   "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],

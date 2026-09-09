@@ -276,7 +276,7 @@ const settingsLink = {
 // Which permissions unlock each main link. Holding ANY one shows the link.
 const LINK_PERMISSIONS: Record<string, string[]> = {
   "/dashboard": ["view_dashboard"],
-  "/orders": ["manage_orders"],
+  "/orders": ["manage_orders", "view_orders"],
   "/customers": ["manage_orders", "manage_quotations", "manage_invoices"],
   "/products": ["manage_orders"],
   "/sites": ["view_site_status"],

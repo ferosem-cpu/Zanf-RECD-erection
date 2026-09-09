@@ -184,6 +184,11 @@ export const PERMISSION_KEY = {
   MANAGE_COMPLAINTS: "manage_complaints",
   RAISE_COMPLAINT: "raise_complaint",
   MANAGE_ORDERS: "manage_orders",
+  /** Read-only: list/search orders and see commercially-sensitive fields (order value) without
+   * the ability to create/edit/delete an order - e.g. Finance, who need to see order value
+   * while searching orders but shouldn't get MANAGE_ORDERS' create/edit/delete powers. Anyone
+   * with MANAGE_ORDERS already implies this. */
+  VIEW_ORDERS: "view_orders",
   MANAGE_USERS: "manage_users",
   RESOLVE_PENDING_ACTION: "resolve_pending_action",
   MANAGE_SETTINGS: "manage_settings",
