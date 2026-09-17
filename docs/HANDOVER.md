@@ -388,8 +388,38 @@ same session:
   check for these before assuming a feature doesn't exist or rebuilding it
   from scratch.**
 
-## Current open items (as of 2026-09-09)
+## Current open items (as of 2026-09-17, updated later same day)
 
+- **RESOLVED same day: Vercel CLI login + connector scoping, both fixes deployed.**
+  - The CLI login blocker (`vercel whoami`/`pull`/`build` all failing "A new login is
+    required") was fixed by running `npx vercel login` and completing the device-auth flow
+    (`vercel.com/oauth/device?user_code=...`) in the browser — no cached credentials existed
+    on this machine, this was a genuine first login for CLI 59.20.0. `npx vercel whoami` now
+    reports `ferosem-1321`, correct team `ferose-salahudeen-s-projects`.
+  - Separately, the Claude↔Vercel MCP connector (`mcp__Vercel__*` tools) had been scoped
+    (via "Sign in with Vercel" OAuth) to only 5 unrelated projects, NOT `zan-app-api`/
+    `admin-web` — despite matching the correct team ID. Vercel's dashboard has **no UI
+    anywhere** to edit an OAuth connection's authorized-projects list after the fact (checked
+    Team Integrations, Integrations Console, Connect page, Security & Privacy, and the
+    connection's own detail page under Account Settings → Sign in with Vercel). The only fix
+    is disconnecting/reconnecting the connector from **Claude's own side** (Settings →
+    Connectors → Vercel → reconnect, re-picking both projects at the consent screen) — done,
+    confirmed via `mcp__Vercel__get_project` succeeding for both project IDs afterward.
+  - **Both commits below were then deployed the same session** — `zan-app-api` via the full
+    manual deploy dance (`vercel pull` → clean → `vercel build --prod` → patch `@recd/shared`
+    into the 3 documented spots → `vercel deploy --prebuilt --prod`), verified live
+    (`GET /health` → `{"ok":true}`, `GET /orders` unauthenticated → 401 not 404, confirmed the
+    build output actually contained `VIEW_ORDERS`/`gstin`/`value: null` before deploying).
+    Then `admin-web` via `vercel deploy --prod` (remote build, no `--prebuilt`) from the repo
+    root — build succeeded clean, aliased to `app.zanf.org`, verified `GET /login` → 200.
+  - One side-effect worth knowing for next time: regaining connector access caused a stale
+    queued git-triggered auto-deploy of `zan-app-api` to fire and fail with "No entrypoint
+    found" (expected — `zan-app-api` is deliberately not git-connected per its own manual
+    deploy dance; this did NOT affect the live production alias, confirmed via `/health`
+    before the real deploy). Not a new bug, just noise from the connector reconnect.
+  - `2403451` (2026-09-09, order value visibility fix) and `969de96` (2026-09-17, customer
+    GSTIN/State fields) are **both fully live now** — DB permission grant (already live),
+    API enforcement, and admin-web frontend gating all deployed and verified together.
 - **Order value auto-fill from customer pricing + "Update pricing" links (shipped and
   deployed 2026-09-09) not yet click-tested by a real user** - see Changelog for full detail.
   Owed: verify the auto-fill, the blank-when-no-override case, the edit-form "Use" button, and
@@ -593,6 +623,30 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### Deploy: order value visibility fix + customer GSTIN/State fields, both now live (2026-09-17)
+
+Two commits that had been sitting pushed-but-undeployed for over a week (blocked first by a
+Vercel CLI login issue, then by the Claude↔Vercel MCP connector being scoped to the wrong
+projects — see "Current open items" above for the full unblock story) were deployed together
+this session:
+
+- `2403451` — the order-value customer-visibility fix: `GET /sites`/`GET /sites/:id` now
+  strip `order.value` before it ever reaches a customer-authenticated request; a new
+  read-only `view_orders` permission (Finance only, in addition to `manage_orders` which
+  already implies it — Super Admin/Owner Admin/Management/Sales) gates `GET /orders` and
+  `GET /orders/:id`; `admin-web`'s Orders page (list + mobile card) only renders the Value
+  column/row for someone holding one of those permissions.
+- `969de96` — `Customer.gstin`/`Customer.state` are now settable on customer **create**, not
+  just edit (`createCustomerSchema` was missing both fields entirely; `POST /customers` now
+  persists them). `admin-web`'s customer modal gained the two inputs. Matters because
+  `Customer.state` drives the GST place-of-supply default on quotations/invoices.
+
+Deployed `zan-app-api` first (full manual dance, `@recd/shared` patched into the 3 documented
+spots), verified live, then `admin-web` (`vercel deploy --prod`, remote build) — per the
+established backend-first ordering rule. Both verified live: `GET /health` → 200, an
+unauthenticated `GET /orders` → 401 (not 404, confirming the route actually redeployed), and
+`app.zanf.org/login` → 200 on the new `admin-web` build.
 
 ### Feature: multiple products on a new order, replacing inline "+ New product" (2026-09-09)
 
