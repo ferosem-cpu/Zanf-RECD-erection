@@ -68,6 +68,8 @@ customersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async
     data: {
       name: parsed.data.name,
       address: parsed.data.address,
+      gstin: parsed.data.gstin,
+      state: parsed.data.state,
       salesOwnerId: req.auth!.userId,
       contacts: {
         create: {

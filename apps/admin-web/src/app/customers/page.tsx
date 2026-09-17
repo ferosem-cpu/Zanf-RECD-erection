@@ -40,6 +40,8 @@ function CustomersPageInner() {
   const [form, setForm] = useState({
     name: "",
     address: "",
+    gstin: "",
+    state: "",
     contactName: "",
     contactPhone: "",
     contactEmail: "",
@@ -74,7 +76,7 @@ function CustomersPageInner() {
 
   function openCreate() {
     setEditing(null);
-    setForm({ name: "", address: "", contactName: "", contactPhone: "", contactEmail: "" });
+    setForm({ name: "", address: "", gstin: "", state: "", contactName: "", contactPhone: "", contactEmail: "" });
     setFormError(null);
     setOpen(true);
   }
@@ -85,6 +87,8 @@ function CustomersPageInner() {
     setForm({
       name: c.name,
       address: c.address ?? "",
+      gstin: c.gstin ?? "",
+      state: c.state ?? "",
       contactName: contact?.name ?? "",
       contactPhone: contact?.phone ?? "",
       contactEmail: contact?.email ?? "",
@@ -104,6 +108,8 @@ function CustomersPageInner() {
           body: JSON.stringify({
             name: form.name,
             address: form.address || undefined,
+            gstin: form.gstin || undefined,
+            state: form.state || undefined,
             contactName: form.contactName || undefined,
             contactPhone: form.contactPhone || undefined,
             contactEmail: form.contactEmail || undefined,
@@ -115,6 +121,8 @@ function CustomersPageInner() {
           body: JSON.stringify({
             name: form.name,
             address: form.address || undefined,
+            gstin: form.gstin || undefined,
+            state: form.state || undefined,
             contactName: form.contactName,
             contactPhone: form.contactPhone,
             contactEmail: form.contactEmail || undefined,
@@ -123,7 +131,7 @@ function CustomersPageInner() {
       }
       setOpen(false);
       setEditing(null);
-      setForm({ name: "", address: "", contactName: "", contactPhone: "", contactEmail: "" });
+      setForm({ name: "", address: "", gstin: "", state: "", contactName: "", contactPhone: "", contactEmail: "" });
       load();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Failed to save customer");
@@ -285,6 +293,11 @@ function CustomersPageInner() {
             <form onSubmit={submit} className="space-y-3">
               <input required placeholder="Company name" className="field w-full" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <textarea placeholder="Address (optional)" rows={2} className="field w-full" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input placeholder="GSTIN (optional)" className="field" value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} />
+                <input placeholder="State (e.g. Tamil Nadu)" className="field" value={form.state} onChange={(e) => setForm({ ...form, state: e.target.value })} />
+              </div>
+              <p className="text-[11px] text-gray-400 -mt-2">State is the GST place-of-supply used on quotations/invoices for this customer.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <input required placeholder="Contact name" className="field" value={form.contactName} onChange={(e) => setForm({ ...form, contactName: e.target.value })} />
                 <input required placeholder="Contact phone (login)" className="field" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />

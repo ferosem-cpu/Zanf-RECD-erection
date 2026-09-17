@@ -225,6 +225,9 @@ export const notificationPreferenceSchema = z.object({
 export const createCustomerSchema = z.object({
   name: z.string().min(1),
   address: z.string().optional(),
+  gstin: z.string().optional(),
+  // Billing state - place-of-supply for GST (drives IGST vs CGST/SGST) on quotations/invoices.
+  state: z.string().optional(),
   contactName: z.string().min(1),
   // Phone is the customer's login credential (Order ID + phone -> OTP), so it is required.
   contactPhone: z.string().min(6),
