@@ -68,7 +68,11 @@ app.use("/debit-notes", debitNotesRouter);
 app.use("/payments", paymentsRouter);
 app.use("/work-orders", workOrdersRouter);
 app.use("/notifications", notificationsRouter);
-app.use("/agent", agentTestRouter);
+// The manual agent harness can call every registered tool and is intended only for local
+// verification. Never expose it from a production deployment.
+if (process.env.NODE_ENV !== "production") {
+  app.use("/agent", agentTestRouter);
+}
 app.use("/agent", agentProvidersRouter);
 app.use("/agent", agentConversationsRouter);
 app.use("/agent", agentCronRouter);
