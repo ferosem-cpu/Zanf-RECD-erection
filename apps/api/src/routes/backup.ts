@@ -108,13 +108,9 @@ backupRouter.post("/run", authenticate, requirePermission(PERMISSION_KEY.MANAGE_
 // same convention), not POST.
 backupRouter.get("/internal/run-scheduled", async (req, res) => {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    if (req.headers.authorization !== `Bearer ${secret}`) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+  if (!secret || req.headers.authorization !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-  // No CRON_SECRET set (e.g. local dev) - allow through, matching agentCron.ts's own note
-  // that production should always have CRON_SECRET set once this is deployed.
 
   const settings = await getOrCreateSettings();
   if (!settings.scheduleEnabled) {
