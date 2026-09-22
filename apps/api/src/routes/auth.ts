@@ -7,6 +7,7 @@ import { verifyGoogleIdToken } from "../lib/googleAuth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { authenticate, AuthenticatedRequest } from "../middleware/auth";
 import { rateLimit } from "../middleware/rateLimit";
+import { isGoogleOnlyStaffEmail } from "../lib/authPolicy";
 
 export const authRouter = Router();
 
@@ -51,6 +52,12 @@ authRouter.post("/login", authLimiter, async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+  // This privileged account is intentionally Google-only. Keep the response generic so
+  // unauthenticated callers cannot use this policy to confirm that an account exists.
+  if (isGoogleOnlyStaffEmail(parsed.data.email)) {
+    return res.status(401).json({ error: "Invalid email or password" });
+  }
+
   const user = await prisma.user.findUnique({
     where: { email: parsed.data.email },
     include: { role: true },
@@ -67,8 +74,9 @@ authRouter.post("/login", authLimiter, async (req, res) => {
 });
 
 /**
- * "Sign in with Google" for internal roles - an additional login method alongside email/password,
- * not a replacement. Only Google accounts whose email already matches an existing, active staff
+ * "Sign in with Google" for internal roles. This is an additional login method for most staff
+ * and the only permitted method for addresses in the Google-only policy. Only Google accounts
+ * whose email already matches an existing, active staff
  * user can sign in this way; there is no separate allowlist to maintain - the User.email column
  * IS the allowlist, same as it already gates password login.
  */
