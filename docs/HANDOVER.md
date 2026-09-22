@@ -623,6 +623,28 @@ same session:
 
 ## Changelog (condensed)
 
+### 2026-09-22 — High-priority security hardening (feature-preserving)
+
+- Removed the manual agent tool harness from production. It is now mounted only outside
+  `NODE_ENV=production`, and local use additionally requires an authenticated Super Admin.
+- Made both scheduled endpoints fail closed: conversation cleanup and scheduled backups return
+  `401` unless `CRON_SECRET` is configured and the request supplies the matching bearer token.
+  Ensure the production Vercel environment has `CRON_SECRET`; normal in-app backup execution is
+  unchanged.
+- Restricted direct agent Drive document reads to files proven to be descendants of the
+  configured Drive folder. Caller-supplied IDs can no longer read an otherwise accessible file
+  from outside that folder tree.
+- Replaced `Math.random()` in OTP and vendor temporary-password generation with Node's
+  cryptographic RNG, and removed OTP/order/phone data from application logs.
+- Upgraded the admin web app from Next.js 14 to `15.5.25`, Nodemailer to `10.0.10`, and the
+  direct PostCSS development dependency to `8.5.28`. The shared package, API, and full Next.js
+  production build all pass; Next generated all 41 static admin pages successfully.
+- Dependency follow-up deliberately deferred for review: clearing the remaining high-severity
+  PostCSS advisory nested inside Next requires the feature-risking Next.js 16 major upgrade.
+  The remaining high/critical findings in the full monorepo audit are in the Expo/React Native
+  mobile dependency tree and similarly require major framework/runtime upgrades. Neither was
+  force-upgraded in this feature-preserving change.
+
 ### 2026-09-22 — Primary Super Admin changed to Google-only authentication
 
 - `ferosem@gmail.com` can no longer use `POST /auth/login`; the API returns the same generic

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import { randomInt } from "node:crypto";
 import { loginSchema, requestOtpSchema, verifyOtpSchema, googleLoginSchema, requestEmailOtpSchema, verifyEmailOtpSchema } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { signToken } from "../lib/jwt";
@@ -10,6 +11,10 @@ import { rateLimit } from "../middleware/rateLimit";
 import { isGoogleOnlyStaffEmail } from "../lib/authPolicy";
 
 export const authRouter = Router();
+
+function generateOtpCode(): string {
+  return String(randomInt(100000, 1000000));
+}
 
 // Throttle the credential/OTP endpoints: 10 attempts per IP per 15 minutes. Enough for a real
 // user fumbling a password or OTP, far below what a brute-force needs against an 8-char password
@@ -129,7 +134,7 @@ authRouter.post("/customer/register", authLimiter, async (req, res) => {
     return res.status(401).json({ error: "Account is inactive" });
   }
 
-  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const code = generateOtpCode();
   await prisma.otpCode.create({
     data: {
       userId: contact.id,
@@ -150,8 +155,6 @@ authRouter.post("/customer/register", authLimiter, async (req, res) => {
   } catch (err) {
     console.error("Failed to send customer OTP email", err);
   }
-  console.log(`[OTP GENERATED] Order ${orderNumber} - Phone ${phone} - OTP: ${code}`);
-
   // In development we echo the code back so the flow is testable without a live mail provider.
   // In production the code is delivered only over the notification channel, never in the response.
   const devCode = process.env.NODE_ENV === "production" ? undefined : code;
@@ -239,7 +242,7 @@ authRouter.post("/otp/request", authLimiter, async (req, res) => {
   const user = await prisma.user.findUnique({ where: { phone: parsed.data.phone } });
   if (!user) return res.status(404).json({ error: "No account found for that phone number" });
 
-  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const code = generateOtpCode();
   await prisma.otpCode.create({
     data: { userId: user.id, code, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
   });
@@ -320,7 +323,7 @@ authRouter.post("/email-otp/request", authLimiter, async (req, res) => {
     return res.json({ ok: true, message: "If that email is registered, an OTP has been sent to it." });
   }
 
-  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const code = generateOtpCode();
   await prisma.otpCode.create({
     data: { userId: user.id, code, expiresAt: new Date(Date.now() + 10 * 60 * 1000) },
   });
