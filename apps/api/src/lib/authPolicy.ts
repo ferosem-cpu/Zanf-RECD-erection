@@ -23,3 +23,14 @@ export function isVendorAccessBlocked(user: {
   if (!user.vendorId) return false;
   return user.vendor?.status !== "approved";
 }
+
+/** Role keys whose users belong to an external vendor company (User.vendorId). Only these may
+ * carry a vendorId: every site route scopes a user with a vendorId to that vendor's sites, so a
+ * stray vendorId on a staff account (e.g. a Management user created after the Users form had an
+ * erection-engineer vendor picked, or an engineer later promoted to a staff role) silently
+ * turns Sites into an empty list for them. */
+const VENDOR_MEMBER_ROLE_KEYS = new Set(["erection_engineer"]);
+
+export function roleAllowsVendor(roleKey: string): boolean {
+  return VENDOR_MEMBER_ROLE_KEYS.has(roleKey);
+}

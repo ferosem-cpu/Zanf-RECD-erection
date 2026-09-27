@@ -105,7 +105,9 @@ export default function UsersPage() {
     try {
       const result = await api<{ tempPassword: string }>("/users", {
         method: "POST",
-        body: JSON.stringify({ ...form, vendorId: form.vendorId || undefined }),
+        // Only an erection engineer is tied to a vendor - drop a vendor picked before the role was
+        // switched, or the new staff user would be vendor-scoped (empty Sites list).
+        body: JSON.stringify({ ...form, vendorId: form.roleKey === "erection_engineer" ? form.vendorId || undefined : undefined }),
       });
       setTempPassword(result.tempPassword);
       setForm({ name: "", email: "", roleKey: "", phone: "", title: "", vendorId: "" });

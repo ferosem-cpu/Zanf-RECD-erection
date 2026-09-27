@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isGoogleOnlyStaffEmail, isVendorAccessBlocked } from "../src/lib/authPolicy";
+import { isGoogleOnlyStaffEmail, isVendorAccessBlocked, roleAllowsVendor } from "../src/lib/authPolicy";
 
 test("staff and customers (no vendorId) are never vendor-blocked", () => {
   assert.equal(isVendorAccessBlocked({ vendorId: null }), false);
@@ -26,4 +26,11 @@ test("a vendorId whose vendor row was not loaded or is missing fails closed", ()
 test("Google-only policy is case/whitespace-insensitive", () => {
   assert.equal(isGoogleOnlyStaffEmail("  FeroseM@Gmail.com "), true);
   assert.equal(isGoogleOnlyStaffEmail("someone@zanf.org"), false);
+});
+
+test("only vendor-member roles may carry a vendorId (staff roles would be vendor-scoped)", () => {
+  assert.equal(roleAllowsVendor("erection_engineer"), true);
+  for (const role of ["super_admin", "owner_admin", "management", "sales", "operations_pm", "commissioning_engineer", "service_team", "finance", "customer"]) {
+    assert.equal(roleAllowsVendor(role), false, role);
+  }
 });

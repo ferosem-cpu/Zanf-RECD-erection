@@ -93,8 +93,15 @@ Ojas; InterGlobe Aviation appears as a site end-client (`Site.companyName`).
   `record_payments`, `approve_vendor_invoice`, `view_ledgers`, `manage_credit_notes`,
   `manage_vendors`, `view_site_status`, `change_site_status`, `raise_complaint`,
   `manage_settings`.
-- New permissions reach prod by **direct SQL via the Supabase MCP** (additive grants); nobody
-  re-runs the full seed against prod.
+- Role → permission sets live in `apps/api/prisma/roleDefinitions.ts` (used by the seed and
+  unit-tested). Management / Owner-Admin are computed as `ALL_PERMISSIONS` minus
+  `manage_settings`, so a new key is included automatically **in the seed**. Prod never re-runs
+  the seed: ship every new grant as an idempotent SQL migration that looks roles/permissions up
+  by key (pattern: `20260927120000_management_all_permissions_except_settings`). Historically
+  grants went in by hand via the Supabase MCP, which is how prod Management drifted.
+- Only `erection_engineer` users may carry `User.vendorId` (`roleAllowsVendor`); any vendorId
+  vendor-scopes every site query, so `POST /users` rejects it for other roles and a role change
+  away from erection engineer clears it.
 - **Vendors** are tenant-isolated (`User.vendorId` / `Site.vendorId`) on every site route.
   Vendor status: `pending | approved | rejected | archived` (`VENDOR_STATUS`). Public
   self-registration → pending → staff approve (creates the contact's erection-engineer login
@@ -228,7 +235,10 @@ different timestamps than the local files, and `_prisma_migrations` has hand-ins
 writing a migration, diff `information_schema.columns` against the Prisma schema. To apply to
 prod either run `prisma migrate deploy` with the prod `DATABASE_URL`, or apply the SQL via the
 Supabase MCP and insert the matching `_prisma_migrations` row (SHA-256 of `migration.sql`).
-**Pending:** `20260922090000_make_super_admin_google_only` (with the PR #3 API rollout). Locally,
+**Pending:** `20260922090000_make_super_admin_google_only` (with the PR #3 API rollout) and
+`20260927120000_management_all_permissions_except_settings` (PR #5; data-only, idempotent — grants
+Management every permission except `manage_settings`; run `npx prisma migrate deploy` with the
+prod `DATABASE_URL`, then have a Management user sign out/in and check Orders, Sites, Customers). Locally,
 run `npx prisma migrate deploy` after pulling schema changes.
 
 ### admin-web
@@ -358,6 +368,15 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-09-27 — Management couldn't see Orders/Sites/Customers (PR #5).** The code is fully
+  permission-driven (no role-name gates), so the cause is prod `RolePermission` rows: Management
+  never received the grants seed.ts defines (prod isn't seeded; grants were hand-applied per
+  role). New migration `20260927120000_management_all_permissions_except_settings` grants
+  Management every permission except `manage_settings` (and removes it if present); role
+  definitions moved to `prisma/roleDefinitions.ts` with tests; seed revokes `manage_settings`
+  from the all-but-settings roles; staff users can no longer carry a stray `vendorId` (which
+  empties Sites). **Deploy: `prisma migrate deploy`.**
 
 - **2026-09-27 — Open-items sweep (PR stacked on #4).** Vendor members blocked on every login
   path and in `authenticate` unless the vendor is approved; agent fallback skips 410 providers,
