@@ -6,7 +6,8 @@
     "dev": "next dev -p 6011",
     "build": "next build",
     "start": "next start -p 6011",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --import tsx --test test/orderValue.test.ts"
   },
   "dependencies": {
     "@recd/shared": "*",
@@ -25,6 +26,7 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.10",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
 }
