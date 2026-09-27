@@ -7,43 +7,7 @@ import Nav from "./Nav";
 import BottomNav from "./BottomNav";
 import AgentChatBubble from "./AgentChatBubble";
 import NotificationBell from "./NotificationBell";
-
-// Each protected route lists the permissions that grant access. Holding ANY of them is enough.
-const ROUTE_PERMISSIONS: Record<string, string[]> = {
-  "/dashboard": ["view_dashboard"],
-  "/orders": ["manage_orders", "view_orders"],
-  "/customers": ["manage_orders", "manage_quotations", "manage_invoices"],
-  "/sites": ["view_site_status"],
-  "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
-  "/vendors": ["manage_vendors"],
-  "/users": ["manage_users"],
-  "/settings": ["manage_settings"],
-  "/finance": ["view_finance_dashboard"],
-  "/quotations": ["manage_quotations"],
-  "/invoices": ["manage_invoices"],
-  "/purchase-orders": ["manage_purchase_orders"],
-  "/expenses": ["manage_expenses"],
-  "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
-};
-
-// Where to send a staff user who lands on /login etc. - the first module they can actually open.
-const LANDING_PRIORITY = ["/dashboard", "/sites", "/finance", "/complaints", "/work-orders", "/orders", "/customers", "/quotations", "/invoices", "/purchase-orders", "/expenses", "/vendors", "/users", "/settings"];
-
-function canAccess(permissions: string[], route: string): boolean {
-  const required = ROUTE_PERMISSIONS[route];
-  if (!required) return true; // unguarded route
-  return required.some((p) => permissions.includes(p));
-}
-
-function firstLanding(permissions: string[]): string | null {
-  return LANDING_PRIORITY.find((route) => canAccess(permissions, route)) ?? null;
-}
-
-function matchRoute(pathname: string): string | undefined {
-  return Object.keys(ROUTE_PERMISSIONS).find(
-    (route) => pathname === route || pathname.startsWith(route + "/"),
-  );
-}
+import { matchRoute, canAccess, firstLanding } from "@/lib/routeAccess";
 
 function NoAccessScreen({ name, onLogout }: { name: string; onLogout: () => void }) {
   return (
@@ -71,7 +35,7 @@ function NoAccessScreen({ name, onLogout }: { name: string; onLogout: () => void
 }
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, logout, connectionIssue } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -124,7 +88,9 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
       <div className="flex h-screen w-screen items-center justify-center bg-gray-50">
         <div className="flex flex-col items-center space-y-4">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent"></div>
-          <p className="text-sm font-medium text-gray-500">Loading session...</p>
+          <p className="text-sm font-medium text-gray-500">
+            {connectionIssue ? "Can't reach the server - retrying..." : "Loading session..."}
+          </p>
         </div>
       </div>
     );
@@ -178,6 +144,15 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen bg-gray-50">
       <Nav mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
+        {connectionIssue && (
+          <div
+            role="status"
+            data-testid="connection-banner"
+            className="print:hidden bg-amber-50 border-b border-amber-200 px-4 py-1.5 text-center text-xs font-medium text-amber-800"
+          >
+            Connection problem - retrying. You&apos;re still signed in.
+          </div>
+        )}
         {/* Mobile top bar with hamburger (hidden on lg+) */}
         <header
           data-testid="mobile-topbar"

@@ -54,8 +54,9 @@ export default function NotificationBell({ buttonClassName }: NotificationBellPr
       const data = await api<{ items: NotificationItem[]; unreadCount: number }>("/notifications");
       setItems(data.items);
       setUnreadCount(data.unreadCount);
-    } catch (err) {
-      console.error("Failed to load notifications", err);
+    } catch {
+      // Background poll: skip this round quietly and keep showing the last list. A dead session
+      // is handled by apiClient (401 -> /login); a network blip just waits for the next poll.
     }
   }, []);
 
