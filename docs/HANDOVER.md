@@ -329,6 +329,11 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 - **Customer role lacks `place_order`** in prod (the Permission row didn't exist until the
   2026-09-27 migration, which granted it to Management only), so customer-portal order requests
   (`POST /orders`, `GET /products`) likely 403. Grant it with an idempotent migration if wanted.
+- **Intermittent `net::ERR_FAILED` / "Failed to fetch" in the browser** (2026-09-27 role tests):
+  the failing requests never reach the API (no errors/5xx/429, firewall 0 blocks) and a headless
+  Chrome probe of preflights, 401s and 304s shows valid CORS. Likely client/network side (extension,
+  VPN/proxy, connection). Since PR #6 it no longer logs users out. If it recurs, capture the full
+  console line + DevTools Network entry.
 - **Management smoke test**: have a Management user sign out/in and check Orders, Sites, Customers.
 - **NVIDIA fallback returns HTTP 410.** Model id/key live in the `AgentLlmProvider` row, not
   code. With the NVIDIA key, check `GET https://integrate.api.nvidia.com/v1/models`; then in
@@ -374,6 +379,15 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-09-27 — PR #6 merged (`2ec234e`) and deployed: session resilience + guard alignment.**
+  Network errors / 5xx no longer log users out (only a 401 does; retry with backoff + banner);
+  route guard and sidebar share `admin-web/src/lib/routeAccess.ts` (per-page `/finance/*` and
+  `/reports/*` guards; `/products`, `/customer-pos`, `/reports` guarded); complaints overview only
+  called with `view_complaints_overview`; `GET /saved-items` readable with `manage_quotations` /
+  `manage_invoices`. API `dpl_GFHffg6Siik9tzjyvVNP4pgWaRUT`, admin-web auto-deployed
+  `dpl_5F9p3fkCUMbCJ4VFSNTUyRVbf86N`. Intermittent browser "Failed to fetch"/`net::ERR_FAILED`
+  not reproducible server-side (no API errors, CORS OK incl. preflights and 304s) — see §10.
 
 - **2026-09-27 — Merged #3/#4/#5, migrations applied, API + admin-web deployed.** Merge commits
   `2a11c2a` (#3), `1ae631b` (#4), `b20febf` (#5). Migrations `20260922090000` +
