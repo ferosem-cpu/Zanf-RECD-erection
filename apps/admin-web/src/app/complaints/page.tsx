@@ -45,6 +45,7 @@ function statusBadge(status: string) {
 export default function ComplaintsPage() {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("manage_complaints");
+  const canSeeOverview = hasPermission("view_complaints_overview");
 
   const [complaints, setComplaints] = useState<ComplaintRow[]>([]);
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -59,11 +60,13 @@ export default function ComplaintsPage() {
 
   function load() {
     api<ComplaintRow[]>("/complaints").then(setComplaints).catch(() => {});
-    api<Overview>("/complaints/overview").then(setOverview).catch(() => setOverview(null));
+    // Company-wide counts are Owner/Admin/Management only (view_complaints_overview); don't
+    // call the endpoint - and collect a 403 - for anyone else.
+    if (canSeeOverview) api<Overview>("/complaints/overview").then(setOverview).catch(() => setOverview(null));
     if (canManage) api<Assignee[]>("/complaints/assignees").then(setAssignees).catch(() => {});
   }
 
-  useEffect(load, [canManage]);
+  useEffect(load, [canManage, canSeeOverview]);
 
   function openEditor(c: ComplaintRow) {
     setEditing(c);

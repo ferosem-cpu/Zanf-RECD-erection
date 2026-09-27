@@ -13,6 +13,19 @@ export function clearToken() {
   window.localStorage.removeItem("recd_token");
 }
 
+/** Thrown by `api()` when the server answered with a non-2xx status. A network failure (server
+ * unreachable, request blocked, connection reset) is NOT an ApiError - fetch rejects with a
+ * TypeError ("Failed to fetch") instead - so callers can tell "the server said no" apart from
+ * "we couldn't reach the server". The message format is unchanged from before. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -33,7 +46,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
       window.location.href = "/login";
     }
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`);
+    throw new ApiError(res.status, body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`);
   }
   // 204 No Content (every DELETE route in this app responds this way) has no body for
   // res.json() to parse - it throws "Unexpected end of JSON input" otherwise, even though

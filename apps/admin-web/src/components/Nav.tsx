@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { getSavedLogo } from "@/lib/settingsStore";
 import { useAuth } from "./AuthContext";
 import NotificationBell from "./NotificationBell";
+import { ROUTE_PERMISSIONS } from "@/lib/routeAccess";
 
 const liveLinks = [
   {
@@ -273,34 +274,9 @@ const settingsLink = {
   ),
 };
 
-// Which permissions unlock each main link. Holding ANY one shows the link.
-const LINK_PERMISSIONS: Record<string, string[]> = {
-  "/dashboard": ["view_dashboard"],
-  "/orders": ["manage_orders", "view_orders"],
-  "/customers": ["manage_orders", "manage_quotations", "manage_invoices"],
-  "/products": ["manage_orders"],
-  "/sites": ["view_site_status"],
-  "/complaints": ["manage_complaints", "view_complaints_overview", "act_assigned_complaints"],
-  "/vendors": ["manage_vendors"],
-  "/reports": ["view_site_status", "view_finance_dashboard", "manage_orders", "manage_quotations", "manage_invoices", "manage_vendors"],
-  "/users": ["manage_users"],
-  "/finance": ["view_finance_dashboard"],
-  "/quotations": ["manage_quotations"],
-  "/invoices": ["manage_invoices"],
-  "/customer-pos": ["manage_orders"],
-  "/purchase-orders": ["manage_purchase_orders"],
-  "/finance/vendor-invoices": ["record_vendor_invoice", "approve_vendor_invoice"],
-  "/expenses": ["manage_expenses"],
-  "/finance/customer-pricing": ["manage_quotations", "manage_invoices"],
-  "/finance/ledgers": ["view_ledgers"],
-  "/finance/credit-notes": ["manage_credit_notes"],
-  "/finance/debit-notes": ["manage_credit_notes"],
-  "/finance/payments": ["record_payments", "view_ledgers"],
-  "/finance/vendor-payments": ["record_payments", "approve_vendor_invoice", "view_ledgers"],
-  "/reports/tds": ["view_ledgers"],
-  "/reports/gst-returns": ["view_ledgers"],
-  "/work-orders": ["manage_work_orders", "act_assigned_work_orders"],
-};
+// Which permissions unlock each link - shared with the route guard (lib/routeAccess.ts) so the
+// sidebar never offers a page the guard would bounce the user off. Holding ANY one shows the link.
+const LINK_PERMISSIONS = ROUTE_PERMISSIONS;
 
 interface NavProps {
   mobileOpen?: boolean;

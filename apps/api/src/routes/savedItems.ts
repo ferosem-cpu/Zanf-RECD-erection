@@ -6,10 +6,18 @@ import { asString } from "../lib/params";
 
 export const savedItemsRouter = Router();
 savedItemsRouter.use(authenticate);
-savedItemsRouter.use(requirePermission(PERMISSION_KEY.MANAGE_SETTINGS));
+
+// Reading the catalogue is also needed by people who price quotations/invoices (the Customer
+// Pricing page lists saved items); creating/editing/archiving stays Super Admin (manage_settings).
+export const SAVED_ITEMS_READ_PERMISSIONS = [
+  PERMISSION_KEY.MANAGE_SETTINGS,
+  PERMISSION_KEY.MANAGE_QUOTATIONS,
+  PERMISSION_KEY.MANAGE_INVOICES,
+] as const;
 
 // GET /saved-items - active items by default; ?includeArchived=1 also returns archived ones.
-savedItemsRouter.get("/", async (req, res) => {
+// Registered BEFORE the manage_settings gate below, so only this read route is widened.
+savedItemsRouter.get("/", requirePermission(...SAVED_ITEMS_READ_PERMISSIONS), async (req, res) => {
   const includeArchived = req.query.includeArchived === "1";
   const items = await prisma.savedLineItem.findMany({
     where: includeArchived ? undefined : { active: true },
@@ -17,6 +25,9 @@ savedItemsRouter.get("/", async (req, res) => {
   });
   res.json(items);
 });
+
+// Everything registered below (all writes) requires manage_settings.
+savedItemsRouter.use(requirePermission(PERMISSION_KEY.MANAGE_SETTINGS));
 
 savedItemsRouter.post("/", async (req, res) => {
   const parsed = createSavedLineItemSchema.safeParse(req.body);

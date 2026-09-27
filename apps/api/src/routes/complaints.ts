@@ -4,6 +4,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString } from "../lib/params";
+import { complaintListWhere, COMPLAINT_LIST_PERMISSIONS } from "../lib/complaintScope";
 
 export const complaintsRouter = Router();
 complaintsRouter.use(authenticate);
@@ -19,28 +20,10 @@ async function notifySafely(args: Parameters<typeof sendNotification>[0]) {
 
 complaintsRouter.get(
   "/",
-  requirePermission(
-    PERMISSION_KEY.RAISE_COMPLAINT,
-    PERMISSION_KEY.MANAGE_COMPLAINTS,
-    PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW,
-    PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS,
-  ),
+  requirePermission(...COMPLAINT_LIST_PERMISSIONS),
   async (req: AuthenticatedRequest, res) => {
-    const { customerId, userId, permissions } = req.auth!;
-
-    // Scope the list to what the caller is allowed to see:
-    // - customers see only their own tickets;
-    // - managers / service team / overview-viewers see everything;
-    // - field engineers see only tickets assigned to them.
-    let where: Record<string, unknown> = {};
-    if (customerId) {
-      where = { customerId };
-    } else if (
-      !permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) &&
-      !permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW)
-    ) {
-      where = { assignedToId: userId };
-    }
+    // Scope the list to what the caller is allowed to see (see lib/complaintScope.ts).
+    const where = complaintListWhere(req.auth!);
 
     const complaints = await prisma.complaint.findMany({
       where,
