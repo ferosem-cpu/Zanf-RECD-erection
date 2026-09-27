@@ -14,14 +14,10 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 agentCronRouter.get("/cron/cleanup-conversations", async (req, res) => {
   const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const header = req.headers.authorization;
-    if (header !== `Bearer ${secret}`) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+  const header = req.headers.authorization;
+  if (!secret || header !== `Bearer ${secret}`) {
+    return res.status(401).json({ error: "Unauthorized" });
   }
-  // No CRON_SECRET set (e.g. local dev) - allow it through rather than permanently locking
-  // the route out; production should always have CRON_SECRET set once this is deployed.
 
   const cutoff = new Date(Date.now() - THIRTY_DAYS_MS);
   const result = await prisma.agentConversation.deleteMany({

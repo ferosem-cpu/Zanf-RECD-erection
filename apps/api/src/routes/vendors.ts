@@ -1,5 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "node:crypto";
 import { registerVendorSchema, archiveVendorSchema, PERMISSION_KEY, ROLE_KEY, VENDOR_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -17,7 +18,7 @@ async function createVendorContactLogin(vendor: { id: string; contactName: strin
   if (emailTaken) return { contactLoginCreated: false, tempPassword: undefined as string | undefined };
 
   const role = await prisma.role.findUniqueOrThrow({ where: { key: ROLE_KEY.ERECTION_ENGINEER } });
-  const tempPassword = Math.random().toString(36).slice(2, 10);
+  const tempPassword = randomBytes(18).toString("base64url").slice(0, 16);
   const passwordHash = await bcrypt.hash(tempPassword, 10);
   await prisma.user.create({
     data: {

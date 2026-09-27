@@ -69,10 +69,10 @@ export async function listDriveDocuments(maxResults = 50): Promise<DriveSearchRe
 
 export async function getDriveDocumentContent(fileId: string): Promise<{ name: string; mimeType: string; text: string }> {
   const drive = getDriveClient();
-
-  const meta = await drive.files.get({ fileId, fields: "id, name, mimeType" });
-  const mimeType = meta.data.mimeType!;
-  const name = meta.data.name!;
+  const folderId = getDriveFolderId();
+  const meta = await getFileMetadataWithinFolder(drive, fileId, folderId);
+  const mimeType = meta.mimeType;
+  const name = meta.name;
 
   if (!isExtractable(mimeType)) {
     throw new ExtractionError(`Unsupported file type: ${mimeType}`);
@@ -85,6 +85,43 @@ export async function getDriveDocumentContent(fileId: string): Promise<{ name: s
 
   const text = await extractText(buffer, exportMime ?? mimeType);
   return { name, mimeType, text };
+}
+
+/** Resolve metadata only after proving the file is inside the configured Drive folder tree.
+ * A caller-supplied file ID must never broaden the service account's effective data scope.
+ */
+async function getFileMetadataWithinFolder(
+  drive: ReturnType<typeof getDriveClient>,
+  fileId: string,
+  folderId: string,
+): Promise<{ name: string; mimeType: string }> {
+  const queue = [fileId];
+  const visited = new Set<string>();
+  let requestedFile: { name: string; mimeType: string } | undefined;
+
+  while (queue.length > 0 && visited.size < 100) {
+    const currentId = queue.shift()!;
+    if (currentId === folderId) {
+      if (!requestedFile) throw new ExtractionError("Could not resolve the requested Drive file");
+      return requestedFile;
+    }
+    if (visited.has(currentId)) continue;
+    visited.add(currentId);
+
+    const meta = await drive.files.get({ fileId: currentId, fields: "id, name, mimeType, parents, trashed" });
+    if (currentId === fileId) {
+      if (meta.data.trashed) throw new ExtractionError("The requested Drive file is in trash");
+      if (!meta.data.name || !meta.data.mimeType) {
+        throw new ExtractionError("The requested Drive file has incomplete metadata");
+      }
+      requestedFile = { name: meta.data.name, mimeType: meta.data.mimeType };
+    }
+    for (const parentId of meta.data.parents ?? []) {
+      if (!visited.has(parentId)) queue.push(parentId);
+    }
+  }
+
+  throw new ExtractionError("The requested Drive file is outside the configured folder");
 }
 
 async function downloadRaw(drive: ReturnType<typeof getDriveClient>, fileId: string): Promise<Buffer> {

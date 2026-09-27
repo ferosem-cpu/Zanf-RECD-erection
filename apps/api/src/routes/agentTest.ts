@@ -8,7 +8,8 @@
  */
 import { Router } from "express";
 import type { AuthenticatedRequest } from "../middleware/auth";
-import { authenticate } from "../middleware/auth";
+import { authenticate, requireRole } from "../middleware/auth";
+import { ROLE_KEY } from "@recd/shared";
 import { runAgentTurn } from "../agent/llm";
 import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { allTools } from "../agent/tools/registry";
@@ -16,7 +17,7 @@ import type { UnifiedMessage } from "../agent/providers/types";
 
 export const agentTestRouter = Router();
 
-agentTestRouter.post("/chat-test", authenticate, async (req: AuthenticatedRequest, res) => {
+agentTestRouter.post("/chat-test", authenticate, requireRole(ROLE_KEY.SUPER_ADMIN), async (req: AuthenticatedRequest, res) => {
   const { message, history } = req.body as { message?: string; history?: UnifiedMessage[] };
   if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "message (string) is required" });
