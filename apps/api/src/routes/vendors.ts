@@ -147,9 +147,9 @@ vendorsRouter.post("/:id/reject", requirePermission(PERMISSION_KEY.MANAGE_VENDOR
  * order it was ever tied to stays exactly as it was, still attributed to this vendor by name.
  * Archiving just drops it out of every active selection (new site assignment, new engineer
  * login, OTP eligibility already checks vendor.status === "approved", so this is free) and
- * deactivates its member logins outright (belt-and-suspenders: the plain password-login route
- * doesn't itself re-check vendor status, only user.isActive, so this is what actually stops an
- * archived vendor's engineer from signing back in).
+ * deactivates its member logins outright. (Belt-and-suspenders since 2026-09-27: every login
+ * path and the authenticate middleware now also refuse members of any non-approved vendor via
+ * lib/authPolicy.ts isVendorAccessBlocked, so /reject locks logins out too.)
  *
  * Optionally moves its currently-assigned sites to another approved vendor first, so ongoing
  * erection work doesn't stall on a vendor that's being removed mid-project.

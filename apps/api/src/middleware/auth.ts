@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken } from "../lib/jwt";
 import { prisma } from "../lib/prisma";
+import { isVendorAccessBlocked } from "../lib/authPolicy";
 
 export interface AuthenticatedRequest extends Request {
   auth?: {
@@ -24,10 +25,17 @@ export async function authenticate(req: AuthenticatedRequest, res: Response, nex
     // than trusting the role baked into the token at sign-in time.
     const user = await prisma.user.findUnique({
       where: { id: payload.userId },
-      include: { role: { include: { permissions: { include: { permission: true } } } } },
+      include: {
+        role: { include: { permissions: { include: { permission: true } } } },
+        vendor: { select: { status: true } },
+      },
     });
     if (!user) return res.status(401).json({ error: "Unknown user" });
     if (!user.isActive) return res.status(401).json({ error: "Account is inactive" });
+    // Kill existing sessions of a vendor's engineers as soon as the vendor stops being approved
+    // (rejected, archived, back to pending) - JWTs are 7-day bearer tokens with no revocation
+    // list, so this per-request check is what actually ends them.
+    if (isVendorAccessBlocked(user)) return res.status(401).json({ error: "Invalid or expired token" });
 
     req.auth = {
       userId: user.id,
