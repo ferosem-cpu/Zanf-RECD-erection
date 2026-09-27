@@ -41,7 +41,7 @@ Ojas; InterGlobe Aviation appears as a site end-client (`Site.companyName`).
 | **Local ports** | API `4011`, admin-web `6011` (Platino uses 4001/6001, so both can run side by side). |
 | **Production DB** | Supabase project `zan-app`, ref `idqzupopsuusoihpmoqc`, `ap-south-1` (Mumbai). |
 | **Vercel team** | `ferose-salahudeen-s-projects` (`team_psJwhw81rjDAba1sPZSBqxzZ`, Hobby). Vercel CLI logged in as `ferosem-1321`. |
-| **Vercel — admin-web** | Project `admin-web`, git-connected to **this repo**. Prod: `app.zanf.org` (also `admin-web-three-blush.vercel.app`). The Vercel GitHub app does build on push (commit statuses on master 09-05/09-09/09-17), but **whether a master push reaches production is unverified** — after pushing, confirm the new build is live on `app.zanf.org`; otherwise deploy with `vercel deploy --prod` (remote build) from the repo root. **Never `--prebuilt`** from Windows (symlink EPERM). See §8. |
+| **Vercel — admin-web** | Project `admin-web`, git-connected to **this repo**. Prod: `app.zanf.org` (also `admin-web-three-blush.vercel.app`). The Vercel GitHub app does build on push (commit statuses on master 09-05/09-09/09-17), and master pushes **do deploy to production** (confirmed 2026-09-27) — still confirm the new build is live on `app.zanf.org`; if not, deploy with `vercel deploy --prod` (remote build) from the repo root. **Never `--prebuilt`** from Windows (symlink EPERM). See §8. |
 | **Vercel — API** | Project `zan-app-api` (`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`), `zan-app-api.vercel.app`, region `bom1`. **Not git-connected** in practice: its git-triggered builds always fail "No entrypoint found" (harmless noise, the live alias is untouched). Deploy with the manual procedure in §8. |
 | **Google Drive** | Account `zanfpowersystems@gmail.com`, folder `ZanF_DropBox` (`1M3V4MdO0NLMHPJMr7naK0EFGLIT8aIRU`). OAuth client `zan-app-agent-drive` (Desktop type) in Cloud project `MyPersonalAgent` (`mypersonalagent-503004`), owned by `ferosem@gmail.com`. Consent screen published 2026-08-18 (no 7-day token expiry; an "unverified app" warning on re-consent is expected — click Advanced). Scopes `drive.readonly` + `drive.file`. Regenerate the refresh token with `apps/api/scripts/getDriveRefreshToken.js` (loopback flow). |
 | **E-mail** | Zoho SMTP `smtp.zoho.in`, sender `info@zanf.org`. **The local `.env` has real Zoho creds — local smoke tests send real mail.** |
@@ -235,10 +235,14 @@ different timestamps than the local files, and `_prisma_migrations` has hand-ins
 writing a migration, diff `information_schema.columns` against the Prisma schema. To apply to
 prod either run `prisma migrate deploy` with the prod `DATABASE_URL`, or apply the SQL via the
 Supabase MCP and insert the matching `_prisma_migrations` row (SHA-256 of `migration.sql`).
-**Pending:** `20260922090000_make_super_admin_google_only` (with the PR #3 API rollout) and
-`20260927120000_management_all_permissions_except_settings` (PR #5; data-only, idempotent — grants
-Management every permission except `manage_settings`; run `npx prisma migrate deploy` with the
-prod `DATABASE_URL`, then have a Management user sign out/in and check Orders, Sites, Customers). Locally,
+No migrations pending (2026-09-27: `20260922090000_make_super_admin_google_only` and
+`20260927120000_management_all_permissions_except_settings` applied via Supabase `execute_sql`
+plus matching `_prisma_migrations` rows). **Do not run `prisma migrate deploy` against prod yet**:
+15 local migrations (`20260813122825_add_product_shape_dimensions_weight` …
+`20260829054500_add_backup_settings_and_log`) are applied in prod (via Supabase
+`apply_migration`, different timestamps) but have **no `_prisma_migrations` row**, so Prisma would
+try to re-run them. Backfill those rows first (see §10). The prod `DATABASE_URL` is a Sensitive
+Vercel var (`vercel env pull` returns `[SENSITIVE]`), so use the Supabase connector. Locally,
 run `npx prisma migrate deploy` after pulling schema changes.
 
 ### admin-web
@@ -257,7 +261,8 @@ run `npx prisma migrate deploy` after pulling schema changes.
    all `@vercel/nft` tracing; rising CPU/memory is normal. Grep the log for errors afterwards.
 5. Confirm the new code is in the output, e.g.
    `Select-String -Path .vercel\output\functions\api\index.func\apps\api\dist\routes\<file>.js -Pattern "<new string>"`.
-6. **Patch `@recd/shared`** (the workspace symlink doesn't survive tracing on Windows):
+6. **Patch `@recd/shared`** (the workspace symlink doesn't survive tracing — confirmed needed on
+   Linux too, 2026-09-27; skip step d on Linux, the workspace symlink already exists):
    a. List `.vercel/output/functions/` and patch **every** `*.func` present (layout varies by CLI
       version: `api/index.func`, sometimes also `index.func`).
    b. In each `*.func/.vc-config.json`, delete the whole `"filePathMap"` key if it mentions
@@ -318,10 +323,13 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 ## 10. Current open items (as of 2026-09-27)
 
 **Deploy / decisions for Ferose**
-- **Three stacked PRs unmerged**: #3 (`security/google-only-super-admin` → master), #4
-  (`security/high-priority-hardening` → #3), then the 2026-09-27 open-items PR (→ #4). Merge in
-  that order. Then: deploy `zan-app-api` (§8), run the pending migration, make sure
-  `CRON_SECRET` is set on `zan-app-api`, verify, then admin-web.
+- **15 prod migrations without a `_prisma_migrations` row** (`20260813122825` …
+  `20260829054500`, see §8): `prisma migrate deploy` against prod is **not safe** until rows are
+  backfilled (checksum = SHA-256 of each `migration.sql`, after confirming each one's objects exist).
+- **Customer role lacks `place_order`** in prod (the Permission row didn't exist until the
+  2026-09-27 migration, which granted it to Management only), so customer-portal order requests
+  (`POST /orders`, `GET /products`) likely 403. Grant it with an idempotent migration if wanted.
+- **Management smoke test**: have a Management user sign out/in and check Orders, Sites, Customers.
 - **NVIDIA fallback returns HTTP 410.** Model id/key live in the `AgentLlmProvider` row, not
   code. With the NVIDIA key, check `GET https://integrate.api.nvidia.com/v1/models`; then in
   Settings → Agent providers try a current tool-calling model such as
@@ -329,12 +337,10 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
   410s while `/models` works, the account lacks NVIDIA's "Public API Endpoints" entitlement
   (help@build.nvidia.com) — or replace NVIDIA with another provider. Until fixed, the code skips
   it and reports Gemini's error.
-- **admin-web auto-deploy**: GitHub commit statuses show the Vercel app building this repo on
-  master pushes (09-05, 09-09, 09-17) and PR branches (09-22); only `9c2ef20` (09-08) has none.
-  So the project is linked to this repo (not Platino) and webhooks work. Unverified: whether
-  those builds were **Production** or Preview. Check in Vercel → admin-web → Settings → Git
-  (Production Branch = `master`, Ignored Build Step empty) and Deployments (environment of the
-  09-09/09-17 builds). Until confirmed, verify `app.zanf.org` after every push.
+- **admin-web auto-deploy — confirmed 2026-09-27**: master pushes build as **Production** and
+  get aliased to `app.zanf.org` (merge `b20febf` → `dpl_D45kYuxyaYCYW9MK2iqPGFj2cQsc`). Caveat:
+  that means a frontend change goes live on merge, before a manual API deploy — keep the
+  backend-first rule in mind (deploy the API before merging dependent frontend changes).
 - **Agent tooling access**: the Vercel MCP connectors available to agents can't see the
   `admin-web`/`zan-app-api` projects (403/empty) — reconnect with both projects authorized if
   agents should inspect Vercel.
@@ -368,6 +374,14 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-09-27 — Merged #3/#4/#5, migrations applied, API + admin-web deployed.** Merge commits
+  `2a11c2a` (#3), `1ae631b` (#4), `b20febf` (#5). Migrations `20260922090000` +
+  `20260927120000` applied via Supabase `execute_sql` with `_prisma_migrations` rows; Management
+  now has all 25 permissions except `manage_settings`; primary Super Admin's `passwordHash` is
+  null. API `dpl_2Q7VVdJQttj3fLahNPV49Jhy5Yts` (prebuilt from Linux, `@recd/shared` patch still
+  needed); admin-web auto-deployed `dpl_D45kYuxyaYCYW9MK2iqPGFj2cQsc` to production.
+  `CRON_SECRET` was already set on `zan-app-api`.
 
 - **2026-09-27 — Management couldn't see Orders/Sites/Customers (PR #5).** The code is fully
   permission-driven (no role-name gates), so the cause is prod `RolePermission` rows: Management
