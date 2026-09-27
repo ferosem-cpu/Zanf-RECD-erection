@@ -7,7 +7,7 @@ import type { AgentLlmProvider } from "@prisma/client";
 import type { AgentTool, AgentAuthContext } from "./tools/types";
 import { getToolByName } from "./tools/registry";
 import type { UnifiedMessage, UnifiedToolSchema, LlmAdapter, SendMessageResult } from "./providers/types";
-import { ProviderCallError } from "./providers/types";
+import { formatProviderFailures, providersToAttempt, recordProviderFailure, type ProviderFailure } from "./providers/providerHealth";
 import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
 
 const MAX_TOOL_TURNS = 8;
@@ -39,21 +39,27 @@ async function sendWithFallback(
   adapters: Map<string, LlmAdapter>,
   params: { systemPrompt: string; messages: UnifiedMessage[]; tools: UnifiedToolSchema[] },
 ): Promise<SendMessageResult> {
-  const failures: string[] = [];
-  for (const providerRow of providers) {
-    let adapter = adapters.get(providerRow.id);
-    if (!adapter) {
-      adapter = createAdapterForRow(providerRow);
-      adapters.set(providerRow.id, adapter);
-    }
+  const failures: ProviderFailure[] = [];
+  const primaryId = providers[0]?.id;
+  // Re-evaluated on every call, so a provider that 410s on tool turn 1 isn't retried on turns 2..8.
+  const { attempt, skipped } = providersToAttempt(providers);
+  for (const providerRow of attempt) {
+    const primary = providerRow.id === primaryId;
     try {
+      // Adapter creation (key decryption) is inside the try on purpose: previously a broken
+      // fallback row threw from here straight out of the loop and replaced the primary
+      // provider's real error with an unrelated decrypt/config error.
+      let adapter = adapters.get(providerRow.id);
+      if (!adapter) {
+        adapter = createAdapterForRow(providerRow);
+        adapters.set(providerRow.id, adapter);
+      }
       return await adapter.sendMessage(params);
     } catch (err) {
-      const message = err instanceof ProviderCallError ? err.message : (err as Error).message;
-      failures.push(`${providerRow.name}: ${message}`);
+      failures.push(recordProviderFailure(providerRow, err, "chat", { primary }));
     }
   }
-  throw new Error(`All configured LLM providers failed:\n${failures.join("\n")}`);
+  throw new Error(`All configured LLM providers failed:\n${formatProviderFailures(failures, skipped)}`);
 }
 
 export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgentTurnResult> {

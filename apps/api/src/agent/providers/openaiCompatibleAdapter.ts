@@ -81,6 +81,8 @@ async function extractDocumentViaNativeGemini(
     throw new ProviderCallError(
       `Provider "${config.providerName}" extraction failed: ${response.status} ${response.statusText} ${bodyText}`.trim(),
       config.providerName,
+      undefined,
+      response.status,
     );
   }
   const data = (await response.json()) as {

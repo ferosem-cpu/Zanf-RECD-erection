@@ -183,7 +183,11 @@ agentProvidersRouter.post(
         headers: { Authorization: `Bearer ${apiKey}` },
       });
       if (!response.ok) {
-        return res.json({ models: [], error: `Provider returned ${response.status} - you can still type a model name manually.` });
+        const hint =
+          response.status === 410
+            ? " (410 Gone: the endpoint is retired or this key's account isn't entitled to it - for NVIDIA, check the key has 'Public API Endpoints' access)"
+            : "";
+        return res.json({ models: [], error: `Provider returned ${response.status}${hint} - you can still type a model name manually.` });
       }
       const data = (await response.json()) as { data?: Array<{ id: string }> };
       const models = (data.data ?? [])

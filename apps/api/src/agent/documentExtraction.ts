@@ -8,7 +8,7 @@
  * anything itself - purely a read.
  */
 import { loadActiveProvidersInOrder, createAdapterForRow } from "./providers/factory";
-import { ProviderCallError } from "./providers/types";
+import { formatProviderFailures, providersToAttempt, recordProviderFailure, simpleFailure, type ProviderFailure } from "./providers/providerHealth";
 import { ExtractionUnavailableError } from "./billExtraction";
 
 export interface GenericExtraction {
@@ -48,21 +48,25 @@ export async function extractGenericDocument(fileBase64: string, mimeType: strin
     );
   }
 
-  const failures: string[] = [];
-  for (const providerRow of providers) {
-    const adapter = createAdapterForRow(providerRow);
-    if (!adapter.extractDocument) {
-      failures.push(`${providerRow.name}: does not support document extraction`);
-      continue;
-    }
+  const failures: ProviderFailure[] = [];
+  const primaryId = providers[0]?.id;
+  const { attempt, skipped } = providersToAttempt(providers);
+  for (const providerRow of attempt) {
+    const primary = providerRow.id === primaryId;
     try {
+      // Inside the try so a broken fallback row can't mask the primary provider's error.
+      const adapter = createAdapterForRow(providerRow);
+      if (!adapter.extractDocument) {
+        failures.push(simpleFailure(providerRow, "does not support document extraction", primary, "document-extraction"));
+        continue;
+      }
       const raw = await adapter.extractDocument({ instructions: INSTRUCTIONS, fileBase64, mimeType });
       const jsonText = stripJsonFences(raw);
       let parsed: unknown;
       try {
         parsed = JSON.parse(jsonText);
       } catch {
-        failures.push(`${providerRow.name}: response wasn't valid JSON`);
+        failures.push(simpleFailure(providerRow, "response wasn't valid JSON", primary, "document-extraction"));
         continue;
       }
       const obj = parsed as Record<string, unknown>;
@@ -79,9 +83,8 @@ export async function extractGenericDocument(fileBase64: string, mimeType: strin
         rawText: obj.rawText ? String(obj.rawText) : undefined,
       };
     } catch (err) {
-      const message = err instanceof ProviderCallError ? err.message : (err as Error).message;
-      failures.push(`${providerRow.name}: ${message}`);
+      failures.push(recordProviderFailure(providerRow, err, "document-extraction", { primary }));
     }
   }
-  throw new ExtractionUnavailableError(`AI extraction failed for every configured provider:\n${failures.join("\n")}`);
+  throw new ExtractionUnavailableError(`AI extraction failed for every configured provider:\n${formatProviderFailures(failures, skipped)}`);
 }
