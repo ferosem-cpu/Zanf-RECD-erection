@@ -11,7 +11,8 @@
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "test": "node --import tsx --test test/authPolicy.test.ts test/providerHealth.test.ts test/roleDefinitions.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

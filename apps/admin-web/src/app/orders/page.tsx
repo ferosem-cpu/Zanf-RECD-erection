@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { suggestNewOrderValue } from "@/lib/orderValue";
 import { useAuth } from "@/components/AuthContext";
 import { DataTable } from "@/components/DataTable";
 
@@ -132,13 +133,7 @@ function OrdersPageInner() {
   // Stops once the user edits Value by hand (valueTouched).
   useEffect(() => {
     if (valueTouched) return;
-    const selected = productLines.filter((l) => l.productId);
-    const anyPriced = selected.some((l) => customerProductPrices[l.productId]);
-    const total = selected.reduce((sum, l) => {
-      const price = customerProductPrices[l.productId];
-      return price ? sum + parseFloat(price) * (parseFloat(l.quantity) || 1) : sum;
-    }, 0);
-    const suggested = anyPriced ? total.toFixed(2) : "";
+    const suggested = suggestNewOrderValue(productLines, customerProductPrices);
     setForm((f) => (f.value === suggested ? f : { ...f, value: suggested }));
   }, [productLines, customerProductPrices, valueTouched]);
 

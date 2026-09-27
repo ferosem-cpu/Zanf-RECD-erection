@@ -6,7 +6,7 @@
  */
 import { prisma } from "../lib/prisma";
 import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
-import { ProviderCallError } from "./providers/types";
+import { formatProviderFailures, providersToAttempt, recordProviderFailure, simpleFailure, type ProviderFailure } from "./providers/providerHealth";
 
 export interface ExtractedLineItem {
   description: string;
@@ -80,21 +80,25 @@ export async function extractBillFromFile(fileBase64: string, mimeType: string):
     );
   }
 
-  const failures: string[] = [];
-  for (const providerRow of providers) {
-    const adapter = createAdapterForRow(providerRow);
-    if (!adapter.extractDocument) {
-      failures.push(`${providerRow.name}: does not support document extraction`);
-      continue;
-    }
+  const failures: ProviderFailure[] = [];
+  const primaryId = providers[0]?.id;
+  const { attempt, skipped } = providersToAttempt(providers);
+  for (const providerRow of attempt) {
+    const primary = providerRow.id === primaryId;
     try {
+      // Inside the try so a broken fallback row can't mask the primary provider's error.
+      const adapter = createAdapterForRow(providerRow);
+      if (!adapter.extractDocument) {
+        failures.push(simpleFailure(providerRow, "does not support document extraction", primary, "bill-extraction"));
+        continue;
+      }
       const raw = await adapter.extractDocument({ instructions: INSTRUCTIONS, fileBase64, mimeType });
       const jsonText = stripJsonFences(raw);
       let parsed: unknown;
       try {
         parsed = JSON.parse(jsonText);
       } catch {
-        failures.push(`${providerRow.name}: response wasn't valid JSON`);
+        failures.push(simpleFailure(providerRow, "response wasn't valid JSON", primary, "bill-extraction"));
         continue;
       }
       const obj = parsed as Record<string, unknown>;
@@ -123,11 +127,10 @@ export async function extractBillFromFile(fileBase64: string, mimeType: string):
         notes: obj.notes ? String(obj.notes) : undefined,
       };
     } catch (err) {
-      const message = err instanceof ProviderCallError ? err.message : (err as Error).message;
-      failures.push(`${providerRow.name}: ${message}`);
+      failures.push(recordProviderFailure(providerRow, err, "bill-extraction", { primary }));
     }
   }
-  throw new ExtractionUnavailableError(`AI extraction failed for every configured provider:\n${failures.join("\n")}`);
+  throw new ExtractionUnavailableError(`AI extraction failed for every configured provider:\n${formatProviderFailures(failures, skipped)}`);
 }
 
 /** Very small fuzzy match: normalizes whitespace/case and scores by shared word overlap plus

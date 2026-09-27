@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { computePricedCost } from "@/lib/orderValue";
 import { useAuth } from "@/components/AuthContext";
 
 interface OtherSite {
@@ -212,9 +213,7 @@ export default function OrderDetailPage() {
       quantity: li.quantity,
     })),
   ];
-  const cumulativeCost = costParts.reduce((sum, part) => sum + (part.price ? parseFloat(part.price) * part.quantity : 0), 0);
-  const anyPriced = costParts.some((part) => part.price);
-  const allPriced = costParts.every((part) => part.price);
+  const { total: cumulativeCost, anyPriced, allPriced } = computePricedCost(costParts);
 
   const contact = order.customer.contacts[0];
   const siteMap = order.site ? mapsUrl(order.site.address, order.site.gpsLat, order.site.gpsLng) : null;

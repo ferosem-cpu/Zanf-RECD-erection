@@ -67,11 +67,26 @@ export interface LlmAdapter {
  * treated as a final answer. Adapters should let genuinely unexpected errors propagate as-is
  * if they don't fit this - but in practice almost all provider call failures qualify. */
 export class ProviderCallError extends Error {
+  /** HTTP status of the failed provider call, when there was one (e.g. 401, 429, 410). Taken
+   * from the explicit argument, else from the SDK error in `cause` (both the openai and
+   * @anthropic-ai/sdk APIError classes expose a numeric `.status`). */
+  public readonly status?: number;
   constructor(
     message: string,
     public readonly providerName: string,
     public readonly cause?: unknown,
+    status?: number,
   ) {
     super(message);
+    this.status = status ?? httpStatusOf(cause);
   }
+}
+
+/** Best-effort HTTP status extraction from any thrown value (SDK APIError, ProviderCallError, ...). */
+export function httpStatusOf(err: unknown): number | undefined {
+  if (err && typeof err === "object" && "status" in err) {
+    const status = (err as { status?: unknown }).status;
+    if (typeof status === "number" && Number.isFinite(status)) return status;
+  }
+  return undefined;
 }

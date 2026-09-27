@@ -1,2350 +1,406 @@
-# Platino RECD Tracker / Zan-APP — Handover
+# Zan-APP — Handover
 
-> **Fork notice:** This repo started as a clone of the **Platino RECD tracker**
-> project. Everything from **"Part B: Zan-APP"** onward is this project's own
-> work, for a different company, with its own database and deployments.
-> **Part A** below is condensed background on the inherited codebase only —
-> not this project's roadmap.
-
----
-
-# Part A — Platino RECD tracker (inherited codebase, background only)
-
-A role-based Project & Service Tracker for an RECD (Retrofit Emission Control
-Device) manufacturing/installation business, tracking the **SITC** flow
-(Supply → Installation → Testing → Commissioning). Turborepo/npm-workspaces
-monorepo: `apps/api` (Express 5 + Prisma + JWT), `apps/admin-web` (Next.js 14
-App Router + Tailwind), `apps/mobile` (Expo, never runtime-tested),
-`packages/shared` (Zod schemas/types/constants, compiled to CommonJS — must be
-rebuilt with `npm run build --workspace=packages/shared` after any source
-edit, since consumers read `dist/`, not `src/`).
-
-**Core design principle — "data, not code":** stages, roles, permissions,
-statuses, photo checkpoints, structure types are all rows in tables, not
-hardcoded enums — the same pattern Zan-APP inherited and kept for its own
-finance module below.
-
-**Roles:** Super Admin (only role with `manage_settings`) > Management (all
-except Settings) > Sales / Operations / Erection & Commissioning Engineers /
-Service Team / Finance / Customer — each permission-gated both client- and
-server-side. External erection companies are modeled as **Vendors**
-(`User.vendorId` / `Site.vendorId`), with strict tenant isolation between
-vendors enforced on every site route.
-
-**Known durable facts from this history, still relevant as prior art:**
-- A full security audit (bare JWT-secret fallback, IDOR on complaint creation,
-  no login rate-limiting, weak temp-password RNG) was fixed and shipped —
-  `jwt.ts` now **throws at boot if `JWT_SECRET` is unset** (fail-loud, no
-  insecure fallback). Any new Express app cloned from this code should keep
-  that pattern.
-- Windows-specific Prisma gotcha: `prisma generate` can fail with `EPERM`
-  renaming `query_engine-windows.dll.node` if any running `node.exe` still has
-  the DLL loaded — find and kill it via
-  `Get-Process node | ? { $_.Modules.FileName -like '*query_engine*' }`, not
-  just the obvious dev-server PID (it's sometimes a stray/orphaned process).
-- Vercel deploy pitfalls that recur across both projects: don't reintroduce a
-  legacy `"builds"` array in `vercel.json` (silently skips `prisma
-  generate`); `packages/shared` must compile to CommonJS; "Redeploy" on an old
-  dashboard row rebuilds that pinned commit, not latest — push and let Git
-  auto-deploy, then explicitly Promote to Production.
-- The original Supabase DB was migrated Tokyo → Mumbai (`ap-south-1`) for
-  latency, and the Vercel API project's `regions` was pinned to `bom1` to
-  match — the same latency lesson applies to Zan-APP's own Mumbai setup below.
-
-Full blow-by-blow history (original §1–§19) has been trimmed from this file —
-it's inherited background, not Zan-APP's own record. If deep detail is ever
-needed, it's in git history / the pre-2026-08-12 version of this file.
+> **Compressed 2026-09-27** from ~2,350 lines to what is still needed to operate, deploy and
+> extend the app. The full blow-by-blow history (resolved-bug narratives, superseded deploy
+> procedures, CLI-version archaeology, Platino Part A detail) is in git: see this file at
+> commit **`924329a`** (`git show 924329a:docs/HANDOVER.md`), the last version before
+> compression. Older still: `docs/HANDOVER.pre-compact-2026-08-12.md`.
+>
+> **Start a session by reading "Current open items" and the top of "Changelog".**
 
 ---
 
-# Part B — Zan-APP (this project's own work)
+## 1. What this is
 
-Separate company, separate codebase-derived-from-Platino, separate database
-and deployments going forward. Cloned 2026-07-19 from
-`github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
-sync with Platino's own repo).
+A role-based **Project & Service Tracker plus Finance/Accounting app** for ZanF (e-mail domain
+`zanf.org`), a company that makes and installs **RECDs (Retrofit Emission Control Devices)** for
+diesel gensets, sold by KVA rating. It tracks the **SITC** flow: Supply → Installation → Testing →
+Commissioning.
 
-**Current state:** the primary Super Admin (`ferosem@gmail.com`) is now Google-only at both
-the API-policy and database layers (2026-09-22; see top of Changelog). The latest earlier
-feature work is Order value auto-fill from customer pricing (2026-09-09), order editing
-(`PATCH /orders/:id` + an "Edit order" form), and remote (`vercel deploy --prod`, no
-`--prebuilt`) admin-web deploys after local Windows builds started failing on a symlink step.
-Start a new session by reading "Current open items" and the top of "Changelog" below.
+**Background (Platino):** the repo was cloned 2026-07-19 from the Platino RECD tracker as a
+one-time snapshot and is *not* kept in sync with it (repo description still says "Duplicate of
+ferosem-cpu/Platino-RECD-"; `README.md` still says Platino). Zan-APP has its own database and
+deployments. Durable lessons inherited from Platino are folded into the gotchas below
+(fail-loud `JWT_SECRET`, no legacy `"builds"` array in `vercel.json` — it silently skips
+`prisma generate` —, shared package must compile to CommonJS, Mumbai DB + `bom1` region).
 
-## Quick facts
+**Users:** internal staff (Super Admin, Owner/Admin, Management, Sales, Operations, Erection &
+Commissioning Engineers, Service Team, Finance), external erection companies (**Vendors**) and
+their engineers, and **Customers** (portal, e-mail OTP login).
+
+**Real data in prod:** 30 RECD KVA product variants (from `RECD_Full_GA_Extraction.xlsx`) plus
+`RECD-810` (user-confirmed genuine); 29 orders/sites for customer "Ethen Power Solutionns Pvt
+Ltd". Other real customers include BPCL, VRL, Bostik, Mahindra Aerostructures, Wipro, Kaynes,
+Ojas; InterGlobe Aviation appears as a site end-client (`Site.companyName`).
+
+## 2. Quick facts
 
 | | |
 |---|---|
-| **Local ports** | API `4011`, admin-web `6011` (deliberately different from Platino's `4001`/`6001` so both repos can run side by side — see gotcha below). Use `preview_start(name: "zan-api")` / `preview_start(name: "zan-admin-web")`. |
-| **Production DB** | Supabase project `zan-app`, ref `idqzupopsuusoihpmoqc`, region `ap-south-1` (Mumbai). |
-| **Vercel — admin-web** | `admin-web` project, **git-connected** in theory (push to `master` should auto-deploy) — **but this stopped firing at some point before 2026-09-08** (4+ days of commits never auto-deployed; root cause not found, see Changelog). Until that's diagnosed, deploy manually with `vercel deploy --prod` (no `--prebuilt` — local Windows builds fail on a symlink step, see Changelog) from the repo root. Production URL/alias: `app.zanf.org` (also reachable at `admin-web-three-blush.vercel.app`). |
-| **Vercel — api** | `zan-app-api` project (`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`, team `ferose-salahudeen-s-projects`), **NOT git-connected** — needs the manual deploy dance below every time. URL: `zan-app-api.vercel.app`. |
-| **Google Drive (agent doc search + folder creation)** | Dedicated account `zanfpowersystems@gmail.com`, folder `ZanF_DropBox` (id `1M3V4MdO0NLMHPJMr7naK0EFGLIT8aIRU`). OAuth client `zan-app-agent-drive` (Desktop type) lives in Cloud project `MyPersonalAgent` (`mypersonalagent-503004`), owned by `ferosem@gmail.com` — **not** `zanfpowersystems@gmail.com`, which only owns the Drive folder itself. Consent screen was **published to production 2026-08-18**, which removed the old 7-day Testing-mode refresh-token expiry (confirmed: a token minted after publishing has no `refresh_token_expires_in` in Google's response at all, vs. exactly 604760s/7d before). Still shows an "unverified app" warning on re-consent since Drive scopes need Google review to fully verify — harmless, just click through Advanced. **Token scope is `drive.readonly` + `drive.file`** (as of 2026-08-18, later) — readonly alone can search/read pre-existing shared documents but can't create anything, which silently broke "Create Drive folders" even after the expiry was fixed; `drive.file` adds create/manage access scoped to files the app itself creates. Regenerate via `apps/api/scripts/getDriveRefreshToken.js` if this ever needs redoing (kept in the repo, not a one-off). |
-| **Working dir on user's machine** | `D:\Projects\Zan-APP` (reached via the Desktop Commander MCP — see tooling note below, not this harness's own `device_bash`). |
+| **Repo** | `github.com/ferosem-cpu/Zanf-RECD-erection`, default branch `master`. Dev machine: Windows, `D:\Projects\Zan-APP`. |
+| **Local ports** | API `4011`, admin-web `6011` (Platino uses 4001/6001, so both can run side by side). |
+| **Production DB** | Supabase project `zan-app`, ref `idqzupopsuusoihpmoqc`, `ap-south-1` (Mumbai). |
+| **Vercel team** | `ferose-salahudeen-s-projects` (`team_psJwhw81rjDAba1sPZSBqxzZ`, Hobby). Vercel CLI logged in as `ferosem-1321`. |
+| **Vercel — admin-web** | Project `admin-web`, git-connected to **this repo**. Prod: `app.zanf.org` (also `admin-web-three-blush.vercel.app`). The Vercel GitHub app does build on push (commit statuses on master 09-05/09-09/09-17), but **whether a master push reaches production is unverified** — after pushing, confirm the new build is live on `app.zanf.org`; otherwise deploy with `vercel deploy --prod` (remote build) from the repo root. **Never `--prebuilt`** from Windows (symlink EPERM). See §8. |
+| **Vercel — API** | Project `zan-app-api` (`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`), `zan-app-api.vercel.app`, region `bom1`. **Not git-connected** in practice: its git-triggered builds always fail "No entrypoint found" (harmless noise, the live alias is untouched). Deploy with the manual procedure in §8. |
+| **Google Drive** | Account `zanfpowersystems@gmail.com`, folder `ZanF_DropBox` (`1M3V4MdO0NLMHPJMr7naK0EFGLIT8aIRU`). OAuth client `zan-app-agent-drive` (Desktop type) in Cloud project `MyPersonalAgent` (`mypersonalagent-503004`), owned by `ferosem@gmail.com`. Consent screen published 2026-08-18 (no 7-day token expiry; an "unverified app" warning on re-consent is expected — click Advanced). Scopes `drive.readonly` + `drive.file`. Regenerate the refresh token with `apps/api/scripts/getDriveRefreshToken.js` (loopback flow). |
+| **E-mail** | Zoho SMTP `smtp.zoho.in`, sender `info@zanf.org`. **The local `.env` has real Zoho creds — local smoke tests send real mail.** |
+| **Primary Super Admin** | `ferosem@gmail.com`, **Google-only** (`POST /auth/google`; `POST /auth/login` returns generic invalid-credentials). Allow-list: `apps/api/src/lib/authPolicy.ts`. Local seed: sample staff users (`owner@`, `sales@`, `finance@example.com`, …) use password `changeme123`; the Super Admin is seeded without a password (Google-only). |
 
-## Standing architecture (inherited from Platino, unchanged)
+## 3. Architecture
 
-Same "data, not code" principle, same role/permission model, same monorepo
-layout. Zan-APP's own addition is a **finance module** (Quotations, Invoices,
-Purchase Orders, Expenses, Work Orders — none of this existed in the original
-Platino clone, built entirely in this project) and, more recently, an
-**in-app AI agent**.
+- **Turborepo / npm-workspaces monorepo**: `apps/api`, `apps/admin-web`, `apps/mobile`,
+  `packages/shared`, `docs/`, `.claude/`, `turbo.json`, `tsconfig.base.json`, root `.npmrc`
+  (`include=dev`), `.env.example`.
+- **`apps/api`** — Express 5 + Prisma 5 + JWT (TypeScript). Routes in `src/routes/`, business
+  services in `src/services/` (`ledger.ts`, `settlement.ts`, `gstExport.ts`, backup,
+  notifications), helpers in `src/lib/` (`googleDrive.ts`, `googleAuth.ts`, `email.ts`,
+  `emailTemplates.ts`, `csv.ts`, `jwt.ts`, `authPolicy.ts`, `crypto.ts`), agent in `src/agent/`.
+  Prisma `binaryTargets: ["native","rhel-openssl-3.0.x"]`. Single auth middleware:
+  `src/middleware/auth.ts` (`authenticate`, `requirePermission`, `requireRole`,
+  `requireAgentAccess`). JWTs are 7-day bearer tokens (`JWT_EXPIRES_IN`), no refresh endpoint;
+  `authenticate` re-loads the user every request (inactive users and non-approved vendors'
+  members are refused).
+- **`apps/admin-web`** — Next.js **15.5** App Router + Tailwind + React 18. Key components:
+  `DataTable.tsx`, `Nav.tsx`, `AuthGuard.tsx`, `AgentChatBubble.tsx`, `NotificationBell.tsx`,
+  `reports/ReportChrome.tsx`; libs `apiClient.ts`, `csvExport.ts`, `finance.ts`,
+  `orderValue.ts`. Env: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_GOOGLE_CLIENT_ID`. ~41 static pages.
+- **`apps/mobile`** — Expo/React Native. **Never runtime-tested.** All remaining high/critical
+  `npm audit` findings are in its dependency tree.
+- **`packages/shared`** (`@recd/shared`) — Zod schemas, types, constants, **compiled to
+  CommonJS**; consumers read `dist/`. After any edit: `npm run build --workspace=packages/shared`
+  and restart the API.
+- **"Data, not code"**: stages, roles, permissions, statuses, photo checkpoints, structure types
+  are DB rows, not enums.
+- **Documents**: `DocumentSequence` + `nextDocumentNumber()` give gap-free numbers per financial
+  year (e.g. `CRN/2026-27/0001`). GST math in `computeDocumentTotals` (CGST+SGST intra-state,
+  IGST inter-state). HSN/SAC is mandatory on line items (Zod only; no DB `NOT NULL`).
+- Other libs: nodemailer 10, `googleapis` (211 MB; only `google.drive()` + `OAuth2` used),
+  `pdf-parse` (must stay dynamically imported), `mammoth`, `openai`, `@anthropic-ai/sdk`,
+  react-markdown v9 + remark-gfm.
+- **Tests**: `npm test` at the root runs every workspace's `node:test` suites via `tsx`
+  (`apps/api/test/*`, `apps/admin-web/test/*`). **Lint is not set up** (no ESLint installed;
+  `npm run lint` fails).
 
-## The `zan-app-api` manual deploy dance (needed for every backend-touching change)
+## 4. Roles, permissions and auth
 
-`zan-app-api` is deliberately not git-connected, so every backend change
-needs this sequence from `apps/api`:
+- **Super Admin** is the only role with `manage_settings`. **Owner/Admin** and **Management**
+  get `ALL_PERMISSIONS` minus `manage_settings`. Others: Sales (has `manage_orders`), Operations,
+  E&C Engineers, Service Team, Finance, Customer. Every permission is enforced client- and
+  server-side.
+- Permission keys in use include `manage_orders`, `view_orders` (read-only, Finance), `place_order`
+  (Customer), `manage_quotations`, `manage_invoices`, `manage_purchase_orders`,
+  `record_payments`, `approve_vendor_invoice`, `view_ledgers`, `manage_credit_notes`,
+  `manage_vendors`, `view_site_status`, `change_site_status`, `raise_complaint`,
+  `manage_settings`.
+- Role → permission sets live in `apps/api/prisma/roleDefinitions.ts` (used by the seed and
+  unit-tested). Management / Owner-Admin are computed as `ALL_PERMISSIONS` minus
+  `manage_settings`, so a new key is included automatically **in the seed**. Prod never re-runs
+  the seed: ship every new grant as an idempotent SQL migration that looks roles/permissions up
+  by key (pattern: `20260927120000_management_all_permissions_except_settings`). Historically
+  grants went in by hand via the Supabase MCP, which is how prod Management drifted.
+- Only `erection_engineer` users may carry `User.vendorId` (`roleAllowsVendor`); any vendorId
+  vendor-scopes every site query, so `POST /users` rejects it for other roles and a role change
+  away from erection engineer clears it.
+- **Vendors** are tenant-isolated (`User.vendorId` / `Site.vendorId`) on every site route.
+  Vendor status: `pending | approved | rejected | archived` (`VENDOR_STATUS`). Public
+  self-registration → pending → staff approve (creates the contact's erection-engineer login
+  with a temp password) or reject. Staff can `POST /vendors` (pre-approved). Archive
+  (`POST /vendors/:id/archive`) keeps history, optionally reassigns sites, deactivates member
+  logins; no un-archive in the UI. **Since 2026-09-27 members of any non-approved vendor are
+  blocked on every login path and existing sessions** (`isVendorAccessBlocked`).
+- **Customers have no password.** Login is e-mail OTP (`/auth/email-otp/request` + `/verify`);
+  they must have `User.customerId` set. `POST /users` / `PUT /users/:id` refuse
+  `roleKey: "customer"` (customers are created from the Customers page). Emails are normalized
+  (trim + lowercase). OTP uses a crypto RNG; the `devCode` echo is hidden when
+  `NODE_ENV=production`. OTP responses are deliberately generic, so debug via the `OtpCode` and
+  `NotificationLog` tables. Legacy `/auth/customer/register` + `/verify` (Order ID + phone) and
+  `/auth/otp/*` (phone) are live on the backend with no UI — don't delete without checking.
+  Customer OTP verify routes self-heal a stray `mustChangePassword`; `AuthGuard` never sends
+  customers to `/change-password`.
+- Staff log in with password (`/auth/login`) or Google (`/auth/google`, `GOOGLE_CLIENT_ID`).
 
-0. **Every step below must run from `apps/api` specifically** - not the repo
-   root, not any other folder. Confirmed 2026-08-17: running `vercel build`
-   from the root fails loudly ("No Project Settings found locally"), but
-   running `vercel deploy --prebuilt` from the wrong folder can *silently*
-   pick up a stale leftover `.vercel/output` from an earlier build instead
-   of erroring - no warning, it just deploys the wrong code. If a shell
-   session wanders (e.g. after `cd..`, or after opening Notepad, whose Save
-   dialog uses its own last-remembered folder, not the shell's cwd), `cd
-   apps\api` explicitly before every `vercel` command rather than assuming
-   you're still there.
-1. Stop any local `zan-api` dev server first (Windows Prisma `EPERM` gotcha).
+## 5. Modules
+
+- **Orders / Sites / SITC**: `/orders`, `/orders/[id]` (Edit order, `PATCH /orders/:id`,
+  staff-only), `/sites`, `/sites/[id]`. Several RECDs per site are `Order.lineItems`
+  (`OrderLineItem`) — **always include lineItems**. New order form takes multiple product lines
+  (extra lines via `POST /orders/:id/line-items`). Order Value auto-fills from customer pricing;
+  the edit page has "Populate cost" (sums all products) and "Update pricing" deep links
+  (`lib/orderValue.ts`). `SiteStageEvent` = status timeline; `RecdDelivery` = deliveries. Order
+  value is stripped from customer-facing site responses.
+- **Customers / Products / Vendors CRUD**: `/customers/[id]` (with Ledger link; delete guarded),
+  `/products/[id]` (shape enum `cylinder|triangle|rectangle`, free-text dimensions, weightKg,
+  silencerType 1|2), vendors as in §4. `Customer.gstin`/`state` settable on create and edit
+  (`state` drives the GST place-of-supply default).
+- **Finance**: Quotations (delete guarded, convert to order), Invoices (proforma + tax, issue,
+  `InvoiceEditLog`, `DELETE` only for cancelled `DRAFT-` ones), Purchase Orders, Expenses, Work
+  Orders (`WorkOrderProduct` multi-product), Finance dashboard, Saved Items (`SavedLineItem`,
+  default SAC 9987), Customer Pricing (`/finance/customer-pricing?customer=`), vendor
+  invoices/bills (`/finance/vendor-invoices`, AI extraction).
+- **Accounting-Lite (all 4 phases live since 2026-08-28; plan in `docs/ACCOUNTING_LITE_PLAN.md`)**:
+  A — party ledgers `/finance/ledgers`, `GET /ledgers/customer/:id` and `/supplier/:id`, opening
+  balances. B — `/finance/credit-notes` (CRN sequence, draft→issued→cancelled; the invoice detail
+  page shows issued CNs and has a "Create credit note" button) and `/finance/debit-notes`
+  (internal, no sequence). C — `/finance/payments` (`POST /payments`: split allocation,
+  advances, TDS), `/reports/tds` (`GET /ledgers/tds?fy=`); `services/settlement.ts` is the
+  **single definition of "paid"**. D — `/reports/gst-returns`, `GET /ledgers/gst/gstr1` and
+  `/gstr3b` (`?format=csv`) — filing aids, not filing-ready.
+- **Vendor payments/advances**: `/finance/vendor-payments`, `POST /bills/payments` (overpayment
+  becomes an advance), `POST /bills/:id/apply-advance`, optional order tags (`PaymentOrderTag`).
+- **Customer Purchase Orders**: `/customer-pos`, `/customer-pos/new` (upload + AI extract),
+  `/customer-pos/[id]`; uses `manage_orders`.
+- **Customer Portal** `/customer/portal`: multi-site switcher, Raise Support Ticket, "Request
+  New Order" (`place_order`; value null; `Order.requestedByCustomer`; notifies Management in-app
+  and e-mails `info@zanf.org` via the `new_order_placed` template).
+- **Notifications**: `NotificationLog` (+`readAt`), `GET /notifications`, `POST /:id/read`,
+  `/read-all`; bell polls every 30 s. Bespoke e-mail copy only for `otp_code`,
+  `site_stage_updated`, `vendor_assigned_site`, `new_order_placed`; the rest render generic
+  key/value.
+- **Reports**: `/reports/sitc`, `/finance`, `/customer-history`, `/vendor-performance` (built
+  client-side), each with Print + CSV.
+- **DataTable** on every list page: column show/hide (localStorage `zan-app:columns:<page>`),
+  per-column filters, `accessorList` multi-value filters, Print (landscape, letterhead).
+- **Print/PDF** (quotation/invoice/PO): single header/footer, bundled Tinos font, editable terms.
+  Verify with a real Playwright PDF render, not on-screen.
+- **Backups**: in-app backup settings, manual run and schedule with Drive upload
+  (`/backup/*`); scheduled run via Vercel cron.
+
+## 6. In-app AI agent (`apps/api/src/agent/`)
+
+- Floating chat bubble (`AgentChatBubble.tsx`): markdown, Copy button, mic (Web Speech API —
+  Chrome/Edge only). Hidden until a Super Admin enables roles in **Settings → Agent Visibility**
+  (`CompanySettings.agentVisibleRoleKeys`, empty = nobody; enforced server-side by
+  `requireAgentAccess`). **The Customer toggle is still OFF in prod.** Won't answer until a
+  provider exists in **Settings → Agent providers**.
+- Providers: `AgentLlmProvider` rows (name, type `anthropic|openai_compatible`, baseUrl, model,
+  priority, isActive), keys AES-256-GCM encrypted with `AGENT_SECRETS_KEY`. Tried in priority
+  order with fallback (`llm.ts`, `providers/providerHealth.ts`): a provider returning **HTTP 410**
+  is logged and skipped for 60 min per instance (cleared when the row is edited); all failures
+  are logged (`[agent:...]` in Vercel runtime logs) and the final error lists the **primary**
+  provider's error first. Configured in prod: **Gemini (priority 1)** via the OpenAI-compat
+  base URL, **NVIDIA (priority 2) — returns 410**, see open items. Gemini base URLs route PDF
+  extraction to native `:generateContent`.
+- `CompanySettings.agentCustomInstructions` is appended to `systemPrompt.ts`
+  (`buildAgentSystemPrompt(isCustomer)`). Prompt lesson: concrete worked examples beat abstract
+  rules; a name may be a customer, a vendor **or** a site end-client, so search all before "no
+  records".
+- Tools (`tools/registry.ts`, `zanAppReadTools.ts`, `zanAppDetailTool.ts`,
+  `zanAppWriteTools.ts`) mirror their REST route's permissions and row scoping. Read: search
+  customers/vendors/quotations/invoices/POs/expenses/orders_and_sites/work orders/complaints,
+  `search_site_status_updates`, `search_saved_items`, `get_customer_pricing`,
+  `get_customer_ledger`, `search_credit_notes`, `get_customer_advances`, `get_document_detail`,
+  Drive search/read (reads limited to descendants of the Drive folder; refused for customers).
+  Write tools are **confirm-gated** (`AgentPendingAction` → `executeConfirmedAction`) and
+  draft-only: `create_expense`, `create_purchase_order`, `create_quotation`, `create_invoice`,
+  `create_saved_item`, `create_complaint`, `create_site_status_update`, `create_customer_po`,
+  and others. No Accounting write tools, no edit tools. Customers only reach their own
+  orders/sites and `create_complaint`.
+- Conversations: `AgentConversation`; daily cron deletes threads > 30 days. **Test prompt/tool
+  fixes in a new thread** (old history outweighs fixes). The manual tool harness
+  (`agentTest.ts`) is mounted only outside production.
+
+## 7. Integrations and environment variables
+
+- **Drive** (see Quick facts): agent document search (PDF/DOCX extraction) and "Create Drive
+  folders" on a site.
+- **E-mail**: `lib/email.ts` (nodemailer) + `emailTemplates.ts`.
+- **Cron** (`apps/api/vercel.json`): `/agent/cron/cleanup-conversations` daily 03:00 UTC and
+  `/backup/internal/run-scheduled` daily 19:30 UTC (01:00 IST). Both **fail closed** — 401
+  unless `CRON_SECRET` is set and the bearer matches.
+
+| Variable | Where | Notes |
+|---|---|---|
+| `DATABASE_URL` | api | Sensitive in Vercel (redacted by `vercel env pull`). |
+| `JWT_SECRET` | api | API **throws at boot** if unset. `JWT_EXPIRES_IN` optional (7d). |
+| `CRON_SECRET` | api | Required for both crons (fail closed). |
+| `AGENT_SECRETS_KEY` | api | Decrypts provider API keys. |
+| `GOOGLE_CLIENT_ID` | api | Google sign-in verification. |
+| `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, `GOOGLE_DRIVE_REFRESH_TOKEN`, `GOOGLE_DRIVE_FOLDER_ID` | api | Drive. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM_ADDRESS` | api | Zoho. |
+| `NODE_ENV`, `PORT` | api | `NODE_ENV=production` hides OTP `devCode` and the agent test harness. |
+| `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | admin-web | |
+
+## 8. Deploying
+
+### Rule: backend first
+When a change spans both apps, deploy `zan-app-api` and confirm it live **before** the dependent
+admin-web change goes out — or make the frontend tolerate the old API (optional chaining). A
+same-push frontend+backend change crashed prod Sites on 2026-08-20. "Works locally" is not
+evidence, because the local API picks up changes instantly.
+
+### Database migrations
+Prod history has **drifted**: much DDL went in via the Supabase MCP `apply_migration`, some with
+different timestamps than the local files, and `_prisma_migrations` has hand-inserted rows. Before
+writing a migration, diff `information_schema.columns` against the Prisma schema. To apply to
+prod either run `prisma migrate deploy` with the prod `DATABASE_URL`, or apply the SQL via the
+Supabase MCP and insert the matching `_prisma_migrations` row (SHA-256 of `migration.sql`).
+**Pending:** `20260922090000_make_super_admin_google_only` (with the PR #3 API rollout) and
+`20260927120000_management_all_permissions_except_settings` (PR #5; data-only, idempotent — grants
+Management every permission except `manage_settings`; run `npx prisma migrate deploy` with the
+prod `DATABASE_URL`, then have a Management user sign out/in and check Orders, Sites, Customers). Locally,
+run `npx prisma migrate deploy` after pulling schema changes.
+
+### admin-web
+1. Push to `master`, then check `app.zanf.org` actually serves the new build (look for a new
+   string in the shipped JS, not just "Ready").
+2. If it doesn't: from the **repo root**, `npx vercel deploy --prod` — remote build on Vercel's
+   Linux, no `--prebuilt`. The root `.npmrc` (`include=dev`) makes the remote install keep
+   devDependencies.
+
+### zan-app-api (manual; run every step from `apps/api`)
+1. Stop the local API dev server (Windows Prisma EPERM).
 2. `npx vercel pull --yes --environment production`
-3. **Delete any leftover build output before rebuilding** -
-   `Remove-Item -Recurse -Force .vercel\output, dist -ErrorAction SilentlyContinue`
-   (from `apps/api`). Skipping this is exactly how the stale-deploy bug in
-   step 0 happens - a failed or wrong-directory build attempt can leave an
-   old `.vercel\output` sitting there for the *next* `deploy --prebuilt` to
-   pick up without complaint.
-4. `npx vercel build --prod` — **takes 15–20 minutes** (confirmed 2026-08-28:
-   ~14 min), almost entirely spent in Vercel's `@vercel/nft` file-tracing
-   step, not in `tsc` (which alone takes ~15s). Root cause of the slowness,
-   diagnosed 2026-08-24: `@vercel/nft` traces a 500MB+ local `node_modules` —
-   `.prisma` client+engines 314MB (already minimally scoped via
-   `binaryTargets: ["native", "rhel-openssl-3.0.x"]`, nothing more to trim)
-   and `googleapis` 211MB, of which the app only ever uses `google.drive()` +
-   `google.auth.OAuth2` (`apps/api/src/lib/googleDrive.ts`, its only import
-   site). Two real levers identified, neither applied yet: (1) a Windows
-   Defender exclusion for the repo folder during builds — zero code risk;
-   (2) swap `googleapis` for the smaller scoped `@googleapis/drive` package —
-   real payoff but needs care, since `googleDrive.ts`'s own comment says it
-   deliberately uses `googleapis`' bundled `google.auth.OAuth2` over the
-   standalone `google-auth-library` package because of a past internal
-   version-check mismatch bug — a swap needs a real Drive OAuth round-trip
-   tested before trusting it in production, not just a clean build.
-   CPU/memory climb steadily the whole time — that's normal, not hung;
-   confirm via `Get-Process`/`Get-CimInstance` polling if unsure. Worth
-   piping to a log (`... 2>&1 | Tee-Object -FilePath build.log`) so you can
-   `Select-String -Path build.log -Pattern "error" -SimpleMatch` afterward
-   instead of assuming a long build that finished must have succeeded.
-   Note (2026-08-28): the build log showed `packages/shared`'s own
-   TypeScript build (`npm run build --workspace=packages/shared`) running
-   fresh as part of `vercel build --prod` itself, so schema/constants
-   changes there were already reflected with no separate manual copy step
-   into `.vercel/output/...packages/shared` needed that run — don't assume
-   this always holds; verify by grepping the output for a distinctive new
-   string, same as step 5 below.
-5. **If this deploy adds/changes a route, verify it's actually in *this*
-   build's output before deploying** - don't rely on step 8's "401 not 404"
-   check alone for a *new* route (see why below):
-   `Select-String -Path ".vercel\output\functions\api\index.func\apps\api\dist\routes\<file>.js" -Pattern "<distinctive string from the new code>"`.
-6. **Patch `@recd/shared`** into the spots the npm-workspaces symlink doesn't
-   survive Vercel's Windows-symlink-unaware function tracer — this step is
-   required after every fresh build, since each build's own install step
-   wipes it (confirmed 2026-08-28: the local `apps/api/node_modules/@recd/shared`
-   copy was found completely empty/missing before that session's deploy even
-   started, not just stale — this is expected, not a new bug). **As of Vercel
-   CLI 59.1.4 (2026-08-20) this is only 3 spots, not the 5 an earlier CLI
-   version needed** - `.vercel/output/functions/` now contains only
-   `api/index.func/` (everything is rewritten to `/api/index` per
-   `vercel.json`); the old bare `functions/index.func/` target from prior
-   write-ups no longer exists in the output at all, and trying to patch into
-   it is a silent no-op (its parent directory doesn't exist - skip it, don't
-   create it). The 3 real spots, confirmed 2026-08-20:
-   - `apps/api/node_modules/@recd/shared`
-   - `.vercel/output/functions/api/index.func/node_modules/@recd/shared`
-   - `.vercel/output/functions/api/index.func/apps/api/node_modules/@recd/shared`
-   **Update, Vercel CLI 59.5.0 (2026-08-24):** the bare `functions/index.func/`
-   target is back (sibling to `functions/api/index.func/`) - don't assume it's
-   permanently gone just because one CLI version dropped it. It's unused by
-   this app (`vercel.json`'s rewrite still sends all traffic to `/api/index`,
-   confirmed via `functions/api/index.func`'s own logs actually receiving
-   requests), so it doesn't need patching, but it's a sign this layout keeps
-   moving - always verify against the current build's actual tree. Also new
-   this CLI version: `functions/api/index.func/packages/shared/dist` now
-   exists as a real, current, un-symlinked copy (confirmed by grepping it for
-   a distinctive string) - this looked like it might make the whole patch
-   dance obsolete, but it isn't: deploying with the patch skipped fails at
-   two different points depending on what's missing -
-   `vercel deploy --prebuilt` itself refuses with `File does not exist:
-   "node_modules\@recd\shared"` if only the *local* `apps/api/node_modules/@recd/shared`
-   copy is missing (a pre-upload validation check against the local
-   workspace tree, unrelated to what's actually in `.vercel/output`; hit
-   again and confirmed exactly as documented on 2026-08-28), and if
-   that's patched but the two `.vercel/output/...node_modules/@recd/shared`
-   spots aren't, the deploy succeeds but every route 500s at runtime with
-   `Cannot find module '@recd/shared'` (confirmed via `npx vercel logs
-   <deployment-url>` - the bundled `packages/shared/dist` files exist on
-   disk but nothing makes Node's `require("@recd/shared")` resolve to them
-   without the `node_modules/@recd/shared` entry). **All 3 original spots
-   are still required, unchanged** - this CLI version just fails in a new,
-   more confusing way if you skip them, instead of silently deploying stale
-   code like older versions did. **Reconfirmed 2026-08-28**: that build's
-   output had BOTH `functions/index.func/` and `functions/api/index.func/`
-   simultaneously (not just one or the other, contradicting some earlier
-   per-CLI-version assumptions above) — patched into both plus the local
-   `apps/api/node_modules/@recd/shared` copy (3 spots total, consistent with
-   the documented count) and the deploy succeeded and ran clean at runtime.
-   **Lesson, now reconfirmed twice: always check what actually exists in the
-   current build's `.vercel/output/functions/` tree rather than assuming a
-   fixed spot list holds across CLI versions** — this doc's spot list has
-   now changed at least twice.
-   **The `@recd` scope folder itself doesn't exist yet in a fresh build** -
-   a patch script that only checks/overwrites the final `shared` folder
-   (assuming its parent `@recd` dir is already there) silently no-ops on
-   all three, since `Test-Path` on the *parent* of `@recd/shared` (i.e.
-   `@recd` itself) correctly reports missing, but a script that instead
-   checks the *grandparent* (`node_modules`, which does exist) will think
-   the target is patchable and then fail to actually create anything - the
-   `@recd` intermediate directory must be `New-Item -ItemType Directory`'d
-   before copying into it.
-   Write this as a `.ps1` file via an editor and run it with `-File` rather
-   than pasting inline (multi-line pastes into a live PowerShell prompt have
-   corrupted before) - and if using `notepad <name>.ps1` to create it,
-   confirm with `Test-Path <name>.ps1` that it actually saved where you
-   expect (Notepad's Save dialog remembers its own last folder, not the
-   shell's cwd - confirmed 2026-08-17, cost a stray `cd` back to the repo
-   root that then broke the next step).
-7. `npx vercel deploy --prebuilt --prod` from `apps/api`.
-8. Verify: `GET /health` → 200, and a route that requires auth (e.g.
-   `GET /agent/providers` or `DELETE /quotations/<fake-id>`) → 401, not 404 —
-   404 means the deploy didn't actually pick up the change. **This check
-   alone does NOT prove a brand-new route exists**, only that the deployed
-   function responds at all: router-level `.use(authenticate)` middleware
-   (e.g. in `vendors.ts`) runs for *every* request under that path prefix
-   regardless of whether any specific route ultimately matches, so an
-   unauthenticated request to a nonexistent new route can still return a
-   convincing `401` instead of `404`. To actually confirm a new route is
-   live, either test it with a **valid token and a real record id** (a
-   genuine 404 from inside the route's own `if (!thing) return
-   res.status(404)` always has a JSON `{error: "..."}` body; a route that
-   was never registered falls through to Express's bare fallback 404, which
-   doesn't) or trust step 5's build-output check instead.
-
-`admin-web` needs none of this — it's git-connected, so `git push` to
-`master` is enough.
-
-**Established deploy ordering rule (backend-first):** when a feature spans
-both apps, deploy `zan-app-api` and confirm it live (`/health` → 200) *before*
-pushing the dependent `admin-web` commit — never push both assuming they
-deploy in lockstep. See "Known gotchas" for the production outage this rule
-exists because of.
-
-## Tooling note for future sessions
-
-Local builds/deploys on the user's machine are done via the **Desktop
-Commander MCP** (`mcp__remote-devices__Desktop_Commander__*`), which gives a
-real shell on the user's Windows machine — not this harness's own sandboxed
-`device_bash`, which reports "workspace unavailable" for this project.
-One transport quirk hits repeatedly: any command string containing a literal
-`$` (PowerShell variables, `$_` in pipelines) gets silently stripped before
-reaching PowerShell. **Workaround: write the script as a `.ps1`/`.js` file via
-`write_file` first, then execute it with `-File`** — inline `-Command "..."`
-strings lose `$`, script files don't.
-
-**A cloud/web session (Claude Code on the web, no Desktop Commander attached)
-cannot run the `zan-app-api` deploy dance at all - confirmed 2026-08-16, not
-just "inconvenient."** Two independent, unrelated blockers, both hit in the
-same session:
-- No Desktop Commander MCP tool is attached in a cloud session, and no other
-  reachable local/remote session existed to hand it off to (`list_agents`
-  came back empty) - there's no way to reach the user's own machine at all.
-- Even *with* a valid Vercel token supplied directly by the user, the
-  `vercel` CLI's own API calls fail: this sandbox's network egress proxy
-  outright blocks `api.vercel.com` at the gateway (`curl
-  "$HTTPS_PROXY/__agentproxy/status"` showed repeated `gateway answered 403
-  to CONNECT ... host: api.vercel.com:443`). Same story for `*.vercel.app`
-  deployment URLs and even the production `app.zanf.org` domain via
-  `WebFetch` (`EGRESS_BLOCKED`). This is a network *policy* restriction on
-  the environment, not an auth problem - no token fixes it. The connected
-  Vercel MCP tool (`mcp__Vercel__*`) is a separate path that does reach
-  Vercel's API, but it's authenticated as a *different* account/team that
-  doesn't have this project (`get_project` on both `zan-app-api`'s known
-  project ID and the `zan-app` slug 404'd under it).
-- **Bottom line: a cloud session can prepare and push the code fix to
-  `master`, but the actual `zan-app-api` deploy needs a session with real
-  Desktop Commander access to the user's machine (or the environment's
-  network policy opened up to `api.vercel.com`).** Say so plainly rather
-  than attempting the deploy dance from a cloud session - it will not work.
-
-## Known gotchas (still live)
-
-- **Never push one commit that touches both `admin-web` and `apps/api` when
-  the frontend change depends on a new/changed API field.** `admin-web`
-  auto-deploys instantly on push; `zan-app-api` doesn't deploy until someone
-  runs the manual dance, which can be minutes to hours later. **Caused a real
-  production outage 2026-08-20**: a commit added `order.product`-dependent
-  Sites columns with no optional chaining (assumed always present) in the
-  same push as the backend `include` that supplies the field — `admin-web`
-  went live immediately, `s.order.product` was `undefined` until the API
-  deploy caught up, and the Sites page threw a full client-side exception for
-  every real user in the gap. Local dev looked fine throughout (local API
-  dev server picks up changes on save) — **local looking fine is not evidence
-  production is fine** when the two apps are out of deploy-sync. Fix: deploy
-  backend first and confirm live before pushing the dependent frontend
-  change, or make the frontend degrade gracefully (optional chaining +
-  fallback) for fields the *current* production API might not have yet.
-- **`next dev` is broken in this environment** (not production-affecting):
-  `globals.css`'s `@import`/`@tailwind` lines fail through Next's RSC CSS
-  loader path — reproduces even on a clean `node_modules`/`.next`/`.turbo`.
-  `next build && next start` works (what Vercel uses anyway) — use that for
-  local testing until root-caused.
-- **`next build` for `admin-web` must run with cwd actually inside
-  `apps/admin-web`** — invoking the CLI with a directory argument from
-  elsewhere builds successfully but Tailwind's `content` glob resolves
-  relative to `process.cwd()`, not the config file's location, so it matches
-  nothing and emits nearly-empty CSS. Only symptom is a quiet `warn - The
-  content option ... is missing or empty` line, not a build failure —
-  confirmed 2026-08-20 (page loaded, zero styling, easy to miss). Fix: run
-  the build via `Start-Process -WorkingDirectory apps\admin-web` or an actual
-  `cd`, never a path argument from elsewhere.
-- **`next start`'s real server is a child process, not the PID
-  `Start-Process`/`npm run start` returns.** Killing that PID leaves the
-  server still bound to port 6011 — next start attempt fails `EADDRINUSE`,
-  and the browser keeps serving the stale build. Confirmed 2026-08-20. Fix:
-  kill whatever `Get-NetTCPConnection -LocalPort 6011 -State Listen` reports,
-  not the launcher's own PID.
-- Editing `packages/shared` source has **zero effect** until rebuilt
-  (`npm run build --workspace=packages/shared`) and the API dev server is
-  restarted — bit twice (2026-08-11, and historically).
-- Installs run through the remote/automation shell have repeatedly corrupted
-  `node_modules` (turbo/tailwind/next/prettier/typescript binaries going
-  missing, even under `npm ci`) — recurred 2026-08-13 (`typescript` missing
-  even though `turbo`/`next` were present; re-running `npm install` through
-  Desktop Commander fixed it that time). If it recurs and doesn't self-fix,
-  have the user run `npm install` directly in their own terminal instead.
-- The local dev Postgres DB needs `npx prisma migrate deploy` run by hand
-  after pulling schema changes someone else made — a stale local DB throws
-  opaque `PrismaClientKnownRequestError: column ... does not exist` on
-  whichever route first touches the missing column (hit via `/dashboard` →
-  `Site.companyName` on 2026-08-13).
-- **Windows Prisma `EPERM` gotcha (see Part A) recurs on every fresh
-  `prisma generate`/`migrate dev` if the previous dev server wasn't fully
-  killed** — confirmed again 2026-08-13, same fix (kill the `node.exe` still
-  holding `query_engine-windows.dll.node`, then retry).
-- **Production's Supabase migration history has drifted from the local
-  Prisma `migrations/` folder.** `add_site_contacts_documents_delivery` is
-  applied on production under a *different* version timestamp
-  (`20260813085200`) than the local migration file's own name
-  (`20260813085114`), and several early production migrations
-  (`zanf_card_system_schema`, `fix_updated_at_search_path`, etc.) have no
-  corresponding local `.sql` file — production schema changes have been
-  applied directly via the Supabase MCP's `apply_migration`, not `prisma
-  migrate deploy`. **Don't assume `prisma migrate status` against production
-  would report cleanly** — always diff actual columns
-  (`information_schema.columns`) against the Prisma schema before writing a
-  new migration.
-- No DB-level `NOT NULL` constraint on any `hsnCode` column — enforcement is
-  Zod/API-layer only (deliberate; a DB constraint would need a data-backfill
-  pass first, since some historical rows may still be null).
-- **The agent operating this repo cannot log into `admin-web` itself** —
-  entering a password into any field is refused outright, even with
-  credentials supplied by the user. Production changes get verified by
-  replicating the app's own Prisma queries as raw SQL via the Supabase MCP,
-  and by hitting the deployed API directly for auth-gated routes (expect
-  401, not 404) — never by loading the real UI as a logged-in user. Local
-  dev DB doesn't have this restriction: seeded Super Admin
-  (`ferosem@gmail.com` / `changeme123`) is fine for local browser
-  verification.
-- Supabase MCP calls against the production project (`apply_migration`,
-  `execute_sql`) get intermittently blocked by the harness's auto-mode
-  safety classifier and need the user to explicitly say "proceed" before a
-  retry succeeds — inconsistent about which calls trip it (a large
-  multi-statement data-import query went through untouched right after a
-  single-statement schema migration got blocked, and this recurred again
-  2026-08-24), so don't assume a query is safe just because a similar one
-  just went through.
-- **This dev machine has `NODE_ENV=production` set globally** (the Windows
-  user's own environment, not a project `.env` — confirmed via
-  `$env:NODE_ENV`), which is also why `next dev` warns about a "non-standard
-  NODE_ENV value". Side effect: any route doing `NODE_ENV === "production" ?
-  undefined : devValue` (the OTP endpoints' `devCode` echo) behaves like real
-  production even locally — don't mistake a missing `devCode` for the
-  request having failed; check `NotificationLog`/server logs instead.
-- **`npm install <package-name>` (explicit package argument) reliably
-  crashes with `TypeError: Cannot read properties of null (reading
-  'location')`** (npm 11.13.0, arborist tree-diff bug tied to how it diffs
-  the `@recd/shared` workspace symlink after it's been patched for a Vercel
-  deploy). **Workaround: hand-edit the `dependencies`/`devDependencies` entry
-  into the target workspace's `package.json`, then run bare `npm install`**
-  (no package argument) — confirmed via the nodemailer install on
-  2026-08-14. If a bare `npm install` then fails on the `prisma generate`
-  postinstall's `EPERM` lock, re-run with `--ignore-scripts` and manually run
-  `npm run build --workspace=packages/shared` + `npx prisma generate` (from
-  `apps/api`).
-- **Work done from the mobile app lands as a pushed-but-unmerged branch
-  named `claude/<slug>`, not directly on `master`.** Found 2026-08-15 when a
-  feature the user said they'd built "yesterday on my phone" wasn't on
-  `master` — `git fetch origin && git branch -a` surfaced
-  `origin/claude/customer-agent-scoping-voice` sitting un-merged. **Always
-  check for these before assuming a feature doesn't exist or rebuilding it
-  from scratch.**
-
-## Current open items (as of 2026-09-17, updated later same day)
-
-- **RESOLVED same day: Vercel CLI login + connector scoping, both fixes deployed.**
-  - The CLI login blocker (`vercel whoami`/`pull`/`build` all failing "A new login is
-    required") was fixed by running `npx vercel login` and completing the device-auth flow
-    (`vercel.com/oauth/device?user_code=...`) in the browser — no cached credentials existed
-    on this machine, this was a genuine first login for CLI 59.20.0. `npx vercel whoami` now
-    reports `ferosem-1321`, correct team `ferose-salahudeen-s-projects`.
-  - Separately, the Claude↔Vercel MCP connector (`mcp__Vercel__*` tools) had been scoped
-    (via "Sign in with Vercel" OAuth) to only 5 unrelated projects, NOT `zan-app-api`/
-    `admin-web` — despite matching the correct team ID. Vercel's dashboard has **no UI
-    anywhere** to edit an OAuth connection's authorized-projects list after the fact (checked
-    Team Integrations, Integrations Console, Connect page, Security & Privacy, and the
-    connection's own detail page under Account Settings → Sign in with Vercel). The only fix
-    is disconnecting/reconnecting the connector from **Claude's own side** (Settings →
-    Connectors → Vercel → reconnect, re-picking both projects at the consent screen) — done,
-    confirmed via `mcp__Vercel__get_project` succeeding for both project IDs afterward.
-  - **Both commits below were then deployed the same session** — `zan-app-api` via the full
-    manual deploy dance (`vercel pull` → clean → `vercel build --prod` → patch `@recd/shared`
-    into the 3 documented spots → `vercel deploy --prebuilt --prod`), verified live
-    (`GET /health` → `{"ok":true}`, `GET /orders` unauthenticated → 401 not 404, confirmed the
-    build output actually contained `VIEW_ORDERS`/`gstin`/`value: null` before deploying).
-    Then `admin-web` via `vercel deploy --prod` (remote build, no `--prebuilt`) from the repo
-    root — build succeeded clean, aliased to `app.zanf.org`, verified `GET /login` → 200.
-  - One side-effect worth knowing for next time: regaining connector access caused a stale
-    queued git-triggered auto-deploy of `zan-app-api` to fire and fail with "No entrypoint
-    found" (expected — `zan-app-api` is deliberately not git-connected per its own manual
-    deploy dance; this did NOT affect the live production alias, confirmed via `/health`
-    before the real deploy). Not a new bug, just noise from the connector reconnect.
-  - `2403451` (2026-09-09, order value visibility fix) and `969de96` (2026-09-17, customer
-    GSTIN/State fields) are **both fully live now** — DB permission grant (already live),
-    API enforcement, and admin-web frontend gating all deployed and verified together.
-- **Order value auto-fill from customer pricing + "Update pricing" links (shipped and
-  deployed 2026-09-09) not yet click-tested by a real user** - see Changelog for full detail.
-  Owed: verify the auto-fill, the blank-when-no-override case, the edit-form "Use" button, and
-  both "Update pricing"/"Add pricing" deep links against a real customer with pricing set up.
-- **`admin-web` git auto-deploy has stopped firing on push, root cause not found** (discovered
-  2026-09-08/09) — 4+ days of commits never auto-deployed before this was caught. Manual
-  `vercel deploy --prod` from the repo root works and is the current workaround. Owed: check
-  the GitHub App/webhook connection and Vercel's project Git integration settings to find why,
-  and confirm it's fixed before trusting auto-deploy again.
-- **Local (Windows) `admin-web` builds fail on a symlink EPERM in the final build-output
-  step** (`vercel build --prod` locally, not `vercel deploy --prod` remote) — Developer Mode
-  isn't enabled on this machine and a registry-based enable attempt was denied (no admin
-  rights). Until either is resolved, always deploy `admin-web` with plain `vercel deploy
-  --prod` (remote build), never `--prebuilt` from a local Windows build.
-- **New root `.npmrc` (`include=dev`) was added 2026-09-09** to work around `NODE_ENV=production`
-  being set persistently on this machine, which was silently omitting all devDependencies
-  (`typescript`, `tailwindcss`, etc.) from every `npm install` with zero error output. If a
-  future session ever sees a dev tool "not recognized" right after a successful-looking
-  install, check `npm config get omit` before assuming `node_modules` is just stale.
-- **Order editing (`PATCH /orders/:id` + "Edit order" form) shipped 2026-09-05, deployed and
-  confirmed live 2026-09-09** (delayed by the auto-deploy gap above) — see Changelog for full
-  detail and live verification.
-
-## Older open items (as of 2026-08-28)
-
-- **Accounting-Lite Phase A (party ledgers) and Phase B (Credit/Debit
-  notes) shipped but not click-tested live** — see Changelog. Owed: real
-  Finance-user walkthrough of `/finance/ledgers`, `/finance/credit-notes`,
-  and `/finance/debit-notes` (draft a CN against a real issued tax invoice,
-  issue it, confirm the invoice's balance/status update and the ledger
-  shows the credit movement).
-- **Accounting-Lite Phase C is fully built (backend + admin-web frontend)
-  and both deploys are live in production; not yet click-tested by a real
-  Finance user** — see Changelog. Backend: `POST /payments` (split-across-
-  invoices + advances + TDS), `POST /payments/:id/allocations`, `GET
-  /customers/:id/advances`, and `GET /ledgers/tds` are deployed and
-  401-not-404 confirmed; every pre-existing production `PaymentReceived` row
-  was backfilled with a matching full-amount `PaymentAllocation` (11/11
-  verified). A **second** backend deploy shipped after the first because
-  `invoices.ts`/`credit-notes.ts`/`financeDashboard.ts` were hardened to
-  compute "paid" from the new allocation-based settlement helper everywhere
-  (list route, detail route, dashboard, receivables report) instead of the
-  legacy `payments.reduce` pattern, which would have silently undercounted
-  once a payment could be split or carry TDS — confirmed live (`/health` →
-  200, `/payments` and `/ledgers/tds` → 401 not 404) before any frontend
-  push, per the deploy-ordering rule. Frontend: `/finance/payments` (record
-  a payment with customer picker, TDS fields, auto-allocate oldest-first
-  across open invoices, editable split, live advance total), `/reports/tds`
-  (TDS register, fiscal-year selector, Print + CSV), the invoice detail
-  page's payment history (shows TDS inline, flags split payments with a link
-  to `/finance/payments`, hides Edit/Remove on split rows), the Record/Edit
-  Payment modals (TDS amount + certificate ref fields, "tds" method option
-  removed for new payments and shown only conditionally on legacy rows), and
-  `Nav.tsx` links for both new pages (riding on existing `record_payments`/
-  `view_ledgers` permissions, no new permission key needed, as anticipated)
-  — all built, `tsc --noEmit` and `next build` both clean on admin-web, and
-  pushed to `master` for Vercel's git-connected auto-deploy. Owed: a real
-  Finance-user walkthrough (record a split payment, confirm advance shows up,
-  pull the TDS register for a fiscal year).
-- **Accounting-Lite Phase D (GST exports) is fully built and both deploys
-  are live in production; not yet click-tested by a real Finance user** —
-  see Changelog. No schema migration was needed (every field the exports
-  read — `gstin`, `placeOfSupply`, `cgst/sgst/igstAmount` — already existed
-  from Phases A-B). New `GET /ledgers/gst/gstr1?from=&to=` (B2B + CDNR,
-  JSON or `?format=csv`) and `GET /ledgers/gst/gstr3b?from=&to=` (3.1a net
-  of issued CNs + 4A eligible ITC) confirmed live (`/health` → 200, both
-  routes → 401 not 404) and functionally verified by running the exact
-  service functions against local dev data (`tsx`, not a mock) — a
-  cross-check that `sum(B2B taxable value)` exactly equals the GSTR-3B
-  `outwardTaxableValue` passed on real seeded invoices, including one
-  correctly detected as interstate (IGST-only, no CGST/SGST). New
-  `/reports/gst-returns` page (month/quarter picker, GSTR-1 B2B + CDNR
-  tables, GSTR-3B summary tiles, Print + CSV per section) and its `Nav.tsx`
-  link (riding on `view_ledgers`, no new permission key). `tsc --noEmit`
-  and `next build` both clean on admin-web before pushing to `master`.
-  **This closes out all four Accounting-Lite phases from
-  `docs/ACCOUNTING_LITE_PLAN.md`** — the module (party ledgers, credit/debit
-  notes, payment allocation + advances + TDS, GST exports) is now fully
-  built and deployed end to end. Owed: a real Finance-user walkthrough of
-  every phase (see the Phase A-C bullets above), and specifically for Phase
-  D — pull a GSTR-1/3B for a real filing period and have someone who
-  actually files these sanity-check the numbers against last period's real
-  filing before relying on it. Also a known pre-existing gap found while
-  building this, not part of Phase D's own scope and not yet fixed: the
-  invoice detail page never got the "show issued credit notes + net
-  outstanding / Create credit note button" the plan called for back in
-  Phase B — credit notes only surface via `/finance/credit-notes` today.
-- **Vendor advances (pay a supplier without a bill), and optional order-ID
-  tagging on them, are both built and deployed** (2026-08-28) — see
-  Changelog (two entries). Verified by hitting the real dev server over
-  HTTP; not yet click-tested by a real Finance user. Owed: a real
-  Finance-user walkthrough (record a pure advance, record an over-payment
-  and confirm the split, tag an advance to an order, apply an advance to a
-  bill and see the order tags line up). Also note: applying an advance only
-  works from the `/finance/vendor-payments` page today — the bill detail
-  page itself still has no credit/advance section, the vendor-side
-  counterpart of the Phase B gap noted below.
-- **The in-app AI assistant now has read access to the whole Accounting-
-  Lite module** (2026-08-28) — see Changelog. Three new tools:
-  `get_customer_ledger`, `search_credit_notes`, `get_customer_advances`,
-  plus `search_invoices` and `get_document_detail` (docType `invoice`)
-  were fixed to use the allocation-based settlement math instead of a
-  legacy raw-payments sum that undercounted split/TDS payments (the same
-  bug class fixed in the REST routes back in Phase C, just missed here
-  until now). Still no new WRITE tools for this module — an AI assistant
-  proposing a payment/credit-note/allocation on its own was deliberately
-  left out of scope; only reads. Deployed and confirmed live. Not yet
-  click-tested by asking the assistant a real account-standing question
-  in production chat.
-- **Every `DataTable` page has a Print button** (2026-08-20) — prints only
-  the currently-filtered rows/visible columns with a full letterhead. Not yet
-  click-tested live by the user (standing "agent can't log into admin-web"
-  restriction) — owed: print preview on at least one page with an active
-  filter, confirm letterhead/logo renders.
-- **`DataTable` (column show/hide + per-column filter) covers all list
-  pages** (2026-08-20) — Sites/Customers/Products, plus Vendors, Orders,
-  Invoices, Quotations, Purchase Orders, Expenses, Users, Work Orders,
-  Complaints. Not yet click-tested live — owed: real click-through of the
-  Columns menu and per-column filters on a few newly-converted pages.
-- **Drive folder creation fixed and deployed (2026-08-18) but not yet
-  click-tested live** — round 1 fixed the expired-token/7-day expiry (fully
-  gone now); round 2 found and fixed the real remaining cause, wrong OAuth
-  scope (`drive.readonly` only, widened to include `drive.file`), verified
-  end-to-end by creating/deleting a real test folder via the Drive API
-  directly. Owed: click "Create Drive folders" on a real site as a logged-in
-  user and confirm success (standing restriction blocks this from any
-  session, not just cloud ones).
-- **`RecdDelivery` (delivery-status-per-site table) is almost entirely
-  unpopulated for Ethen's 29 sites** — found verifying a user-uploaded
-  `Material_Delivery_Status_version_1.xlsx` against production. Only 2 of
-  ~24 delivery-status line items in the sheet have any `RecdDelivery` row at
-  all (INTERGLOBE AVIATION/Devanahalli, VRL/Peenya), and even those two have
-  gaps (VRL/Peenya's `productId` is null; neither captured an actual/expected
-  date despite the sheet giving one). Every other site (Bostik, all BPCL's,
-  the other 7 VRL sites, Mahindra, Wipro, Kaynes) has real Order/Site data
-  but zero delivery-status record. User was offered an import of the missing
-  rows — not yet done, waiting on the user.
-- **One address name doesn't match between the sheet and the DB,
-  unconfirmed**: sheet's "BPCL, DEVANAGONTI, Bangalore" has no literal match
-  in production — closest candidate is BPCL's "Hosakote, Bangalore" site
-  (same 2-product shape — RECD-250 + RECD-750 — the sheet's group implies).
-  Waiting on user confirmation these are the same place before importing.
-- **`apiClient.ts` fix for the false-failure-on-delete bug (2026-08-16) is
-  pushed but not yet click-tested live** — frontend-only, ships via normal
-  `admin-web` auto-deploy. Owed: confirm a delete action resolves cleanly in
-  the browser instead of throwing.
-- **New Reports section (2026-08-16) has never been click-tested as a
-  logged-in user** — only `tsc`/`next build`/curl-200 verified, per the
-  standing "agent can't log into admin-web" restriction. Owed: a real run
-  through each of the 4 reports' filters, Print, and Export CSV buttons.
-- **Customer-facing agent chat (own orders/sites + raise-complaint) is
-  code-complete, deployed, and verified live as a real customer** (2026-08-15)
-  but the **Settings → Agent Visibility toggle for Customer is still off in
-  production** — deliberately left for the user to flip on when ready.
-- 9 of the 12 notification `templateKey`s (`complaint_raised`,
-  `invoice_issued`, `payment_received`, `work_order_assigned`, etc.) send
-  real emails but with generic auto-rendered key/value copy, not bespoke
-  templates — only `otp_code`, `site_stage_updated`, and
-  `vendor_assigned_site` got real copy. See `emailTemplates.ts`.
-- Customer login's "Order ID + phone" flow was removed from the login page
-  UI (2026-08-14, "for now") but `/auth/customer/register` and
-  `/auth/customer/verify` are untouched on the backend — dead code from the
-  UI's perspective, not actually dead. Revive by re-adding the toggle in
-  `login/page.tsx` if it comes back; don't delete the backend routes without
-  checking nothing else depends on them.
-- Product catalog carries real GA-drawing-derived data
-  (`shape`/`dimensions`/`weightKg`, imported 2026-08-13) for 30 KVA
-  variants, but `shape` is only a 3-value enum (`cylinder`/`triangle`/
-  `rectangle`); the richer free-text shape descriptions from the source
-  spreadsheet (e.g. "Horizontal cylindrical shell (RAD 2.0)") got stuffed
-  into `ratingSpec` for lack of a better field — flagged as a judgment call,
-  not yet revisited.
-- `apps/api/scripts/verify*.ts` — a growing pile of throwaway verification
-  scripts from live-testing the agent's write tools. Never consolidated into
-  real automated tests; still there, still growing.
-- HSN-code self-inference risk on document line items is blocked by
-  validation (mandatory `hsnCode` on the shared Zod schema), but the *agent*
-  will still confidently invent a code if the user doesn't supply one and
-  gets a rejection rather than a silent bad value — acceptable but worth
-  knowing.
-- No edit-history/audit-log for quotations or POs (invoices have
-  `InvoiceEditLog`) — acceptable today since quotation/PO editing is
-  draft-only, but worth knowing the asymmetry exists.
-- The in-app agent's chat bubble stays invisible to everyone until a Super
-  Admin opts specific roles in via **Settings → Agent Visibility**
-  (`CompanySettings.agentVisibleRoleKeys` defaults to empty), and won't
-  respond until at least one LLM provider/API key is added under
-  **Settings → Agent providers**. Both are pure configuration, not code.
-- File-upload-to-Drive from the agent chat (would need the Drive OAuth scope
-  widened from `drive.readonly` to `drive.file`) — scoped, never started.
-- Editing/updating existing records via the agent (as opposed to creating new
-  ones) — never scoped or started.
-- The mic button (Web Speech API) only renders where the browser implements
-  `SpeechRecognition`/`webkitSpeechRecognition` — solid on Chrome/Edge,
-  absent on Firefox and inconsistent on Safari/iOS. If customer traffic skews
-  iPhone-heavy, this silently degrades to keyboard-only for a lot of users;
-  worth revisiting with a server-side transcription fallback (e.g. Whisper
-  via the already-configured LLM provider plumbing) if that turns out to
-  matter.
-
----
-
-## Changelog (condensed)
-
-### 2026-09-22 — High-priority security hardening (feature-preserving)
-
-- Removed the manual agent tool harness from production. It is now mounted only outside
-  `NODE_ENV=production`, and local use additionally requires an authenticated Super Admin.
-- Made both scheduled endpoints fail closed: conversation cleanup and scheduled backups return
-  `401` unless `CRON_SECRET` is configured and the request supplies the matching bearer token.
-  Ensure the production Vercel environment has `CRON_SECRET`; normal in-app backup execution is
-  unchanged.
-- Restricted direct agent Drive document reads to files proven to be descendants of the
-  configured Drive folder. Caller-supplied IDs can no longer read an otherwise accessible file
-  from outside that folder tree.
-- Replaced `Math.random()` in OTP and vendor temporary-password generation with Node's
-  cryptographic RNG, and removed OTP/order/phone data from application logs.
-- Upgraded the admin web app from Next.js 14 to `15.5.25`, Nodemailer to `10.0.10`, and the
-  direct PostCSS development dependency to `8.5.28`. The shared package, API, and full Next.js
-  production build all pass; Next generated all 41 static admin pages successfully.
-- Dependency follow-up deliberately deferred for review: clearing the remaining high-severity
-  PostCSS advisory nested inside Next requires the feature-risking Next.js 16 major upgrade.
-  The remaining high/critical findings in the full monorepo audit are in the Expo/React Native
-  mobile dependency tree and similarly require major framework/runtime upgrades. Neither was
-  force-upgraded in this feature-preserving change.
-
-### 2026-09-22 — Primary Super Admin changed to Google-only authentication
-
-- `ferosem@gmail.com` can no longer use `POST /auth/login`; the API returns the same generic
-  invalid-credentials response used for other failed password logins, avoiding account-policy
-  enumeration. Google ID-token login through `POST /auth/google` remains enabled.
-- Added `apps/api/src/lib/authPolicy.ts` as the single source of truth for Google-only staff
-  addresses.
-- Added Prisma migration `20260922090000_make_super_admin_google_only`, which clears the
-  existing production `passwordHash` for `ferosem@gmail.com`. Run `prisma migrate deploy`
-  against production before or with the API rollout.
-- Updated the seed so future seed runs create this account without a password and remove any
-  legacy password hash from an existing copy. Other staff accounts keep their current password
-  authentication behavior.
-- Verification: API TypeScript build passes after installing lockfile dependencies.
-
-### Deploy: order value visibility fix + customer GSTIN/State fields, both now live (2026-09-17)
-
-Two commits that had been sitting pushed-but-undeployed for over a week (blocked first by a
-Vercel CLI login issue, then by the Claude↔Vercel MCP connector being scoped to the wrong
-projects — see "Current open items" above for the full unblock story) were deployed together
-this session:
-
-- `2403451` — the order-value customer-visibility fix: `GET /sites`/`GET /sites/:id` now
-  strip `order.value` before it ever reaches a customer-authenticated request; a new
-  read-only `view_orders` permission (Finance only, in addition to `manage_orders` which
-  already implies it — Super Admin/Owner Admin/Management/Sales) gates `GET /orders` and
-  `GET /orders/:id`; `admin-web`'s Orders page (list + mobile card) only renders the Value
-  column/row for someone holding one of those permissions.
-- `969de96` — `Customer.gstin`/`Customer.state` are now settable on customer **create**, not
-  just edit (`createCustomerSchema` was missing both fields entirely; `POST /customers` now
-  persists them). `admin-web`'s customer modal gained the two inputs. Matters because
-  `Customer.state` drives the GST place-of-supply default on quotations/invoices.
-
-Deployed `zan-app-api` first (full manual dance, `@recd/shared` patched into the 3 documented
-spots), verified live, then `admin-web` (`vercel deploy --prod`, remote build) — per the
-established backend-first ordering rule. Both verified live: `GET /health` → 200, an
-unauthenticated `GET /orders` → 401 (not 404, confirming the route actually redeployed), and
-`app.zanf.org/login` → 200 on the new `admin-web` build.
-
-### Feature: multiple products on a new order, replacing inline "+ New product" (2026-09-09)
-
-User-reported: the New order form only let you pick one product - no way to add a second RECD
-unit (e.g. a 500kva + a 380kva together) at creation time, only after via the order detail
-page's existing `OrderLineItem` support. Also asked to drop the form's "+ New product" inline
-catalog-product-creation toggle in favor of it.
-
-`orders/page.tsx`: replaced the single `productId`/`quantity` fields (plus the whole
-newProduct/productName/productModel/productRatingSpec toggle) with a `productLines` array
-(`{ productId, quantity }[]`, starts with one empty row). "+ Add product" appends a row, each
-row has its own quantity and a ✕ to remove it (hidden when only one row remains). On submit,
-the first selected row becomes the order's own `productId`/`quantity` (`POST /orders`,
-unchanged); every additional row is added right after via the existing `POST
-/orders/:id/line-items` (`addOrderLineItemSchema` - already used by the order detail page's
-"add another RECD unit" flow, just not exposed at creation time before now). If an extra
-line-item call fails, the order itself is NOT rolled back (retrying would just create a
-duplicate order) - the user gets an `alert()` telling them to add it from the order page
-instead. The Value auto-fill and its customer-pricing hint (added earlier today) now sum
-across every selected product line, not just one, mirroring the "Populate cost" cumulative
-logic on the edit page. New catalog products (not yet in `/products`) are no longer created
-from this form - that's still available from the standalone Products page, unchanged.
-Verified with `tsc --noEmit` (clean); not yet click-tested live (create a real order with 2+
-products and confirm both the order and its line item(s) show up correctly).
-
-### Fix: "Save changes" on the order edit form crashed the whole page (2026-09-09)
-
-User-reported: clicking Save on an order's Edit form threw "Application error: a client-side
-exception has occurred" - a hard Next.js error boundary, not a form validation message.
-Root cause: `saveEdit()` merged the `PATCH /orders/:id` response straight into state
-(`setOrder({ ...order, ...updated })`), but the PATCH route's own `include` is a thin echo
-(`site: true` with no nested `currentStage`/`assignedEngineer`/`vendor`, `product: { select:
-{ name, model } }` with no `id`/`ratingSpec`, no `lineItems` at all) - it was written as a
-save-confirmation payload, not the full detail shape `OrderDetail` claims. The merge silently
-replaced `order.site` with the shallow version, and the page reads
-`order.site.currentStage.label` with **no optional chaining** a few lines down - `undefined`
-`.label` threw immediately on the next render, right after every successful save. This bug
-predates today's session (untouched code from the original 2026-09-05 order-edit feature) but
-was only now being hit, apparently the first real "Save changes" click since that feature and
-today's customer-pricing work shipped. Fix, in `orders/[id]/page.tsx`'s `saveEdit()`: stop
-trusting the PATCH response's shape entirely - fire the PATCH, then call the existing `load()`
-(the same full-include `GET /orders/:id` the page starts with) to refresh state instead of a
-manual merge. No backend change needed. Verified with `tsc --noEmit` (clean); not yet
-click-tested live (the exact repro - edit an order, Save, confirm no crash and the page shows
-the update - is owed).
-
-### Follow-up: "Populate cost" replaces the single-product "Use" button on the order edit form (2026-09-09)
-
-User feedback on the feature just below: the edit form's per-product "Use (₹X)" button and
-"Update pricing" link (which just navigated away) didn't help when a site has more than one
-RECD product (`Order.lineItems` - see the multi-RECD-per-site feature) - Order value needed to
-sum every product's customer price, not just the one being edited. Replaced both with a
-single "Populate cost" button in `orders/[id]/page.tsx`: it sums `customer price × quantity`
-across the main product (at `effectiveEditProductId`/`editQuantity`) and every `lineItems`
-entry (each at its own quantity), and writes the total straight into Order value on click.
-Falls back to counting an unpriced product as ₹0 and shows "(no pricing for N of M products —
-counted as ₹0)" rather than blocking, since partial pricing is a real state. The `OrderDetail`
-TS interface didn't carry `product.id` for the main product or `lineItems[].product` (the API
-already returns it - `include: { product: true }` - just wasn't typed), so pricing lookups
-used to match by name+model; added `id` to both and switched the lookups to use it directly.
-The "Add pricing" link (shown when nothing is priced yet) still navigates to
-`/finance/customer-pricing?customer=<id>` since there's nothing to populate from in that case.
-Same `manage_quotations`/`manage_invoices` gate as before. Verified with `tsc --noEmit`
-(clean); not yet click-tested against a real multi-product order.
-
-### Feature: Order value auto-fill from customer pricing, "Update pricing" links (2026-09-09)
-
-Two related asks: auto-populate a new order's Value from the customer's negotiated
-`CustomerProductPrice` for the chosen product (leave blank if none, still editable), and give
-staff a quick way to open/update that customer's pricing from the order screens. No schema or
-API changes needed — `Order.value` was already nullable/optional on both `createOrderSchema`
-and `updateOrderSchema`; this was a frontend-only change (`apps/admin-web`, 3 files).
-
-- **New order form** (`orders/page.tsx`): fetches `/customer-pricing?customerId=` (same call
-  the Quotations form already makes) whenever the selected customer changes, and auto-sets
-  Value to `price × quantity` whenever customer/product/quantity change - mirrors the
-  Quotations pattern but recomputes on quantity changes too (Order.value is a total, not a
-  per-unit price like Quotations' `unitPrice`, so it can't reuse the "only fill if still
-  empty" guard as-is). A `valueTouched` flag (set the moment the user types into Value)
-  stops the auto-fill from clobbering a manual entry; it resets when a different customer is
-  picked. Value is no longer a `required` field (matches the schema, which was already
-  nullable - the old `required` attribute was stricter than the API). A hint under the field
-  shows the per-unit customer price plus an "Update pricing" link when one exists, or an
-  amber "No customer pricing for this product yet · Add pricing" prompt when it doesn't, both
-  linking to `/finance/customer-pricing?customer=<id>` in a new tab. Hidden entirely for users
-  without `manage_quotations`/`manage_invoices` (same gate as that page itself).
-- **Order edit form** (`orders/[id]/page.tsx`): same pricing fetch, keyed off the order's
-  existing customer (customer can't change on an edit). Deliberately does **not** auto-
-  overwrite `editValue` on open/product-change (there's already a real value that may
-  legitimately differ from the current customer rate) - instead shows the same price hint
-  with a "Use (₹X)" button for a one-click apply (`price × current edit quantity`), plus the
-  same "Update pricing"/"Add pricing" link. Also added a standalone "Update customer pricing"
-  link under the read-only Order value display so it's reachable without opening Edit.
-- **`/finance/customer-pricing`**: now reads a `?customer=<id>` query param (via
-  `useSearchParams`, so the page gained the same `Suspense` wrapper `orders/page.tsx` already
-  uses) and preselects that customer once the customer list loads - this is what the new
-  "Update"/"Add pricing" links deep-link into.
-- Verified with `npx tsc --noEmit` (clean) and a full remote `vercel deploy --prod` build
-  (`next build` compiled and type-checked all 41 routes clean, including the 3 changed pages)
-  - not yet click-tested live by a real Sales/Finance user. Owed: create a test order for a
-  customer with an existing `CustomerProductPrice` override and confirm Value auto-fills
-  correctly, confirm it stays blank with no override, and confirm the edit-form "Use" button
-  and both "Update pricing" links actually navigate/preselect correctly.
-- Deployed via the current `vercel deploy --prod` (remote build) workaround, not git
-  auto-deploy - see the auto-deploy-broken item below. Live on `app.zanf.org` as of this
-  session; `git push` to `master` also went through in case auto-deploy has actually resumed.
-
-### Feature: order edit (2026-09-05)
-User-reported: no way to edit an order (e.g. change the product on an order for a particular
-site) - confirmed by reading `orders.ts`: the route only ever had `GET`, `POST` (create), and
-`DELETE`. There was genuinely no `PATCH`, not a hidden/missing UI button - `orders/[id]/page.tsx`
-was read-only + delete.
-
-Added `updateOrderSchema` to the shared package (all fields optional/partial: `productId`,
-`quantity`, `value`, `orderDate`, `promisedDeliveryDate`, `actualDispatchDate`,
-`plannedExhaustHookupType`, `customerPoNumber`, `customerPoDate`) and `PATCH /orders/:id`,
-gated to staff (`manage_orders`) only - a customer can view their order but never edit it once
-placed. Added a full "Edit order" form to the order detail page (product dropdown sourced from
-`GET /products`, quantity, value, three date pickers, exhaust hookup type, customer PO
-number/date) with its own Save/Cancel state, separate from the existing Delete flow.
-
-**Who can use it**: confirmed directly from `seed.ts`'s role definitions rather than assumed -
-Super Admin and Owner/Admin/Management get every permission (Owner/Admin and Management via
-`ALL_PERMISSIONS` minus `manage_settings`), and Sales has `manage_orders` as one of its three
-core permissions - so all of them see the "Edit order" button. Customers never do.
-
-**Verified live end-to-end** against a real running API (not just code review): changed a real
-order's product from RECD-250 to a different product, quantity to 3, and set a customer PO
-number - all three took effect via `PATCH`, then reverted cleanly back to the original values
-in a second call. Separately confirmed a customer session attempting the same `PATCH` gets a
-clean `403 Forbidden`, proving the staff-only gate actually holds rather than just looking
-right in the route code. `tsc --noEmit` clean and `next build` clean (41/41 routes, including
-`/orders/[id]`) on both apps.
-
-### INCIDENT: order-edit feature was never actually deployed, plus two real environment bugs found (2026-09-08/09)
-User-reported: couldn't see the "Edit order" button after the feature above shipped. Root
-cause was simple but important - **`admin-web`'s git-connected auto-deploy never fired** for
-that push. Checked `vercel ls admin-web` directly: every production deployment was 4 days old,
-nothing from the recent pushes. The code was correct the whole time; it just never went out.
-Root cause of the auto-deploy gap itself was not found this session (didn't get to check
-GitHub webhook delivery logs or Vercel's Git integration settings) - flagged as still open
-below.
-
-**Fix applied**: manually deployed `admin-web` instead of relying on auto-deploy, and along
-the way found two real, independent local-environment bugs worth knowing for every future
-session on this machine:
-
-**1. `NODE_ENV=production` is set persistently at the Windows user/system level on this
-machine.** npm auto-omits all devDependencies (`omit: ["dev"]`) whenever that's set. This
-silently strips `typescript`, `tailwindcss`, and anything else in devDependencies on *every*
-`npm install` - including ones run as part of `vercel build`'s own install step - and does so
-with **zero error output**: `npm install typescript` reports "up to date" and exits 0 even
-though the package is nowhere on disk, because npm's dependency resolution genuinely considers
-the omit-dev tree "satisfied." This wasted a huge amount of time this session (multiple full
-`node_modules` wipes, `npm ci`, `npm cache verify`, and direct targeted installs all failed
-identically before the actual cause - `npm config get omit` → `dev` - was found). **Fixed for
-good** with a new root `.npmrc` containing `include=dev`, which forces npm to always install
-devDependencies for this project regardless of `NODE_ENV` - confirmed working both for local
-installs and inside Vercel's own remote build environment. If a future session ever sees
-`tsc`/`tailwindcss`/any dev tool "not recognized" right after an install that reported success,
-check `npm config get omit` before assuming node_modules is merely stale.
-
-**2. Local (`vercel build --prod` on this Windows machine, no `--prod` remote build) admin-web
-builds fail at the very last step** with `Error: EPERM: operation not permitted, symlink
-'..\_not-found.func' -> '...\functions\orders\[id].func'` - Next.js's build-output step tries
-to symlink shared route chunks together, and Windows requires either Developer Mode enabled or
-admin elevation to create symlinks as a normal user; neither is available in this environment
-(a `New-ItemProperty` attempt on the Developer Mode registry key was denied). The build itself
-completes successfully (all 41 routes compile and generate fine) - only this final
-build-output packaging step fails, so `tsc --noEmit`/`next build` alone won't catch it.
-
-**Working fix, and the better path going forward**: `vercel deploy --prod` **without**
-`--prebuilt` uploads the source and builds entirely on Vercel's own Linux infrastructure,
-which has no such symlink restriction. This is simpler than the local-build dance and is now
-the preferred method for `admin-web` deploys on this machine. Confirmed working end to end:
-uploaded, built remotely (`tsc` succeeded there too, confirming `.npmrc` applies remotely as
-well), all 41 routes generated, deployed, aliased to `app.zanf.org`.
-
-**Verified live, concretely, not just "Ready" status**: fetched the actual deployed
-`/orders/[id]` page bundle from `app.zanf.org` and confirmed the literal string "Edit order"
-is present in the shipped JS - not inferred from deployment status, actually read from the
-production bundle.
-
-**Worth trying for `apps/api` too, next time it needs a deploy**: this whole session's
-`filePathMap`/`node_modules/@recd/shared` saga (documented further up this doc) was entirely a
-consequence of building **locally on Windows** via `vercel build --prebuilt`. A plain
-`vercel deploy --prod` (remote build, no `--prebuilt`) for `apps/api` was never tried - it may
-sidestep that entire class of problem the same way it did here for `admin-web`, since the
-symlink-through-a-workspace issue is fundamentally a Windows-vs-Linux difference. Worth trying
-that first before reaching for the local-build-and-patch procedure again.
-
-**Still open / not done this session:**
-- Root cause of why `admin-web`'s git auto-deploy stopped firing was not found - only worked
-  around via manual `vercel deploy --prod`. Next session should check the GitHub App/webhook
-  connection on the repo and Vercel's project Git settings before assuming manual deploys are
-  the permanent answer.
-- Windows Developer Mode is still not enabled on this machine (blocked on missing admin
-  rights) - local `admin-web` builds will keep hitting the symlink EPERM until either that's
-  enabled or the team standardizes on remote builds for this app.
-- A one-off accidental `typescript` `^5.6.0` → `^5.6.3` bump in root `package.json` from
-  mid-session debugging was caught and reverted (`git checkout -- package.json
-  package-lock.json`) before committing - not shipped.
-
-### Fix: case-sensitive email lookup silently swallowed customer OTP requests (2026-09-03)
-User-reported: a customer trying to sign in wasn't receiving their OTP email. Root cause:
-`/auth/email-otp/request` (and `/login`, `/auth/google`) matched email against `User.email` - a
-plain Postgres `text` column, no `citext` - with no case/whitespace normalization anywhere in
-`packages/shared/src/schemas.ts`. `findEmailOtpEligibleUser` deliberately returns the same
-generic `{ ok: true, message: "If that email is registered..." }` whether or not the email
-matches (to avoid leaking which accounts exist), so a customer typing their email in different
-case than stored got a convincing "sent" response while nothing was actually created - no
-`OtpCode` row, no `NotificationLog` row, no error anywhere to debug from. Confirmed via
-production DB query: the only customer contact (`sales.mangalore@ethengroup.com`, created
-2026-08-13) had **zero** OTP attempts ever recorded against it. SMTP itself was never the
-problem - every `NotificationLog` row that ever existed shows `status: sent`.
-
-**Fix**: added a shared `normalizedEmail` Zod schema (`.trim().toLowerCase().pipe(z.string().email())`)
-used by `loginSchema`/`requestEmailOtpSchema`/`verifyEmailOtpSchema`, and lowercased the
-Google-verified email before the `/auth/google` lookup. No DB backfill needed - every existing
-`User.email` in production was already lowercase (checked via `email <> lower(email)`).
-
-**Deployed and verified live** (full manual deploy dance from `apps/api`, build took only ~6 min
-this run, all 5 `@recd/shared` node_modules spots patched - the bare `functions/index.func`
-tree existed again this build alongside `functions/api/index.func`, patched both defensively):
-`GET /health` → 200, `GET /agent/providers` → 401. Then proved the fix itself by calling
-`POST /auth/email-otp/request` with the real customer's email in mixed case
-(`Sales.Mangalore@EthenGroup.com`) against the live prod URL and confirming a fresh `OtpCode` +
-`NotificationLog` row (`status: sent`) appeared for that customer's real user id immediately
-after - before this fix that exact request would have silently done nothing. Pushed to `master`
-(commit `0f96d3f`).
-
-### Fix: agent gave up after one empty search instead of trying every relevant tool for a name (2026-09-05)
-User-reported (with screenshot): asking the agent about "interglobe" / "InterGlobe Aviation"
-got "I searched for X in our customer list, vendor list, and shared documents, but found no
-matching records" - even though the site genuinely exists in the system. Root cause: InterGlobe
-Aviation is a **site's end-client** (`Site.companyName` - the airport a contracting customer
-installed equipment for), not a customer or vendor record itself. The model correctly called
-`search_customers`/`search_vendors`/`search_documents`, all correctly returned nothing, and it
-stopped there and reported "no matching records" without ever trying
-`search_orders_and_sites` - the one tool that actually matches `Site.companyName`.
-
-**Fix**: added an explicit paragraph to `systemPrompt.ts`'s staff capabilities section:
-a company name could be a customer, a vendor, OR a site's end-client, these are genuinely
-different things, and the model must call `search_customers` AND `search_orders_and_sites`
-(plus `search_vendors` when a supplier relationship is plausible) before ever saying "no
-matching records" for a name - never stop after one empty search tool.
-
-**Verified live** against a real running API with a throwaway test site (`companyName:
-"InterGlobe Aviation"`, same scenario as the screenshot): before the fix this exact "interglobe"
-query would have stopped at customers/vendors/documents (as the screenshot showed); after the
-fix, the same one-word query correctly finds the site via `search_orders_and_sites` and returns
-clickable `[Devanahalli Airport, Bangalore](/sites/{id})` / `[ORD-...](/orders/{id})` links, no
-extra back-and-forth needed. Test order/site deleted afterward. `tsc --noEmit` clean.
-
-### INCIDENT: production API outage during the deploy for the fix above (2026-09-05)
-Deploying the InterGlobe fix (a one-line prompt change, `apps/api` only - not git-connected,
-needs the manual `vercel build` + `vercel deploy --prebuilt --prod` dance) **took production
-down completely** for several minutes - every request returned `FUNCTION_INVOCATION_FAILED`.
-Root cause and full resolution, so this never eats another deploy blind:
-
-**What broke.** The compiled code does `require('@recd/shared')` - a bare package specifier.
-`vercel build` runs locally on Windows here (not on Vercel's own infra), and its own
-`postinstall` (`npm install` for the workspace) creates a normal npm-workspaces symlink at
-`apps/api/node_modules/@recd/shared` pointing up to `packages/shared`. `@vercel/nft`'s file
-tracer follows that symlink while tracing `dist/routes/*.js`'s `require` calls, and - matching
-the older "Windows symlinks don't survive Vercel's function-file tracing" note further up this
-doc - it doesn't bundle the real files. Instead it writes a `"filePathMap": { "node_modules/
-@recd/shared": "node_modules/@recd/shared" }` entry into both functions' `.vc-config.json`,
-recording an identity mapping keyed to that virtual path. This repo's past deploy sessions
-apparently already had *some* fix in place for this (this doc's earlier deploy notes mention
-"5 `@recd/shared` node_modules spots patched"), but the exact mechanism wasn't written down
-anywhere - so this session had to rediscover it from scratch, live, on a broken production API.
-
-**Why patching in a real directory wasn't enough.** The obvious fix - after `vercel build`,
-copy `packages/shared/dist` + `package.json` into `.vercel/output/functions/*/index.func/
-node_modules/@recd/shared` as real files - is necessary but was **not sufficient on its own**.
-Vercel's `deploy --prebuilt` step reads each function's `filePathMap` and tries to separately
-materialize a file at that exact virtual path from its own content-addressed store *in addition
-to* whatever's physically sitting in the uploaded output tree, and the two collided:
-`Error: ENOTDIR: not a directory, mkdir '/tmp/lambda-vhs-.../src/node_modules/@recd/shared'`.
-This reproduced identically across a clean `.vercel/output` wipe, a fresh `vercel build`, and
-even `vercel deploy --force` (bypassing the build cache) - proving it wasn't stale local state,
-it was the `filePathMap` entry itself causing the conflict every time.
-
-**The actual fix, in order, every time this needs a manual deploy:**
-1. `cd apps/api`, `npx vercel build --prod` (runs locally, produces `.vercel/output`).
-2. Open both `.vc-config.json` files (`.vercel/output/functions/api/index.func/.vc-config.json`
-   and `.../functions/index.func/.vc-config.json`) and **delete the entire `"filePathMap"`
-   key** from each - this is the step that was missing/undocumented before today.
-3. Copy real files into both: `.vercel/output/functions/{api/index.func,index.func}/
-   node_modules/@recd/shared/{dist/,package.json}`, sourced from `packages/shared`.
-4. `vercel deploy --prebuilt` separately re-checks that `apps/api/node_modules/@recd/shared`
-   exists *locally* before it'll even start uploading (a local preflight, unrelated to what
-   actually ships) - `npm install`'s own postinstall step removes this by the time `vercel
-   build` finishes, so recreate it as a junction just before deploying:
-   `New-Item -ItemType Junction -Path apps/api/node_modules/@recd/shared -Target packages/shared`.
-5. `npx vercel deploy --prebuilt --prod`, then immediately delete that junction again
-   (`(Get-Item ...).Delete()` - plain `Remove-Item` on a junction can silently no-op) so local
-   dev doesn't regress into the original node_modules-shadow-copy bug from earlier this session.
-6. **Verify with more than a health check** - `GET /health` can return 200 from a container
-   that still 500s on real routes if the crash is inside a specific route's dependency chain
-   rather than the module's top-level import. Hit a real authenticated route (e.g.
-   `POST /auth/login` with any credentials - a 401 proves the DB/bcrypt code path actually ran)
-   and check `vercel logs <url>` for fresh errors before considering the deploy good.
-
-**Compounding issue found in the same breath**: once the API was back up, `GET /notifications`
-was still 500ing - production's Supabase DB never got the `20260905070218_add_notification_
-read_and_customer_order_fields` migration (applied locally only, see above). Since there's no
-direct `DATABASE_URL` access from this session (`vercel env pull` redacts Sensitive-type vars),
-applied the DDL directly via the Supabase MCP connector's `apply_migration` tool against
-project `idqzupopsuusoihpmoqc` (with `IF NOT EXISTS` guards, safe to rerun), then manually
-inserted a matching row into `_prisma_migrations` (SHA-256 checksum of the local
-`migration.sql`, computed via a throwaway Node script) so a future real `prisma migrate
-deploy` sees it as already-applied instead of re-running the DDL and erroring on existing
-columns. Confirmed via `information_schema.columns` that `NotificationLog.readAt` now exists.
-
-**Verified fully recovered**: `GET /health` → `200 {"ok":true}`; `POST /auth/login` with bad
-creds → `401` (real logic executing, not a crash); `vercel logs` shows no new errors after the
-fix. No further production changes needed for this incident, but see the standing "apply
-pending migrations to production" gap noted throughout this doc - it's the same root cause
-class (local-only migrations) as this `/notifications` failure, just not yet triggered for the
-other pending ones.
-
-### Follow-up: link rule needed three rounds to actually stick in tables (2026-09-05)
-The InterGlobe fix above got the agent finding records it previously missed, but a separate
-problem surfaced once results came back as tables: the model rendered site names as proper
-`[label](/sites/{id})` links but left the adjacent order number as bare/bold text in the same
-row. Took three iterations on `systemPrompt.ts` to fully fix, each redeployed via the same
-`vercel build` → strip `filePathMap` → patch `node_modules/@recd/shared` → deploy sequence
-documented in the incident above (no further outages - the sequence held up cleanly every
-time once known):
-
-1. **First pass** (commit `74859ed`): added an explicit paragraph saying the linking rule
-   applies inside table cells and bullet lists, not just prose. Partial fix - it made the
-   model link *something* in tables, but per the next user report it was inconsistent about
-   *which* column.
-2. **Second pass** (commit `c6e0b0b`): added a CRITICAL callout naming the actual failure
-   mode directly - "do not treat one linked column as covering the whole row" - since the
-   model was treating a linked Site column as satisfying the rule for the whole row and
-   leaving the Order column bare. Still not fully reliable per the next live report (a real
-   BPCL/Ethen multi-site table came back with every Site linked but every Order still bare).
-3. **Third pass** (commit `b9bf646`): abstract instructions clearly weren't landing, so added
-   a literal 2-row worked example (both columns linked, copy this exact pattern) immediately
-   followed by a labeled "Not this (WRONG)" counter-example showing the exact bare-order
-   mistake, plus a closing instruction to re-scan every row before sending. Concrete examples
-   over abstract rules, once again, for the same reason `create_site_status_update`'s prior
-   fixes needed real stage-key lists rather than descriptions.
-
-**Verified live end-to-end after the third pass** (previous two passes were deployed on
-prompt-review confidence only, since both configured LLM providers - Gemini and NVIDIA - were
-down at the time; see below): seeded a throwaway customer with 3 orders/sites locally, asked
-the agent for exactly the reported shape ("table with order and site"), and inspected the raw
-markdown - all 3 rows had both the order number and the site name wrapped in real
-`/orders/{id}` and `/sites/{id}` links, zero bare order mentions. Test data deleted afterward.
-`tsc --noEmit` clean on all three commits.
-
-**Also found along the way, not yet fixed**: NVIDIA (the configured fallback LLM provider,
-priority 2) is returning a persistent `410 Gone` on every call - looks like a dead/deprecated
-endpoint rather than a transient issue, meaning the fallback currently doesn't protect against
-Gemini (priority 1) having a bad moment, since it's already broken on its own. User is aware
-and said they'd look into both providers separately later - flagged here so it isn't lost.
-
-### Fix: agent had no read tool for SITC timeline entries (2026-09-05)
-User-reported: the in-app agent could `create_site_status_update` (post a new SITC timeline
-entry) but had no way to list/summarise past ones for a site - asked to show the history for
-Interglobe Aviation - Devanahalli Airport, it correctly reported it had no tool for that rather
-than guessing, and pointed the user to the site's own "Status updates" section in the app.
-
-Added `search_site_status_updates` to `zanAppReadTools.ts` - takes a `siteId` (from
-`search_orders_and_sites`), returns the site's `SiteStageEvent` history (stage, status,
-comment, who posted it, when) newest-first. Access mirrors `create_site_status_update` exactly:
-customers see only their own site (`auth.customerId`), vendor engineers see only sites
-assigned to their own vendor (`auth.vendorId` vs `site.vendorId`), staff need
-`view_site_status`, `change_site_status`, or `manage_orders`. Registered automatically via the
-existing `zanAppReadTools` spread in `registry.ts` (no registry change needed) and added to
-`systemPrompt.ts`'s tool list, with a note telling the model to check it before calling
-`create_site_status_update` so it can see the last-logged stage instead of guessing.
-`tsc --noEmit` clean.
-
-### Feature: Customer Portal - multi-site view, self-service orders, in-app notification bell (2026-09-05)
-Three user-reported issues fixed in one pass, plus a small infra bug found along the way.
-
-**1. Customer portal only showed one site.** `GET /sites` already returned every site scoped
-to the logged-in customer correctly - the bug was purely in
-`apps/admin-web/src/app/customer/portal/page.tsx`, which did `sitesData[0]` and threw the rest
-away. Fixed: the page now loads the full site list, shows a site switcher `<select>` above the
-order banner (only rendered when there's more than one site), and the "Which site" selector on
-the Raise Support Ticket form now appears whenever there's more than one site too (previously
-every complaint silently went against whichever site happened to load first).
-
-**2. Customers couldn't create orders.** `POST /orders` was gated to `manage_orders`, which
-the Customer role never had. Added a new permission `place_order` (granted to the Customer
-role in `seed.ts`), and branched `POST /orders`/`GET /products` to accept it. A customer
-submission is pinned server-side to their own `customerId` (never trusts the body), never sets
-`value` (price stays null, pending Sales review), and is flagged `Order.requestedByCustomer`
-(new column) with an optional `Order.customerNotes` (new column) and an optional
-`Site.address` seeded from the form. On submit: every active Management/Owner-Admin/Super
-Admin user gets an **in-app** notification (see #3), and a fixed email goes to
-`info@zanf.org` (bespoke `new_order_placed` template in `emailTemplates.ts`) - both fired only
-for customer submissions, not staff-created orders. New "Request New Order" form added to the
-customer portal (product + quantity + optional site address + optional notes).
-
-**3. No in-app notification system existed at all** - built one, since #2 needed it.
-`NotificationLog` gained a `readAt` column; new `apps/api/src/routes/notifications.ts`
-(`GET /notifications` with unread count, `POST /:id/read`, `POST /read-all`), and a new
-`NotificationBell.tsx` component (bell icon, unread badge, 30s poll, dropdown with mark-read/
-mark-all-read) wired into both the desktop sidebar header (`Nav.tsx`) and the mobile top bar
-(`AuthGuard.tsx`). Generic - any future `channels: ["in_app"]` notification automatically shows
-up here, not just new-order alerts.
-
-**4. Forced password-change loop for customers (reported: customer "Ethen").** Root cause:
-`User.mustChangePassword` defaults `true` at the DB level; the normal customer-creation path
-(`customers.ts`) explicitly sets it `false`, but customers have **no password at all** (OTP-only
-login), so any customer record that ends up with a stray `true` (legacy data, manual creation)
-hits a dead end - `/change-password` requires a current password to compare against, which
-doesn't exist for a customer. Fixed two ways: `AuthGuard.tsx` now never redirects a customer to
-`/change-password` regardless of the flag, and all three customer-facing OTP-verify routes
-(`/customer/verify`, `/otp/verify`, `/email-otp/verify`) self-heal by flipping the flag back to
-`false` on successful login whenever `user.customerId` is set (vendors, who legitimately have a
-temp password, are left alone).
-
-**Infra bug found and fixed along the way**: `apps/api/node_modules/@recd/shared` had a stale,
-real (non-symlinked) copy of the package shadowing the correct workspace-linked one at the repo
-root - Node resolves `node_modules` closest-directory-first, so every `packages/shared` rebuild
-was silently *not* reaching the API even though `npm run build` succeeded. Deleted the stale
-copy; `apps/api` now correctly resolves to the workspace symlink again. Worth remembering: if a
-`packages/shared` change ever seems to have "no effect" despite a clean rebuild, check for this
-shadow copy before assuming the change itself is wrong.
-
-Migration `20260905070218_add_notification_read_and_customer_order_fields` applied locally
-(non-interactive `prisma migrate dev` isn't supported in this environment - used
-`prisma migrate diff --from-url ... --script` to generate the SQL, `prisma db execute` to apply
-it, then `prisma migrate resolve --applied` to record it in migration history). **Not yet
-applied to production** - needs `prisma migrate deploy` against the real prod `DATABASE_URL`
-before or during the next deploy, same standing gap as every other pending migration.
-
-Verified locally end-to-end against a real running API (not just typechecked): customer OTP
-login → `mustChangePassword: false` confirmed on the session → `GET /sites` returns all of the
-customer's sites → `GET /products` succeeds via the new permission → `POST /orders` as that
-customer returns `201` with `value: null`, `requestedByCustomer: true`, the notes/address
-stored → the in-app notification appeared in Super Admin's `/notifications` with the right
-payload. `tsc --noEmit` clean on both `apps/api` and `apps/admin-web`, `next build` clean (all
-41 routes). Test order/site and notification row deleted afterward as throwaway verification
-artifacts. Note: local `.env` has real Zoho SMTP credentials configured, so the `info@zanf.org`
-smoke-test email was a genuine live send, not a stub - worth remembering before running similar
-smoke tests locally in future sessions.
-
-**Also cleaned up**: a handful of throwaway one-off PowerShell deploy/verification scripts
-(`commit-push.ps1`, `run-deploy.ps1`, `verify-deploy.ps1`, `verify-admin*.ps1`) and an empty
-stray `prisma/migrations/_pending.sql` left over from an earlier, already-committed session
-(the backup-feature deploy) - deleted rather than committed, since their one-off job was done.
-Two genuinely useful docs from the email-casing-fix session that had never been committed -
-`docs/ADMIN_ENABLE_CUSTOMER_LOGIN.md` and `docs/CUSTOMER_LOGIN_GUIDE.md` - are committed now
-alongside this entry.
-
-**Not yet done:**
-- Production migration deploy (see above).
-- No management/super-admin-facing UI to review/price a `requestedByCustomer` order
-  differently from a normal one (e.g. a filter or badge on the Orders list) - the flag exists
-  in the data but isn't surfaced anywhere in the admin UI yet.
-- The customer-facing product picker shows every product in the catalog with no
-  customer-specific pricing hint (unlike the staff quotation/invoice flow, which calls
-  `get_customer_pricing`) - fine for a request-only flow with no price shown, but worth
-  knowing if this ever grows a price display.
-
-**Follow-up (2026-09-05, same day): site dropdown UX tweak.** User feedback after trying the
-above - the site switcher and the complaint form's "Which site" selector both showed
-`{site name/address} — {order number} ({stage})`, but the order number is already shown
-elsewhere on the page once a site is selected, so it was redundant clutter in the dropdown
-itself. `siteLabel()` in `customer/portal/page.tsx` now prefers `"{companyName} — {address}"`
-(falling back to whichever of the two exists, then the order number only if neither site field
-is set) and both `<select>`s render just that - no order number/stage suffix. `tsc --noEmit`
-and `next build` both clean (41/41 routes). Commit `41ba9c2`.
-
-### Feature: Order-ID tagging on vendor advances (2026-08-28)
-Follow-on to vendor advances (below), raised by the user working through the real end-to-end
-flow: assign a vendor to work on one or more order IDs, pay them an advance, then when their
-invoice(s) for that work arrive later, find and apply the right advance against the right
-order's bill(s). Before this, an advance only remembered *who* it was paid to, not *what work*
-it was for - fine when a supplier has one open job, ambiguous the moment they have several.
-
-Two product decisions were confirmed with the user before building: tagging an advance to
-order(s) is **optional** (an untagged general advance is still fully supported, unchanged from
-before), and applying a tagged advance to a bill stays a **manual click** - this feature only
-makes the right advance easier to *find*, it does not auto-apply anything.
-
-**Schema** (new migration - the only migration in this whole session's work, everything else
-was migration-free): a new join table, `PaymentOrderTag` (`paymentMadeId`, `orderId`, unique on
-the pair), cascade-deletes with its `PaymentMade` row. `PaymentMade` and `Order` both gained the
-obvious back-relations. Applied to the local dev DB via `prisma migrate deploy` against a
-hand-written migration file (`prisma migrate dev` itself doesn't work in this non-interactive
-shell - worked around by generating the SQL with `prisma migrate diff --from-schema-datasource
-... --to-schema-datamodel ...` and hand-placing it under `prisma/migrations/<timestamp>_.../
-migration.sql` in the standard naming convention, then `migrate deploy` + `generate`).
-
-**Backend**: `paymentMadeGeneralCreateSchema` (`packages/shared/src/schemas.ts`) gained an
-optional `orderIds: string[]`. `POST /bills/payments` (`apps/api/src/routes/bills.ts`)
-validates every ID actually resolves to an `Order` (400 if not) and creates a `PaymentOrderTag`
-row for each one on whichever `PaymentMade` row is the actual advance (`billId: null`) -
-pure-advance case, and the auto-split-off advance portion of an over-payment case. A bill
-payment that fully consumes the amount (no advance created) has nothing to tag. `GET
-/bills/payments`, `GET /purchase-orders/suppliers/:id/advances`, and the create response all
-now `include` `orderTags: { order: { id, orderNumber } }`. No changes needed to `POST /:id/
-apply-advance` - applying a whole advance updates the existing `PaymentMade` row in place
-(same id), so its order tags travel with it automatically; applying part of one creates a new
-bill-linked row but deliberately does *not* copy the tags onto it (the tags exist to help
-*find* an advance before it's applied - once applied, the bill's own allocation already carries
-the order link, and copying tags forward would just be display noise on payment history rows).
-
-**Frontend** (`apps/admin-web/src/app/finance/vendor-payments/page.tsx`): the "Record vendor
-payment" modal gained an "Order tag(s)" picker - add one or more orders (browsed by site, via
-the existing `/meta/sites` lookup, same picker pattern as the vendor-invoice allocations
-editor) as removable chips; entirely optional, no default selection. The bill dropdown in both
-that modal and the "Apply advance to a bill" mini-modal now appends each bill's own allocated
-order number(s) to its label (e.g. "INV-042 · outstanding Rs 5,000 · Order ORD-2026-0001"), and
-the apply modal additionally shows the advance's own order tags up top - so matching an advance
-to the right bill is a glance at two labels, not a guess. The main payments table and its
-mobile card view both gained an "Order tag(s)" column/row.
-
-**Verified** against the real local dev API (not mocks): created a tagged pure advance over
-HTTP, confirmed the tag round-trips through the create response, `GET /bills/payments`, and
-`GET /purchase-orders/suppliers/:id/advances`; confirmed an unresolvable order ID is rejected
-with 400. `tsc --noEmit` clean on both `apps/api` and `apps/admin-web`. Deployed: `admin-web`
-via git push (auto-deploy), `apps/api` via the manual Vercel deploy dance - this time including
-running the new migration against the production Supabase database before the code deploy.
-
-### Feature: Vendor advances - pay a supplier without a bill (2026-08-28)
-Found while answering "how do I input an advance paid to a vendor": that feature simply didn't
-exist. Customers got it in Phase C (`PaymentReceived` + `PaymentAllocation`, over-payment sits
-as an unallocated advance); vendors never did. `PaymentMade.billId` was already nullable in the
-schema (no migration needed) but the only route that could create one, `POST /bills/:id/
-payments`, required an existing bill and hard-capped the amount at that bill's outstanding
-balance - there was no way to record money paid to a supplier that wasn't tied to a bill.
-
-**Backend** (`apps/api/src/routes/bills.ts`, new schemas in `packages/shared/src/schemas.ts`):
-`POST /bills/payments` (new, general endpoint, mirrors `POST /payments` for customers) takes
-`{ supplierId, billId?, amount, method, reference?, paidDate?, notes? }` - omit `billId`
-entirely for a pure advance, or pass it with an amount larger than the bill's outstanding
-balance and the excess is automatically split into a second, separate `PaymentMade` row with
-`billId: null` (same "over-payment becomes an advance" behavior as the customer side). The
-older `POST /:id/payments` route is untouched (still hard-caps at outstanding) so its existing
-call site keeps its simpler, stricter behavior. `POST /bills/:id/apply-advance` applies part or
-all of an existing unallocated advance to a specific bill later: since `PaymentMade` has no
-allocation/junction table the way `PaymentReceived` does, using the whole advance just points
-its `billId` at the bill, and using part of it shrinks the original row and creates a new
-bill-linked row for the applied amount. `GET /bills/payments` (list, `?supplierId=` filter) and
-`GET /purchase-orders/suppliers/:id/advances` (mirrors `GET /customers/:id/advances`; "advance"
-here is simply `billId === null`, not a positive-remainder calculation) round it out. Both new
-GET routes had to be registered *before* the pre-existing `GET /bills/:id` / had to avoid an
-existing `:id` param route, respectively - Express matches routes in registration order and a
-literal `/payments` or `/suppliers/:id/advances` segment can otherwise get swallowed by an
-earlier `:id` route. `services/ledger.ts`'s `buildSupplierLedger` already sourced every
-`PaymentMade` regardless of `billId` and already labelled a bill-less one "Payment / advance" -
-it needed no changes at all, so vendor advances show up correctly in `/finance/ledgers` (supplier
-view) immediately.
-
-**Frontend**: new `/finance/vendor-payments` page (`Nav.tsx` link under Finance, riding on the
-existing `record_payments`/`approve_vendor_invoice`/`view_ledgers` permissions, no new
-permission key). "Record vendor payment" modal: pick a supplier, optionally pick one of that
-supplier's open bills (shows each bill's live outstanding balance), enter the amount - the form
-previews the bill/advance split live as you type, matching what the server will actually do.
-Every vendor payment lists in a table (Supplier, Date, Amount, Method, "Applied to <bill>" or
-"Standing advance"); any standing advance gets an inline "Apply to a bill" action that opens a
-small second modal (pick a bill, adjust the amount, submit against `POST /bills/:id/apply-
-advance`).
-
-**Verification**: `tsc --noEmit` clean on `packages/shared` and `apps/api`; `tsc --noEmit` and
-`next build` clean on `admin-web`. Ran the actual endpoints (not a mock) against local dev DB
-by starting the real dev server and hitting it over HTTP with a real login token: created a
-pure advance and confirmed it listed via the new advances endpoint; paid a bill under its
-outstanding balance (no split) then paid it again for more than the remaining balance and
-confirmed the excess split into a second advance row and the bill's status flipped through
-`partially_paid` -> `paid` correctly; applied part of a separate advance to a fresh bill and
-confirmed the original advance row shrank by exactly the applied amount, a new bill-linked row
-appeared, and the bill's status updated. All test suppliers/bills/payments deleted afterward.
-Not yet deployed - the API side needs the manual Vercel deploy dance (not git-connected) before
-this is live; `admin-web` deploys automatically on push per its existing git connection. **Not
-yet done**: a real Finance-user walkthrough, and note the same known gap flagged for Phase B
-below (no credit/advance section on the bill detail page itself - applying an advance today
-only happens from the new Vendor Payments page, not from a bill's own detail view).
-
-### Feature: In-app AI assistant gains Accounting-Lite read access (2026-08-28)
-With all four Accounting-Lite phases shipped, the standing restriction ("no new tool access
-until all four phases are complete") lifted, and the user asked to wire it up. Read-only, per
-the plan's own note ("no new write tools this phase") — an AI assistant proposing a payment,
-credit note, or allocation on its own was judged out of scope, matching how conservatively the
-rest of the write-tool surface (`zanAppWriteTools.ts`) was built (draft-only, always needs a
-human's explicit Confirm click). **Three new tools** in `apps/api/src/agent/tools/
-zanAppReadTools.ts`: `get_customer_ledger` (wraps `services/ledger.ts`'s
-`buildCustomerLedger` — the Phase A statement, permission `view_ledgers`), `search_credit_notes`
-(note number/invoice number/customer name, permission `manage_credit_notes`), and
-`get_customer_advances` (mirrors `GET /customers/:id/advances`'s query exactly, permission
-`record_payments`/`manage_invoices`/`view_ledgers`). **Also fixed while in here**:
-`search_invoices` and `get_document_detail`'s `invoice` case (`apps/api/src/agent/tools/
-zanAppDetailTool.ts`) were still summing the legacy raw `payments` relation — the exact bug
-class already fixed in the invoices/credit-notes/financeDashboard REST routes during Phase C,
-just never carried over to the agent tools at the time. Both now use
-`settledFromAllocations`/`netInvoiceTotal` from `services/settlement.ts`, so `amountPaid`/
-`balance` the assistant reports match what a human sees in the UI exactly, and the invoice
-detail tool now also surfaces `creditNoteTotal` and the `creditNotes` array (previously
-invisible to the agent entirely). `systemPrompt.ts` updated to tell staff-mode about all three
-new tools and when to reach for them ("how much does X owe us", "does X have an advance with
-us") instead of trying to add up individual invoices itself. **Verification**: `tsc --noEmit`
-clean; ran the actual tool handlers via `tsx` against local dev DB (not a mock, same pattern
-as every prior phase) with a synthetic `AgentAuthContext` carrying the relevant permissions —
-`get_customer_ledger` returned a real statement with a correct running balance,
-`get_document_detail` on a real invoice came back with `paymentAllocations` correctly stripped
-from the response and `amountPaid`/`balance` computed from allocations, `search_credit_notes`/
-`get_customer_advances` correctly returned empty (no issued CN or advance exists in local dev
-right now, consistent with Phase D's GST-export verification finding the same). No schema
-change, no `@recd/shared` change — pure `apps/api/src` addition, one deploy dance, confirmed
-live (`/health` → 200; `/ledgers/customer/:id` and `/credit-notes` still → 401 not 404, i.e.
-the routes these tools call under the hood weren't disturbed). **Not yet done**: actually
-asking the assistant an account-standing question in a real production chat session — this
-was verified at the function level, not through a live LLM tool-call round-trip.
-
-### Feature: Accounting-Lite Phase D — GST exports (2026-08-28)
-Fourth and final phase of `docs/ACCOUNTING_LITE_PLAN.md`, built the same day
-per the user's "proceed" instruction. **No schema migration** — every field
-these exports read (`Customer.gstin`, `Invoice/CreditNote.placeOfSupply`,
-`cgst/sgst/igstAmount`, `InvoiceLineItem/CreditNoteLineItem.taxRatePct`,
-`CompanySettings`' own GSTIN) was already added in Phases A-B; this phase
-is pure query composition and UI, nothing written to the database.
-**New service** `apps/api/src/services/gstExport.ts`: `buildGstr1(from, to)`
-returns B2B rows (one issued tax invoice, grouped by tax rate across its
-line items — most invoices have one rate so this is usually one row per
-invoice) and CDNR rows (issued credit notes, same per-rate grouping)
-between two issue dates; interstate vs intra-state is read directly off
-the document's own `igstAmount > 0` (never re-derived from a company/
-customer state comparison) — CGST+SGST split 50/50 or IGST wholesale on
-each rate group's computed tax accordingly. `buildGstr3b(from, to)` sums
-3.1a output tax from issued tax invoices, subtracts issued credit notes'
-tax in the same range (net taxable value + net CGST/SGST/IGST), and sums
-4A eligible ITC from vendor bills whose `billDate` falls in range and
-whose status is `approved`/`partially_paid`/`paid` (excludes `uploaded`/
-`verified`-only, `rejected`, `cancelled`) — explicitly a filing **aid**,
-not a filing-ready return; a CA still reconciles and files GSTR-3B.
-**New** `apps/api/src/lib/csv.ts` — tiny dependency-free server-side CSV
-builder (same escaping + BOM convention as the existing client-side
-`apps/admin-web/src/lib/csvExport.ts`), per the plan's note that the API
-needed its own equivalent. **New routes** in `ledgers.ts` (`view_ledgers`):
-`GET /ledgers/gst/gstr1?from=&to=` and `GET /ledgers/gst/gstr3b?from=&to=`
-— both require `from`/`to` (400 if missing/invalid), return JSON by
-default or stream a CSV with `?format=csv`. **Verification**: `tsc
---noEmit` clean; ran `buildGstr1`/`buildGstr3b` directly against local dev
-DB via `tsx` (the real service functions, not a mock, same pattern as
-Phase C's §8 script) over the full seeded date range — 7 B2B rows, 0 CDNR
-(no issued CN exists in local dev right now), and a cross-check that
-`sum(B2B taxable value)` exactly equals GSTR-3B's `outwardTaxableValue`
-(₹37,09,679 both sides); one seeded invoice correctly came back
-IGST-only (interstate) with zero CGST/SGST, confirming the
-interstate-detection logic. Full manual `zan-app-api` deploy dance (build
-~4 min); `gstExport.js`/`csv.js`/the two new route handlers confirmed
-present in the build output before deploying; `@recd/shared` patched into
-the same 3 spots as every prior phase (unchanged this phase — no shared
-schema additions were needed); `/health` → 200 and both new routes → 401
-not 404 confirmed live in production. **Frontend**: `/reports/gst-returns`
-— period-type toggle (Month / Indian-FY-aligned Quarter, i.e. Apr-Jun/
-Jul-Sep/Oct-Dec/Jan-Mar) driving both API calls, a GSTR-3B summary card
-(KPI tiles + a taxable-value/CGST/SGST/IGST table: outward, less credit
-notes, net) and two GSTR-1 tables (B2B, CDNR), each with its own Export
-CSV button — CSV is built client-side from the already-fetched JSON via
-the existing `downloadCsv` helper (matching the TDS report page's
-convention) rather than hitting the API's own `?format=csv`, which stays
-available for direct/CA use outside the UI. `Nav.tsx` link added (riding
-on `view_ledgers`, no new permission key, as anticipated). Verified `tsc
---noEmit` and `next build` both clean on `admin-web` (`/reports/gst-
-returns` compiles as a static route) before pushing to `master`. **Not
-yet done**: a real Finance-user click-through, and specifically having
-someone who actually files GST sanity-check a real period's GSTR-1/3B
-output against what was actually filed. **Also found, not fixed** (see
-Current open items): the invoice detail page still doesn't show issued
-credit notes or a "Create credit note" button, a Phase B gap this phase's
-work surfaced but didn't touch, since it's out of Phase D's own scope.
-**This is the last of the four Accounting-Lite phases** — Phase D was the
-final item in `docs/ACCOUNTING_LITE_PLAN.md`'s implementation order. The
-in-app AI assistant tool wiring (deliberately deferred by the user to
-after all four phases) is now unblocked whenever it's wanted.
-
-### Feature: Accounting-Lite Phase C — payment allocation, advances, TDS (2026-08-28)
-Third phase of `docs/ACCOUNTING_LITE_PLAN.md`, built immediately after Phase
-B per the user's "proceed" instruction, with the admin-web frontend added
-in the same session per a follow-up "proceed" — **this entry covers both
-backend and frontend, both deployed; see the Frontend section below for
-what shipped (superseding the "Pending Frontend" list this entry originally
-had).**
-**Schema** (`add_payment_allocations` migration, diffed against real
-production `information_schema.columns` before applying — no drift):
-`PaymentReceived.invoiceId` is now optional (an advance has none);
-`PaymentReceived` gained `customerId` (required, backfilled from each row's
-linked invoice before the NOT NULL constraint was added), `tdsAmount`
-(`Decimal(12,2)` default 0), and `tdsCertificateRef`; new
-`PaymentAllocation` model (`paymentId` cascade-deletes, `invoiceId`,
-`amount`, unique on `[paymentId, invoiceId]`) splits one payment's cash
-across one or more invoices — zero allocations (or a remainder after
-allocating) is a customer advance. The legacy `method: "tds"` value is
-untouched on old rows and still readable; it's just no longer how a *new*
-payment expresses TDS (that's the dedicated `tdsAmount` field now).
-**Backfill**: every pre-existing `PaymentReceived` row (11 in production, 7
-in local dev) got one `PaymentAllocation` for its full `amount` against its
-`invoiceId` — spot-checked with a join query (`allocation.amount =
-payment.amount` and `allocation.invoiceId = payment.invoiceId` for all
-rows, zero mismatches) so old payments settle exactly the same as before.
-**Shared**: `paymentCreateSchema` gained optional `tdsAmount`/
-`tdsCertificateRef`; new `paymentAllocationInputSchema`,
-`paymentReceivedCreateSchema` (customerId, amount, tdsAmount, method,
-allocations[] — refined so `sum(allocations) ≤ amount` (cash-only cap; TDS
-is never itself allocated, see settlement math below) and TDS can't exist
-with zero allocations), `paymentAllocationCreateSchema` (for adding one more
-allocation to an existing payment later). **New service**
-`apps/api/src/services/settlement.ts` — `issuedCreditNoteTotal`/
-`netInvoiceTotal`/`deriveInvoiceStatus` moved here from `invoices.ts` (Phase
-B had them there), plus new `settledAmountForInvoice` (sums an invoice's
-allocations *plus* each allocating payment's TDS pro-rated by that
-allocation's share of the payment's cash amount — the resolution to a real
-tension in the plan text between §3's literal refinement and §5.1's
-pro-rata formula, decided in favor of §5.1) and `recomputeInvoiceSettlement`
-(the one place invoice status/outstanding gets computed and persisted now —
-called after every payment create/update/delete, allocation change, and
-credit-note issue/cancel). `invoices.ts` and `credit-notes.ts` both import
-from `settlement.ts` instead of keeping their own copies. **New routes**:
-`apps/api/src/routes/payments.ts` mounted at `/payments` — `POST /` (create
-a payment + allocations transactionally, rejects over-allocation with 400
-before commit), `GET /` (all payments + allocated/unallocated amounts),
-`POST /:id/allocations` (allocate more of an existing advance/payment to an
-invoice later). `GET /customers/:id/advances` added to `customers.ts`
-(payments with a positive unallocated remainder). `GET /ledgers/tds?fy=`
-added to `ledgers.ts` (every TDS-bearing payment for an Indian fiscal year,
-grouped by customer — the 26AS reconciliation view). `POST
-/invoices/:id/payments` (the old single-invoice sugar route) now also
-creates a matching full-amount `PaymentAllocation` and sets `customerId` —
-unchanged from the caller's perspective. `PUT`/`DELETE
-/invoices/:id/payments/:paymentId` now refuse (400) to touch a payment that
-has been split across more than one invoice — correct it from the new
-Payments surface once that exists instead. **`ledger.ts` updated**:
-`buildCustomerLedger` now queries `PaymentReceived` by the direct
-`customerId` field (not through the now-optional `invoice` relation) and
-emits a separate `tds` movement type (credit) for any payment with
-`tdsAmount > 0` — added to `LedgerEntryType`. **`financeDashboard.ts`**'s
-`/summary` and `/reports/receivables` switched from raw `payments.reduce`
-(which undercounts once a payment can be split or carry TDS) to the same
-allocation+pro-rata-TDS settlement math as `recomputeInvoiceSettlement`, so
-there is exactly one definition of "paid" across the dashboard, receivables
-report, and invoice status — per the plan's explicit warning not to leave
-two competing ones. **Verification**: `tsc --noEmit` clean; a scripted
-run of the plan's exact §8 end-to-end scenario against local dev DB (via
-`tsx`, calling the real service functions, not a mock) — ₹1,00,000 invoice →
-₹49,000 + ₹1,000 TDS allocated → `partially_paid`, outstanding ₹50,000 → CN
-₹10,000 → outstanding ₹40,000 → second payment ₹60,000 (₹40,000 allocated,
-₹20,000 advance) → `paid`, one ₹20,000 advance on the customer, ledger
-closing balance exactly −₹20,000 → over-allocating a smaller invoice
-produces negative outstanding (the exact signal `payments.ts` checks to
-reject with 400) — every figure matched exactly. Full manual `zan-app-api`
-deploy dance run (build this time ~5 min, back to the documented norm — the
-~50 min Phase B run was never explained and didn't recur); `payments.js`
-and the `/payments` mount confirmed present in the build output before
-deploying; `@recd/shared` (with the new schemas confirmed in its compiled
-`dist/schemas.js`) patched into the same 3 spots as Phases A/B; `/health` →
-200 and `/payments`, `/ledgers/tds`, `/customers/:id/advances` → 401 (not
-404) confirmed live in production; post-deploy spot-check of `Invoice`
-status counts showed no unexpected change (nothing has recomputed old
-invoices yet since nothing new has touched them — expected, not a bug).
-**Second backend deploy** (same day, before any frontend push): while
-building the frontend it became clear the invoice list (`GET /invoices`)
-and detail (`GET /invoices/:id`) routes, plus `financeDashboard.ts`'s
-`/summary` and `/reports/receivables`, were still computing "paid" via the
-legacy `payments.reduce()` pattern — correct for the old one-payment-one-
-invoice world but silently wrong once a payment can be split across
-invoices or carry TDS. Refactored all of them onto the same
-`settledFromAllocations` helper `recomputeInvoiceSettlement` uses, so there
-is exactly one definition of "paid" everywhere (the plan's explicit
-warning). Re-ran the full manual deploy dance (build, grep the compiled
-output for the changed routes, re-patch `@recd/shared` into the same 3
-spots, `vercel deploy --prebuilt --prod`); confirmed live: `/health` → 200,
-`/invoices`, `/payments`, `/ledgers/tds` all → 401 not 404. This deploy
-shipped *before* the frontend commit, per the deploy-ordering rule.
-**Frontend** (built and shipped in the same session, after both backend
-deploys were confirmed live): `/finance/payments` — customer picker, open
-invoices with outstanding shown, amount + TDS + method/date/reference/notes
-fields, `autoAllocate(cash)` fills oldest-first up to each invoice's
-balance with editable per-invoice overrides, live unallocated/advance
-total, submits to `POST /payments`. `/reports/tds` — fiscal-year selector,
-`GET /ledgers/tds?fy=` KPI tiles and per-customer table with subtotal
-footers, Print + CSV via the standard `ReportChrome` pattern. Invoice
-detail page (`invoices/[id]/page.tsx`): payment history now shows TDS
-inline (amount + certificate ref), flags any payment split across other
-invoices with a link to `/finance/payments` and hides its Edit/Remove
-buttons (matching the backend's 400-on-split-edit guard); Record Payment
-modal replaced the "tds" method option with dedicated TDS amount +
-certificate ref inputs and a settlement preview line; Edit Payment modal
-still renders "tds" as a method option, but only conditionally, for
-legacy rows that already use it. `apps/admin-web/src/app/finance/
-ledgers/page.tsx`'s `TYPE_LABEL` map — found missing `tds` and
-`credit_note` entries while wiring this up (pre-existing gap from Phase
-A/B, not new) — fixed alongside. `Nav.tsx` — added "Payments"
-(`/finance/payments`) and "TDS Register" (`/reports/tds`) links and their
-`LINK_PERMISSIONS` entries, riding on existing `record_payments`/
-`view_ledgers` (no new permission key needed, as anticipated). Verified
-`tsc --noEmit` and `next build` both clean on `admin-web` before pushing to
-`master` for Vercel's git-connected auto-deploy. **Not yet done**: a real
-Finance-user click-through (record a real split payment, confirm an
-advance shows up on the customer, pull the TDS register for a fiscal
-year and cross-check a couple of rows). **Also pending**: Phase D (GST
-exports, not started) and the in-app-agent tool wiring (still deliberately
-deferred to after Phase D).
-
-### Feature: Accounting-Lite Phase B — Credit/Debit notes (2026-08-28)
-Second phase of `docs/ACCOUNTING_LITE_PLAN.md`, built immediately after
-Phase A per the user's explicit "move on to B" instruction (in-app-agent
-tool access for ledgers/credit-notes deliberately deferred to after all
-phases). **Schema**: new `CreditNote`/`CreditNoteLineItem` models (own
-gap-free `CRN/2026-27/0001` sequence via `DocumentSequence`, independent
-counter from invoices/quotations/POs) and a `DebitNote` model (internal
-only — free-text `noteNumber`, no statutory sequence, no issue/draft
-lifecycle); `Invoice.creditNotes` back-relation added
-(`add_credit_debit_notes` migration, diffed clean against both local and
-production schemas — no drift). **New permission** `manage_credit_notes`,
-seeded for Finance/Management/Owner-Admin/Super Admin (production grant via
-direct SQL through Supabase MCP, same reasoning as Phase A's
-`view_ledgers` — additive-only, didn't re-run the full seed against prod).
-**Shared**: `CREDIT_NOTE_STATUS` (draft/issued/cancelled), `CREDIT_NOTE_REASON`
-(return/rate_difference/deficiency/post_sale_discount/other),
-`FINANCE_DOC_TYPE.CREDIT_NOTE` + `CRN` prefix in `documentNumber.ts`'s
-maps, `creditNoteCreateSchema`/`creditNoteUpdateSchema`/`creditNoteCancelSchema`
-(reusing the existing `lineItemSchema`), `debitNoteCreateSchema`/
-`debitNoteUpdateSchema`. **Backend**: `apps/api/src/routes/credit-notes.ts`
-— `credit-notes` sub-resource (list/create-draft/get/update-draft/delete-draft/
-issue/cancel, gated on `manage_credit_notes`) plus a `debit-notes`
-sub-resource (plain CRUD, no issue step); a credit note's total is validated
-against its invoice's total at both draft-save time (early feedback,
-counting all non-cancelled CNs) and issue time (authoritative check,
-counting only other ISSUED CNs). **Settlement math extended, not
-replaced**: `invoices.ts`'s existing `deriveInvoiceStatus(total, paid)`
-helper is now always called with a NET total — `netInvoiceTotal(total,
-issuedCreditNoteTotal)`, both now exported — so an invoice's status
-(issued/partially_paid/paid) and outstanding balance account for issued
-CNs everywhere status is derived (GET list/detail, PUT edit, payment
-create/edit/delete) without changing what's stored on `Invoice.total`
-itself; `financeDashboard.ts`'s `/summary` and `/reports/receivables` net
-out issued CN totals the same way. **`ledger.ts` extended** at the exact
-spot Phase A's code comment flagged: issued credit notes are now a
-`credit_note` movement type in `buildCustomerLedger`, reducing the running
-balance like a payment. **Frontend**: `/finance/credit-notes` (list +
-create-draft modal, issue/cancel/delete actions, deep-linkable via
-`?invoice=<id>`) and `/finance/debit-notes` (lighter list + create form,
-per the plan's reduced priority for this piece); `invoices/[id]` gained an
-issued-CN list, a "Credit notes issued" KPI, and a "Create credit note"
-button (tax invoices only, issued/partially_paid/paid); `Nav.tsx` gained
-Credit Notes and Debit Notes links. **Verification**: `tsc --noEmit` clean
-on both apps, `next build` clean (all new routes compiled), full manual
-`zan-app-api` deploy dance run (build took ~50 min this run, well over the
-usual ~14-20 min — CPU/memory kept climbing the whole time so it was
-verified alive via `Get-Process` polling rather than assumed hung; no root
-cause investigated, noted here in case it recurs), new route's code
-confirmed present in the build output before deploying, `@recd/shared`
-patched into the same 3 spots as Phase A, `/health` → 200 and
-`/credit-notes`, `/debit-notes`, `/ledgers/customer/:id` → 401 (not 404)
-confirmed live in production. **Not yet done**: real click-through by a
-Finance user (see Current open items) and the in-app-agent tool wiring
-(explicitly deferred to the end of all phases).
-
-### Feature: Accounting-Lite Phase A — party ledger statements (2026-08-28)
-First phase of `docs/ACCOUNTING_LITE_PLAN.md` (read-only, zero behavior
-change to anything existing, shipped alone per the plan's phase order).
-**Schema**: `Customer.openingBalance`/`openingBalanceDate` and
-`Supplier.openingBalance`/`openingBalanceDate` added
-(`add_ledger_opening_balances` migration) — anchors a party's running
-balance without needing historical invoice/payment data entry; both default
-to 0 so this is fully additive. **New permission** `view_ledgers`
-(`PERMISSION_KEY_FINANCE`), seeded for Finance/Management/Owner-Admin/Super
-Admin (added directly to production `Permission`/`RolePermission` via
-Supabase MCP, since `seed.ts`'s upsert pattern is additive but re-running
-the whole seed against prod risks touching demo data — didn't do that).
-**New backend**: `apps/api/src/services/ledger.ts` (`buildCustomerLedger`/
-`buildSupplierLedger` — pure query composition, no new tables; merges
-opening balance + issued invoices/payments-received (customer side) or
-approved bills/payments-made (supplier side) into a date-ordered,
-running-balance statement computed over full history then sliced to
-`[from, to]`) and `apps/api/src/routes/ledgers.ts` → `GET
-/ledgers/customer/:id` / `GET /ledgers/supplier/:id`, both `?from=&to=`.
-`GET /customers` and `GET /purchase-orders/suppliers` now also accept
-`view_ledgers` (previously gated to `manage_orders`/`manage_purchase_orders`
-etc.) so a Finance-only ledger user can populate the party picker.
-**New frontend**: `/finance/ledgers` (party-type toggle, party picker, date
-range, statement table with running balance, Print + Export CSV via the
-existing `ReportChrome`) — reads `?customer=<id>`/`?supplier=<id>` to
-deep-link from a party's own page; wired into `Nav.tsx`'s Finance section.
-Customer detail page (`/customers/[id]`) got a "Ledger" quick-link.
-**Explicitly deferred to later phases** (per the plan): Credit/Debit notes
-(Phase B) aren't in the ledger yet — `ledger.ts` has a natural extension
-point (add a `credit_note` movement type) once `CreditNote` exists.
-`PaymentReceived` doesn't yet carry `customerId`/`tdsAmount` (Phase C) — the
-customer ledger currently joins payments through `invoice.customerId`,
-which is correct today (every payment still requires an invoice) but will
-need to switch to the direct FK once advances/TDS land.
-Verified: `tsc --noEmit` clean both apps, `next build` clean (`/finance/ledgers`
-built as a static route), production migration + permission grants applied
-via Supabase MCP and spot-checked. **Not yet click-tested live** (standing
-"agent can't log into admin-web" restriction) — owed: open `/finance/ledgers`
-as a real Finance user, pick a customer with real invoices/payments, confirm
-the running balance and Print/CSV export actually work.
-
-### Feature: Customer Purchase Orders, plus native Gemini PDF extraction (2026-08-28)
-**Customer Purchase Orders** — mirror-image of the existing outbound
-`PurchaseOrder`-to-suppliers concept: new `CustomerPurchaseOrder` model (+
-`CustomerPurchaseOrderLineItem` + `CustomerPurchaseOrderAuditLog`) recording
-POs that CUSTOMERS send TO the company, with optional links to `Order` and
-`Invoice` — recording one is always optional and never blocks
-creating/invoicing an order (explicit product decision, confirmed via user
-Q&A). New backend: `apps/api/src/routes/customer-purchase-orders.ts`
-(list/create/extract/detail/patch/cancel, gated on the existing
-`manage_orders` permission, no new permission added),
-`apps/api/src/agent/customerPoExtraction.ts` (AI extraction mirroring
-`billExtraction.ts` — same provider-loop-with-fallback, same fuzzy
-customer-name matcher pattern, `findCustomerCandidates`), new Zod
-schemas/constants in `packages/shared` (`CUSTOMER_PO_STATUS`,
-`CUSTOMER_PO_AUDIT_ACTION`, `customerPurchaseOrder*Schema`), a
-`create_customer_po` chat-agent write tool (9th write tool now) following
-the same `AgentPendingAction`-then-`executeConfirmedAction`-confirm pattern
-as every other agent write tool, and `computeCustomerPoTotals` (reuses
-`computeDocumentTotals`, treats the doc as intra-state since there's no
-placeOfSupply-driven IGST split on this simpler model, folds CGST+SGST+IGST
-into one flat `taxAmount` field). New frontend: `/customer-pos` (list,
-mirrors `/finance/vendor-invoices`), `/customer-pos/new` (upload +
-AI-extract + manual entry, simpler than the vendor-invoice new-page — no
-allocations, just optional single Order/Invoice link), `/customer-pos/[id]`
-(detail with link/unlink-to-order/invoice actions, audit trail, cancel). Nav
-entry gated on `manage_orders`.
-
-Built on a different feature from the same session, done first: **native
-Gemini PDF extraction**. The existing OpenAI-compatible-shim adapter
-(`apps/api/src/agent/providers/openaiCompatibleAdapter.ts`) unconditionally
-rejected non-image mimeTypes (including PDF) for every provider — which is
-why "Extract with AI" was failing on PDF attachments for a Gemini-configured
-provider even though Gemini's own native API supports PDFs directly. Added
-`isGeminiBaseUrl()` + `extractDocumentViaNativeGemini()`: detects when the
-configured provider's baseUrl points at `generativelanguage.googleapis.com`
-and routes PDF/non-image extraction to Gemini's native `:generateContent`
-REST endpoint (`inline_data` with base64 + `x-goog-api-key` header) instead
-of the OpenAI-compat shim, which only supports images. Every other
-provider's behavior is unchanged. This unblocked testing the Customer PO
-feature with a real PDF (`po361.pdf`, a real customer PO from "Ojas").
-
-Migration `20260827144444_add_customer_purchase_orders` applied to
-production Supabase directly via `apply_migration` (project
-`idqzupopsuusoihpmoqc`), same established pattern as prior sessions. Both
-commits followed the backend-first deploy order (see "Established deploy
-ordering rule" above): `zan-app-api` deploy dance run and confirmed live
-before pushing each dependent `admin-web` commit. `tsc --noEmit` and
-`next build` (all pages, including the 3 new customer-pos routes) both clean
-before each push. See the deploy-dance section above for this session's
-`@recd/shared` patch-spot findings (both `functions/index.func/` and
-`functions/api/index.func/` present; 3 spots patched; build ~14 min) and the
-`packages/shared` fresh-rebuild note.
-
-### Work Orders: product selection for multi-RECD sites (2026-08-24)
-New `WorkOrderProduct` join table; `createWorkOrderSchema` gains optional
-`productIds` — a site's order can have more than one RECD unit (base product
-+ line items, same shape `sites/page.tsx`'s `allProducts` helper already
-handles), so a work order may need to target a subset rather than the whole
-site. New Work Order form auto-selects the product when a site has exactly
-one, shows checkboxes when it has several. Deployed backend-first (own
-commit, held frontend until API confirmed live), then the UI commit.
-
-### Site name/address surfaced on New Work Order form and Work Orders list (2026-08-24)
-`Site.companyName`/`address` were already returned by `GET /sites` and
-`GET /work-orders` (full Prisma rows, no `select` narrowing) but never
-rendered. Added site name to the New Work Order site `<select>` (was
-customer + address only) and a new Site column to the Work Orders
-list/mobile cards. Frontend-only. Recurring pattern worth remembering: check
-what the API already returns before assuming a display gap needs a backend
-change — twice now (Silencer Type's precursor and this) the data was
-already there.
-
-### "HSN" relabeled to "SAC/HSN" across finance UI; Saved Items default SAC code (2026-08-24)
-Relabeled across every quotation/invoice/PO line-item table, form, and the
-Saved Items catalog — the print pages already said "SAC/HSN", the on-screen
-forms just hadn't caught up. New Saved Items now default to **SAC 9987**
-(maintenance/repair/installation services), since Saved Items are
-structurally always service/installation lines, never goods — `Product`
-still has no HSN/SAC field of its own (deliberately out of scope; HSN
-belongs to the sale/goods side, SAC to installation/service, not a single
-default value across the whole product catalog).
-
-### Agent custom instructions, Saved Items catalog, per-customer negotiated pricing, Product.silencerType (2026-08-24)
-Three features shipped the same day:
-- **In-app agent custom instructions**: new
-  `CompanySettings.agentCustomInstructions` free-text field, appended to the
-  system prompt; base prompt also changed to ask what items are needed
-  before drafting a quotation/invoice/PO instead of drafting immediately.
-- **Saved Items catalog**: new `SavedLineItem` model + Settings page +
-  `search_saved_items`/`create_saved_item` agent tools; confirm cards for
-  finance-document write tools now show line items as checkboxes so items
-  can be excluded before approving (`AgentChatBubble.tsx`'s
-  `isLineItemArray`).
-- **Per-customer negotiated pricing**: new `CustomerProductPrice`/
-  `CustomerSavedItemPrice` models + Finance > Customer Pricing page +
-  `get_customer_pricing` agent tool; auto-fills but stays editable in the
-  quotation/invoice "New..." modals — added a product picker to the invoice
-  modal in the process, since it never had one.
-- Also added `Product.silencerType` (int, 1 or 2), shown as a column on
-  Customer Pricing.
-
-### Cancelled proforma invoice + its quotation couldn't be deleted (2026-08-24)
-Bug: a cancelled proforma invoice and its quotation couldn't be deleted.
-Root cause: invoices could never be hard-deleted at all (only cancelled),
-and quotation-delete refused whenever any invoice — even a cancelled one —
-existed for it. Fix: added `DELETE /invoices/:id`, gated to
-`status === CANCELLED && invoiceNumber.startsWith("DRAFT-")` (i.e. never
-issued a real sequential GST number via `POST /:id/issue`, so deleting it
-can't create a numbering gap) — an invoice that *was* issued stays
-permanently undeletable, as before. No change needed to quotation-delete:
-its existing `invoices.length > 0` guard already allows deletion once the
-invoice itself is gone.
-
-### Deploy-dance investigation and CLI update (2026-08-24)
-Diagnosed but did not fix the ~15-20 min `zan-app-api` build time — see the
-root-cause writeup (nft tracing, `googleapis` size, two untried fixes) now
-folded into the deploy-dance section above. Production DB migrations applied
-directly via Supabase MCP (`idqzupopsuusoihpmoqc`), same established
-pattern; tripped the classifier-blocks-then-succeeds-on-retry behavior (see
-Known Gotchas) twice this session, not a new problem. The `@recd/shared`
-deploy-patch dance moved to Vercel CLI 59.5.0 and changed failure mode again
-— full detail folded into the deploy-dance section above.
-
-### Same multi-RECD bug on the Orders list too, fixed identically (2026-08-20)
-User confirmed the Sites fix (below) worked, then reported the same symptom
-on Orders. Same root cause: `GET /orders` only ever included `product` (the
-order's single top-level product), never `lineItems` — the detail route
-already did, the list route never had. Fixed the same way: widened the list
-query's include to `lineItems: { include: { product: true } }`, added an
-`allProducts(o)` helper to `orders/page.tsx`, switched the Product column to
-the `accessorList` capability `DataTable` gained for the Sites fix (no
-further `DataTable.tsx` changes needed — the multi-value filtering machinery
-already existed generically). Flagged as a pattern to check proactively:
-`Order.lineItems` is easy to forget because `Order.productId`/`product`
-looks like the whole story until a row has more than one RECD — not
-established whether Quotations/Invoices/POs (separate line-item models) have
-the same gap. Backend deployed and confirmed live before the frontend was
-pushed (established ordering rule). `tsc --noEmit` clean on both apps.
-
-### Sites list's Product column missed multi-RECD sites; DataTable gains multi-value filtering (2026-08-20)
-User reported filtering Sites by Product didn't surface sites with multiple
-RECDs. Same root cause as the agent-chat undercounting bug (2026-08-17,
-below): the Sites list only ever read `order.product`, never
-`order.lineItems` (the "add another RECD unit → same order" path) — so a
-site whose only match for a filtered product was on a line item was
-invisible to the Product column's display and filter. Fixed both ends:
-backend `GET /sites` include widened to also fetch
-`lineItems: { include: { product: true } }` (mirroring the detail route and
-agent tools); frontend added an `allProducts(s)` helper and a new
-`accessorList` column type. **`DataTable.tsx` gained a real new capability**:
-`accessorList?: (row: T) => (value)[]` on `DataTableColumn` — when set, the
-filter dropdown's options are the union of every row's values (not one
-combined string per row) and a row matches if *any* of its values equals the
-selected filter; cell/print text falls back to joining with ", " absent a
-custom `render`. Generic capability now, reusable for any future multi-value
-column. Backend deployed and verified live *before* the frontend push,
-deliberately following the lesson from the Sites-crash incident below. `tsc
---noEmit` clean; not yet click-tested against a real multi-RECD site (local
-dev DB had none to check against visually).
-
-### DataTable print: full letterhead + landscape layout (2026-08-20)
-User tried the new print feature and reported three problems: table wider
-than the page (columns clipped), the browser's own print header showing
-above everything, and the header being too compact vs. the invoice/PO
-letterhead style. Three fixes in `DataTable.tsx`/`globals.css`: (1) full
-letterhead copied from the invoice print page's markup (logo/legal
-name/address + footer with `documentFooterNote`; `DataTable` now fetches
-`/settings` itself rather than `useCompany`); (2) landscape via a named
-`@page datatable-landscape` in `globals.css` assigned via the CSS `page`
-property (only affects table-page prints; invoice/quotation/PO prints stay
-portrait), plus a `.print-table.compact` modifier for the higher column
-count; (3) the browser's own print header/footer (date/URL/page
-number) **cannot be suppressed from CSS at all** — only the print dialog's
-own toggle controls it; applied the same `document.title`-swap trick the
-invoice print page uses so at least the printed title text is meaningful,
-documented that the date/URL/page-number lines are unaffected. Frontend-only,
-no deploy needed. Not yet re-confirmed with a fresh print preview.
-
-### Print button (with company letterhead) on every DataTable page (2026-08-20)
-User asked to print a filtered list "like a letterhead". Reused the Reports
-section's existing `ReportChrome.tsx`/`useCompany()`/`ReportPrintHeader`
-infrastructure rather than building new print plumbing — wired directly into
-`DataTable`. Added a Print button (`window.print()`), a `title` prop per
-page, and a `printSubtitle` computed from active per-column filters (e.g.
-"Filtered by Customer: Acme Corp · Stage: Dispatched — 4 of 37 rows"). The
-printed table includes only columns with an `accessor` (Actions columns are
-automatically excluded) and renders each cell via the column's `accessor`
-(plain text), deliberately ignoring custom `render` output (links/buttons/
-badges) since those don't mean anything on paper — reused the existing
-`.print-table`/`.print-doc` CSS so the printed list matches the
-invoice/quotation/PO look. Added `print:hidden` across on-screen
-table/mobile cards/headers/banners/KPI tiles/filter dropdowns on all 12
-pages (sidebar/topbar were already `print:hidden`). Confirmed `/settings`
-only requires `authenticate` (not `manage_settings`), so the letterhead logo
-renders for every role. `tsc --noEmit` + full `next build` (33 routes)
-clean. Not yet click-tested live.
-
-### DataTable rolled out to all remaining list pages; self-run zan-app-api deploy fixes a real production Sites crash (2026-08-20)
-Converted **Vendors, Orders, Invoices, Quotations, Purchase Orders, Expenses,
-Users, Work Orders, Complaints** to `DataTable` (matching Sites/Customers/
-Products from earlier), each hand-rolled `<table>` becoming a column config;
-multi-line cells got a custom `render`; delete/edit buttons became an
-`alwaysVisible`, non-filterable actions column; mobile card lists stayed
-hand-written JSX but now driven by the filtered-rows render-prop.
-
-**Before finishing, the user reported a real production client-side
-exception on Sites.** The prior session's Sites columns
-(Vendor/Product/Update-status) read `s.order.product.name` and
-`s.stageEvents[0]` with no null-guard, correct once the backend deploys —
-but that push landed the frontend change and the `sites.ts` backend
-`include` change in one commit, and `admin-web` (auto-deploys instantly)
-went live before `zan-app-api` (needs the manual dance) caught up, so
-`order.product` was `undefined` for every real user until the backend
-deployed. Local dev looked fine the whole time (local API dev server picks
-up changes immediately), which delayed diagnosis. This is the incident
-behind the "Known gotchas" entry on push-ordering above.
-
-**This was also the first session able to run the manual deploy dance
-itself** — prior assumption (baked into this file for weeks) was that only a
-session with Desktop Commander access to the user's own machine could reach
-`api.vercel.com`; confirmed reachable, `vercel pull` authenticated cleanly
-against `ferose-salahudeen-s-projects/zan-app-api` with no token wrangling
-(project already linked from a prior `.vercel/project.json`). Ran the full
-dance end to end (~15 min build); the patch step needed updating for Vercel
-CLI 59.1.4's new 3-spot layout (a first patch-script attempt silently
-no-opped because it checked `node_modules`, which existed, rather than the
-missing `@recd` scope folder one level deeper — fixed by explicitly
-`New-Item`-ing `@recd` first). Verified live: `/health` → 200,
-`/agent/providers` → 401. Also hardened the Sites page with null-checks
-(renders "-" instead of crashing) as defense-in-depth.
-
-### Reusable DataTable (column show/hide + per-column filter) on Sites, Customers, Products; four new Sites columns (2026-08-20)
-Built `apps/admin-web/src/components/DataTable.tsx`: takes a column config
-(`key`, `label`, `accessor`, optional `render`, `defaultVisible`,
-`alwaysVisible`, `filterType: "select" | "text"`) plus `rows`, renders the
-desktop table and hands the filtered row array back via a render-prop so
-each page's existing mobile card list stays in sync with active filters.
-**Column visibility**: "Columns" checklist (one column pinned
-`alwaysVisible`), persisted per page in `localStorage` under
-`zan-app:columns:<page>`, with "Reset to default". **Per-column filter**: a
-second header row — `<select>` of distinct values for categorical columns
-(exact match), or a substring-match text box for columns marked
-`filterType: "text"` (mostly-unique fields like Order #/names/addresses).
-Wired into Sites/Customers/Products only initially.
-
-While rebuilding Sites, added four columns that didn't exist before:
-**Address** (already fetched, never rendered), **Product**, **Vendor**, and
-**Update status** — the latter clarified via a screenshot to mean the
-*latest status update's status* (`SiteStageEvent.statusOption.label`), not
-the SITC phase (`currentStage.phase`) — two genuinely different fields, easy
-to conflate by name. Backend `GET /sites` include widened to
-`order: { include: { product: true } }` plus
-`stageEvents: { orderBy: { createdAt: "desc" }, take: 1, include: { statusOption: true } }`
-(alongside existing `vendor: true`) — one query each, no N+1.
-**Backend change — not live until the deploy dance runs**; the new/changed
-columns render blank against production until then even though `admin-web`
-deploys automatically.
-
-First session with genuine local shell access to the user's machine (every
-prior session was cloud/web, blocked from this) — verification went
-further: `tsc --noEmit` clean on both apps, full `next build` clean, both
-apps started locally against the user's own dev Postgres for real
-click-testing before shipping. That surfaced the Tailwind-cwd and
-`next start`-child-process gotchas (see Known Gotchas). No DB schema
-changes this session — only an `include` widened.
-
-### "Create Drive folders" still failing after the token-expiry fix — wrong scope, not auth (2026-08-18)
-User confirmed the expiry fix (below) didn't fix the button. Checked the
-token directly: valid, 200 OK, no expiry issue. Real problem: its scope was
-`drive.readonly` only — `drive.files.create()` needs write access, which
-`drive.readonly` categorically cannot grant. Likely broken since the
-feature's first use, not a regression from the expiry fix — two different
-problems that happened to overlap in time. The prior open item ("upload
-needs `drive.file`") had already named the fix for a different feature
-without anyone realizing folder creation needed the same widening. Updated
-`getDriveRefreshToken.js` to request both `drive.readonly` (broad read, for
-pre-existing shared documents) and `drive.file` (create/manage, scoped to
-files the app creates) together, re-ran the loopback flow, and verified
-end-to-end before shipping — actually calling `POST /drive/v3/files` to
-create a real test folder and `DELETE` to remove it, not just decoding the
-token's scope string. Redeployed (env-only change, reused existing prebuilt
-output). Not yet re-confirmed by the user clicking the button live, but the
-exact underlying Drive API call was just proven to work.
-
-### Drive folder creation silently failing (expired OAuth token) + permanent fix (2026-08-18)
-User reported "Create Drive folders" did nothing. Root cause:
-`GOOGLE_DRIVE_REFRESH_TOKEN` had expired — confirmed by POSTing it to
-`https://oauth2.googleapis.com/token`, which returned
-`invalid_grant: Token has been expired or revoked` (the standing 7-day
-Testing-mode expiry, see Quick facts). Two non-obvious facts: (1) the OAuth
-client isn't in the Zan-APP Cloud project at all — it's `zan-app-agent-drive`
-(Desktop-type) in a separate `MyPersonalAgent` project owned by
-`ferosem@gmail.com`, not `zanfpowersystems@gmail.com` (which only owns the
-Drive account being accessed); (2) it's a "Desktop" OAuth type, so there's no
-redirect-URI field to add the usual OAuth Playground trick to — Desktop
-clients use the **loopback flow** instead (any `http://localhost:<port>`
-redirect works unregistered). Wrote `apps/api/scripts/getDriveRefreshToken.js`
-(kept in the repo) — starts a local HTTP listener, prints a consent URL,
-exchanges the code for a fresh refresh token when signed in as
-`zanfpowersystems@gmail.com`.
-
-Generated a new token, verified it live (direct POST to Google's token
-endpoint) before shipping, updated it in both `apps/api/.env` and the
-`zan-app-api` Vercel production env var, ran the full deploy dance
-(`/health` → 200, auth-gated route → 401). **Then fixed the recurring
-cause**: the OAuth consent screen was stuck in Testing publishing status,
-which is why refresh tokens only lasted 7 days at all. Published to
-production (Cloud Console → Audience → Publish App, as `ferosem@gmail.com`,
-project `MyPersonalAgent`); a second freshly-minted token no longer carries
-a `refresh_token_expires_in` field at all (the first explicitly showed
-`604760` seconds = 7 days). Still shows Google's "unverified app" warning on
-re-consent (Drive scopes need review to fully verify, not pursued) — just a
-click-through now, not a hard wall. Not yet click-tested as a logged-in user.
-
-### Agent chat undercounted RECDs after the multi-RECD-per-site feature shipped (2026-08-17)
-User reported the chat agent answering "1 RECD unit" for BPCL's Desur site
-when there should have been more, after `OrderLineItem` rows were added to
-consolidate duplicate sites into one order (`d7b7381`, same day). Confirmed
-against production: `ORD-2026-6001` correctly has its top-level product
-(RECD-200 qty 1) plus two `OrderLineItem` rows (RECD-250, RECD-400) — 3
-RECDs total, data was right, the agent just never looked at it. Root cause:
-`d7b7381` added `OrderLineItem` as a way to put multiple RECDs on a site but
-never touched the two agent tools that answer "how many RECDs at X" —
-`search_orders_and_sites` and `get_document_detail`'s `docType: "order"`
-case only queried the order's single top-level `product`/`quantity`, no
-`lineItems` in their Prisma `include` at all. Fixed both tools to
-`include: { lineItems: { include: { product: true } } }`, returned as
-`additionalLineItems`, and tightened the tool description to explicitly
-tell the model to sum base quantity + every line item's quantity. `tsc
---noEmit` clean. **Backend-only, needed the deploy dance** — not deployed
-this (cloud) session, same standing blockers as every prior cloud session.
-
-### Verified a user-uploaded delivery-status spreadsheet against production; found the delivery-tracking table is mostly empty (2026-08-17)
-User uploaded `Material_Delivery_Status_version_1.xlsx` and asked whether it
-had been imported correctly, specifically flagging "Bostik 2 recd". Read
-with pandas (neither pandas nor markitdown were preinstalled despite the
-xlsx skill's notes). Cross-checked every row against production via the
-Supabase MCP: sheet uses blank-cell row grouping (a named row followed by
-unlabeled rows for additional products at the same site) — confirmed via the
-first group (BPCL/Zadshahapur) before trusting the pattern further. **Bostik
-was correct as-is, not a bug** — DB has exactly one Bostik order matching
-the sheet's one row exactly; the row that might read as a second Bostik item
-actually belongs to Mahindra Aerostructures/Narsapur (which genuinely has
-two separate RECD-380 orders) — reported the distinction rather than
-assuming. The real finding, now in Current open items: `RecdDelivery` (built
-"to match the source delivery-tracking sheet") is almost entirely
-unpopulated — see that section for detail. Sheet has zero contact-detail
-columns at all, so nothing about contacts could have come from it (checked
-separately that Ethen Power Solutions' own contact *is* on file). Read-only
-investigation, no code/data changes.
-
-### Vendor archive: deactivate without losing history, with optional site reassignment (2026-08-17)
-User hit the "no `DELETE /vendors/:id`" gap directly while testing. On
-hearing the tradeoff of a real delete — a shared placeholder "History
-Vendor" would merge every removed vendor's track record into one bucket,
-losing the "was this specific vendor good or bad" signal the user's actual
-reason (catching malpractice after the fact) depends on — chose **archiving
-instead of deleting**: the vendor row and everything tied to it stays fully
-intact, it just drops out of active use.
-1. New `VENDOR_STATUS.ARCHIVED`; `Vendor` gets `archivedById`/`archivedAt`
-   (mirrors `approvedById`/`approvedAt`) via a migration applied directly to
-   production via the Supabase MCP.
-2. `POST /vendors/:id/archive`, optional body `{ reassignSitesToVendorId }`.
-   In one transaction: optionally bulk-moves the vendor's `Site.vendorId`
-   rows to a different, currently-approved target vendor, deactivates every
-   member login (`isActive: false`), then flips the vendor to `archived`.
-3. Every "active" vendor dropdown already filters on `status === "approved"`
-   (site-vendor assignment, erection-engineer-add, OTP eligibility in
-   `auth.ts`), so archived vendors fall out for free.
-4. **Found a real pre-existing gap**: the plain `POST /login` (password)
-   route only ever checks `user.isActive`, never `vendor.status` — unlike
-   OTP, which does check `status === "approved"`. A *rejected* vendor's
-   engineer has apparently always been able to keep logging in with a
-   password. Archiving closes this for archived vendors (via
-   `isActive: false`, which both login paths respect) but the same gap still
-   exists for `rejected` vendors, untouched here — flagged, not fixed
-   (changes existing behavior for whoever's relying on it).
-5. **Deliberately no one-click "un-archive" in the UI**: calling the
-   existing `/approve` route on an archived vendor would flip status back,
-   but `createVendorContactLogin` only creates a login for an email that
-   doesn't already exist — it won't reactivate the `isActive: false` row.
-   Exposing "Reinstate" would produce a vendor that looks active but whose
-   engineer still can't log in. Reactivating a mistakenly-archived vendor
-   today means manually flipping status via API/DB and separately
-   reactivating the `User` row(s).
-6. Frontend: **Archive** button (approved vendors only) with a confirmation
-   modal showing site count, a reassign-to dropdown, and a result banner;
-   gray badge for archived state.
-Verified: `tsc --noEmit`, production `tsc` build clean, full `next build`
-(34 routes), migration applied and confirmed live via direct column query.
-Deployed and confirmed working 2026-08-17 — the user ran the deploy dance
-themselves and successfully archived a real vendor through the live UI.
-Took two attempts due to the stale-build-output and Notepad-save-location
-gotchas already documented in the deploy-dance section above (not new code
-bugs — pure operator/tooling friction).
-
-### Every delete action in admin-web falsely reported failure (2026-08-16)
-User deleted a stale test order and got
-`Failed to execute 'json' on 'Response': Unexpected end of JSON input`.
-Checked production directly: the order was actually gone — the delete had
-succeeded, the error was a lie. Root cause: `DELETE /orders/:id` (and 7
-other delete routes — expenses, customers, products, quotations, agent
-providers, agent conversations, site contacts) correctly respond `204 No
-Content` with an empty body, but `apiClient.ts`'s shared `api()` helper
-unconditionally called `res.json()` on any `res.ok` response, which throws
-on an empty body — so **every delete button in the app** reported failure on
-success. Fixed by reading the response as text first and only
-`JSON.parse`-ing if non-empty; no caller reads a DELETE call's resolved
-value. Frontend-only, ships via normal auto-deploy, no `zan-app-api` deploy
-needed. Not yet verified live (standing restriction).
-
-### create_purchase_order code-reuse fix, and re-confirming the cloud-session deploy blockers (2026-08-16)
-Extracted `createPurchaseOrderRecord(tx, input, createdById, poNumber, companyState)`
-in `purchase-orders.ts` (exported like `createQuotationRecord`), pointed
-both the real `POST /purchase-orders` route and the agent's
-`executeConfirmedAction` dispatch at it — removing duplicated inline
-line-item construction. Also fixed a small real asymmetry: the duplicated
-agent-side version generated the PO number and created the row in two
-separate `prisma.$transaction` calls, while `create_quotation`'s confirm
-handler already wrapped both in one transaction — now purchase orders do
-too (closes a very unlikely gap where a number could be allocated without a
-matching PO being created). Behavior-neutral otherwise. `tsc --noEmit` and
-production `tsc` both clean. Independently re-verified this cloud session
-still cannot run the deploy dance (`api.vercel.com` network-blocked,
-`list_agents` found no hand-off session) — stacked two undeployed
-`zan-app-api` fixes on `master` at this point (this one + the customer-role
-Users-guard below).
-
-### Customer email-OTP silently never sending: root cause + guard against recurrence (2026-08-16)
-User reported requesting an email OTP for `zanfpowersystems@gmail.com` and
-never receiving it, no error either. Root cause: that email existed as a
-`User` row (role `customer`) with `customerId` = null. The email-OTP
-eligibility check requires `customerId` set for a customer-role account;
-when null, the request falls through to the deliberately-generic "if that
-email is registered..." response *without* creating an `OtpCode` row or
-sending anything (by design, to avoid leaking which emails are registered) —
-silent dead end for a broken account. How it happened: the generic "Add
-user" form on the Users page lets staff pick any role including "Customer",
-but `POST /users` never touches `User.customerId` — only real customer
-contacts created via the Customers page get it set. Picking "Customer" from
-Users has always silently produced a login that can never work. Fixed two
-ways (UI guard alone doesn't stop a direct API call): `POST /users`/
-`PUT /users/:id` now reject `roleKey: "customer"` outright; "Customer" also
-filtered out of the Users-page role dropdown (Add and Edit). Verified no
-other table referenced the broken row before deleting it directly via the
-Supabase MCP (one-off prod cleanup, not part of the diff). `tsc --noEmit`
-and full builds clean. Cloud/web session — only the `admin-web` half
-(dropdown removal, `31d2955`) is live; the `zan-app-api` half needs the
-deploy dance, not runnable from this session.
-
-### Copy button on assistant chat responses (2026-08-16)
-Added a "Copy" control under every assistant message in
-`AgentChatBubble.tsx` (async Clipboard API, `execCommand` fallback for
-non-secure contexts, brief "Copied" confirmation) — copies the response's
-raw markdown text. Admin-web only.
-
-### Reports section: SITC status, finance, customer history, vendor performance (2026-08-16)
-Four report types under a new **Reports** nav item (`/reports`, promoted
-from the disabled "Coming Soon" placeholder): (1) **Sites/SITC status**
-(`/reports/sitc`) — every order+site with current stage, filterable by
-order-date range/customer/vendor/phase; (2) **Finance summary**
-(`/reports/finance`) — receivables/payables aging, GST summary, revenue vs.
-expenses; (3) **Customer/order history** (`/reports/customer-history`) —
-every order/site/invoice/complaint for a picked customer; (4) **Vendor
-performance** (`/reports/vendor-performance`) — every site assigned to a
-picked vendor, a stage-breakdown KPI row, complaints on their sites.
-**Deliberately zero new backend routes** — composed client-side from
-existing endpoints (`/sites`, `/customers`, `/customers/:id`,
-`/invoices?customerId=`, `/complaints` filtered client-side since the route
-only scopes by the caller's own `customerId`, `/vendors`, and the existing
-`/finance/summary` + `/finance/reports/*` endpoints) — shipped via plain
-`git push`, no deploy dance. Each report has a **Print** button
-(`window.print()`, same pattern as invoice/PO print pages — deliberately not
-server-side Playwright/puppeteer, which would risk the native-binding
-startup crash the pdf-parse fix below was built to avoid) and an **Export
-CSV** button (`lib/csvExport.ts`, dependency-free Blob download, no new npm
-package). Shared `components/reports/ReportChrome.tsx` provides the
-print-only letterhead and toolbar for all four pages. Verified via `tsc
---noEmit`, full `next build` (33 routes), `next start` + curl 200 on all
-four — not exercised as a logged-in user (standing restriction). Also: this
-was a fresh clone with no `node_modules` — first bare `npm install`
-succeeded cleanly in ~60s including the `packages/shared` postinstall build,
-no arborist/EPERM issues that time.
-
-### Merged the mobile-built customer-agent branch, live-tested it as a real customer, found and fixed two bugs (2026-08-15)
-User said they'd already built customer chat access "yesterday, via my
-mobile app" — found `origin/claude/customer-agent-scoping-voice`, a single
-commit based on the previous session's last commit (see 2026-08-14 entry for
-what it contained). Reviewed the diff (security pattern correct throughout —
-`customerId` always read from `auth.customerId`, never from tool input),
-merged (clean fast-forward), then actually logged in as a real seeded
-customer and used it. Live testing found two bugs tsc/build alone couldn't
-catch:
-1. **Chat bubble never mounted for customers at all** — `AuthGuard.tsx` only
-   rendered `<AgentChatBubble />` in the staff sidebar branch, not the
-   customer-portal branch. Fixed by rendering it in both.
-2. **`create_complaint`'s documented siteId-lookup fallback was unusable** —
-   its own description said to look up siteId via `search_orders_and_sites`,
-   but that tool never returns `site.id`; the fallback, `get_document_detail`,
-   required `MANAGE_ORDERS` unconditionally for `docType: "order"`, which no
-   customer has, with no customer-scoped branch. A customer literally could
-   not resolve a siteId through either documented path. Fixed by adding the
-   same `auth.customerId`-scoped pattern already in `search_orders_and_sites`:
-   customers get `VIEW_SITE_STATUS`-gated access to their own order
-   (object-level check against the fetched row's `customerId`), staff keeps
-   unscoped `MANAGE_ORDERS` access.
-Verified end-to-end as the real customer: chat bubble renders with
-customer-specific copy, `search_orders_and_sites` returns only their own 4
-orders (a real other customer's name returns nothing), Drive tools refuse
-them, `create_complaint` works fully and creates a correctly-scoped
-`Complaint` row (verified via DB, not just the UI). Also directly attempted
-to force a complaint onto another real customer's siteId via a crafted API
-payload (bypassing the chat UI) — correctly rejected, zero rows created,
-confirmed via DB. Deployed both apps and verified `/health` live. **The
-Settings → Agent Visibility toggle for Customer is still off in
-production** — deliberately left for the user to enable when ready.
-
-
-### Customer-facing agent tools, Drive-tool lockdown, and a mic button (2026-08-14)
-Prompted by the user asking what would happen if Customer agent visibility
-were turned on. Found the agent's tool-permission model was staff-only by
-construction: the 3 Drive tools had no permission check at all, while every
-zanApp tool gated on a `manage_*` permission Customer never has — a customer
-would've gotten the whole shared Drive folder exposed but zero ability to
-see their own order/site status despite holding `VIEW_SITE_STATUS`/
-`RAISE_COMPLAINT`. Fixed as four pieces, all still behind the existing
-Agent Visibility toggle (opt-in per role, defaults to nobody):
-1. **Drive tools now refuse any customer outright** (checked via
-   `auth.customerId` being set — the signal only ever populated for the
-   Customer role). No per-customer Drive partitioning exists, so "no access"
-   rather than false scoping.
-2. **`search_orders_and_sites` branches on `auth.customerId`**: a customer
-   gets `VIEW_SITE_STATUS`-gated results forced to
-   `where: { customerId: auth.customerId, ... }` — can search within their
-   own orders/sites, a query for another company's name returns nothing.
-   Staff behavior unchanged.
-3. **New `create_complaint` write tool**, confirm-gated like the others.
-   Extracted the REST route's ownership check and creation+notify logic into
-   two exported functions (`assertOwnSite`, `createComplaintRecord`) shared
-   by the route, the tool's propose-time validation, and confirm-time
-   dispatch — one implementation, not three. `customerId` always from
-   `auth.customerId`, re-verified against the site's owning order at both
-   propose and confirm time.
-4. **Role-aware system prompt** (`buildAgentSystemPrompt(isCustomer)`) — a
-   customer's turn describes only their two tools and forbids implying
-   unreachable data doesn't exist; staff prompt unchanged.
-5. **Mic button** on the chat input (Web Speech API, client-side only,
-   transcribes into the existing input state) — feature-detected, simply
-   doesn't render where unsupported (Firefox, most Safari/iOS). Empty-state
-   copy is now role-aware.
-Verified via `tsc --noEmit`, production `tsc`, full `next build` (23
-routes) — not yet exercised against a live logged-in customer session (toggle
-still off then, as now).
-
-### In-app agent location-search bug, and the chat bubble rendering raw markdown (2026-08-14)
-1. **Agent falsely claimed a location "doesn't exist"** — asked about
-   Belgaum, replied it "does not exist" despite several real Belgaum sites.
-   Root cause: `search_orders_and_sites` only ever matched `orderNumber` and
-   `customer.name`, never `site.address`/`site.companyName`, and didn't
-   return address either. Fixed the query's `OR` and its results. Also
-   tightened the system prompt: a zero-result search must be reported as "no
-   matching records", not escalated to "X doesn't exist" (a search can't
-   prove absence), and the agent can't claim to have "searched every module"
-   unless it actually called a tool for each one.
-2. **Retested in the same thread → still wrong** — not a regression:
-   conversation history persists per thread and the model reused its own
-   prior (pre-fix) tool result instead of re-invoking the tool. Confirmed the
-   fix was correct by querying production directly. **Lesson: verify an
-   agent-behavior fix in a new conversation thread — old history can
-   outweigh a corrected tool.**
-3. **Chat bubble showed raw markdown as literal text** — `AgentChatBubble.tsx`
-   rendered `m.content` in a plain `whitespace-pre-wrap` div with no parsing.
-   Added `react-markdown` + `remark-gfm` with compact styling. Hit the
-   react-markdown v9 "node" prop gotcha: custom components receive the mdast
-   AST node as a prop, and naively spreading `{...props}` onto the real DOM
-   element leaks a literal `node="[object Object]"` attribute — **always
-   destructure `node` out first** in any custom react-markdown component.
-
-### Real email delivery, two new notifications, customer login simplified (2026-08-14)
-The email+OTP flow was already fully built, but `EmailProvider.send()` was a
-stub that only `console.log`'d — **no email had ever actually been sent by
-this app**, despite the README claiming otherwise.
-1. **Real SMTP wired up** — `lib/email.ts` (`nodemailer`), sending as
-   `info@zanf.org` via Zoho Mail (`smtp.zoho.in`). `emailTemplates.ts`
-   renders bespoke copy for `otp_code`; everything else falls through to a
-   generic key/value rendering. Hit the `npm install <pkg>` arborist bug
-   installing `nodemailer` — worked around per the gotcha above.
-2. Verified end-to-end against the real Zoho account: confirmed
-   `NotificationLog` rows with `status: "sent"`, and a full
-   `/auth/email-otp/request` → `/verify` round trip through the real route.
-   Set the same SMTP credentials as production env vars via
-   `vercel env add ... production` and ran the deploy dance.
-3. **Two new/completed notifications**: customer-on-stage-change
-   (`site_stage_updated` already existed, just needed real send + better
-   copy) and vendor-on-assignment (`vendor_assigned_site`, new —
-   `POST /sites/:id/assign-vendor` never notified anyone before; now emails
-   every member of a *newly* assigned vendor, not on a no-op re-save or
-   clear-to-unassigned).
-4. **Login page simplified** — "Track Order" tab renamed "Customer"; Order
-   ID + phone flow removed from the UI (Email + OTP only, "for now") —
-   backend routes left untouched (see Current open items).
-
-### Customers/Products/Vendors CRUD, real data import, first end-to-end deploy of both apps (2026-08-13)
-1. **Customers**: `PUT`/`DELETE /customers/:id` (delete guarded against
-   existing orders/quotations/invoices/complaints), `/customers/[id]` detail
-   page listing every order+site.
-2. **Products**: new page from scratch — full CRUD + `/products/[id]`
-   detail. Added `shape` (`cylinder`/`triangle`/`rectangle` enum),
-   `dimensions` (free text, deliberately not split into
-   length/width/height/diameter since the right fields differ per shape),
-   `weightKg`.
-3. **Stale-modal bug**: the `?edit=<id>` deep-link re-opened the modal right
-   after saving, since saving reloads the list while the query param is
-   still in the URL, re-triggering the watching `useEffect`. Fixed in both
-   `customers/page.tsx` and `products/page.tsx` with a ref tracking which id
-   was already auto-opened.
-4. **Pre-existing build-blocking bug found only when actually deploying**:
-   `orders.ts`'s `new Date(data.orderDate)` failed `tsc` since `orderDate` is
-   optional/nullable (to support bulk-imported operational orders without
-   commercial figures yet) — invisible to `--noEmit` since nothing in this
-   session's changes touched the line, but caught immediately by
-   `vercel build --prod`'s own `tsc` step. Fixed by mirroring the existing
-   `promisedDeliveryDate ? new Date(...) : undefined` pattern.
-5. **First full production deploy of this session's branch** — merged
-   `feature/site-import-drive-documents` to `master`, pushed, applied the
-   `Product.shape`/`dimensions`/`weightKg` migration to production via the
-   Supabase MCP, ran the full deploy dance (needed fix #4 above). Verified
-   via `/health` → 200 and `/products`/`/customers/:id` → 401.
-6. **Real product catalog import** — 30 RECD KVA variants imported from
-   `RECD_Full_GA_Extraction.xlsx` directly into production via the Supabase
-   MCP. `RECD-250` (had a real order attached) was **updated in place**
-   rather than deleted despite the user's "delete the existing products,
-   they were test" instruction — the delete-guard would have refused it
-   anyway. The other test row (`recd`/`triangle`, 0 references) was deleted
-   as genuine junk.
-7. **Real site data import** — 29 orders+sites imported for "Ethen Power
-   Solutionns Private Limited" from a local `Site and location Ethen.xlsx`,
-   matched to the product catalog by KVA. One row's KVA (810) didn't exist
-   in the master GA extraction and had dimensions identical to a nearby 910
-   KVA row — flagged to the user as a likely typo; user confirmed it was
-   genuine, so `RECD-810` was created as a new product rather than skipped
-   or coerced.
-8. **`Site.companyName` was stored/returned by the API but never rendered**
-   except a buried edit field — surfaced by the Ethen import. Added to Sites
-   list, Site detail (now the page header), Orders list, Order detail, and
-   Customer detail's per-order site cards.
-9. **Staff can now add a vendor directly** — previously only public
-   self-registration → pending → staff approve/reject existed, no path for
-   staff to add an already-known-and-trusted vendor. Added `POST /vendors`
-   (reusing the existing `manage_vendors` permission, confirmed via direct
-   query before coding since the ask sounded like a permissions gap but
-   wasn't) that creates the vendor pre-approved with an immediate contact
-   login, reusing the `/approve` route's login-creation logic.
-
-### Finance module — built from scratch (2026-07 → 2026-08)
-Zan-APP's Prisma schema originally had no accounting/invoicing tables at
-all. Built out over several sessions: Quotations, Invoices (proforma + tax
-invoice, issue/payment/edit-with-audit-log flows, TDS as a payment method,
-multi-row payment recording), Purchase Orders, Expenses, and a Finance
-dashboard — all sharing GST-aware `computeDocumentTotals` (CGST+SGST
-intra-state, IGST inter-state) and a shared `nextDocumentNumber()` sequence
-generator (`DocumentSequence` table) so document numbers stay strictly
-gap-free per financial year. Product-catalog-backed line items require
-description/HSN/qty/price/tax; free-text ("no product") lines are allowed
-but can't later convert into an Order.
-
-Recurring bug pattern, hit **three separate times** (PO HSN field,
-quotation Product picker, invoice edit line-items): a field existed
-correctly in component state and the API payload, but the actual
-`<input>`/`<select>` was never rendered in JSX — data silently never made it
-in from the UI even though the backend fully supported it. Worth
-specifically checking for "field in state but not in JSX" whenever a report
-says "I can't set X" on any document form.
-
-Production data hygiene: real invoices entered and sample/seed data removed
-(2026-07); a later full pass (2026-07-29) wiped all remaining test/sample
-orders, sites, vendors, complaints, work orders, and 4 leftover test-user
-logins from production, leaving only 4 real invoices and 2 real staff logins
-(Super Admin + Finance) — last deliberate clean-slate reset before real
-usage began.
-
-### Print/PDF layout (2026-07-21 → 2026-07-25)
-Quotation/Invoice/PO print pages went through several redesign iterations
-(header/footer contact fields, terms-as-editable-bullets, a running
-header/footer tried then reverted for overlapping content, background-
-graphics and font fixes). Final state: single non-repeating header/footer,
-bundled Tinos font, editable per-document terms and footer note. **Lesson
-that stuck**: verify print output via a real Playwright PDF render, not
-on-screen checks alone — that's what caught the background-graphics bug.
-
-### In-app AI agent — built and deployed (2026-08-09 → 2026-08-12)
-Floating chat-bubble assistant, backend in `apps/api/src/agent/`, built in
-stages:
-1. **Google Drive document search** — `googleDrive.ts`/`docExtract.ts`/
-   `driveSearch.ts`, searches `ZanF_DropBox`, extracts PDF/DOCX text (PDF
-   extraction is a lazy dynamic import — see the pdf-parse crash below).
-2. **Multi-provider LLM support** — `AgentLlmProvider` table (AES-256-GCM
-   encrypted API keys via `AGENT_SECRETS_KEY`), any Anthropic or
-   OpenAI-compatible provider (OpenAI/Gemini/Groq/DeepSeek/OpenRouter/
-   Together/NVIDIA/custom), automatic fallback across providers in priority
-   order on failure, a live model-picker in Settings.
-3. **Chat bubble + persistence** — `AgentConversation` table (JSON message
-   blob per thread), Super-Admin-only visibility toggle
-   (`agentVisibleRoleKeys`), a daily Vercel Cron (`CRON_SECRET`-protected)
-   deleting conversations older than 30 days.
-4. **9 read tools + 1 detail tool** (customers/vendors/quotations/invoices/
-   POs/expenses/orders-sites/work-orders/complaints, each mirroring its REST
-   route's exact permission and row-level scoping) plus **4 confirm-gated
-   write tools** (`create_expense`, `create_purchase_order`,
-   `create_quotation`, `create_invoice`) on a reusable `AgentPendingAction`
-   infrastructure — the agent proposes with a human-readable preview, only an
-   explicit confirm click actually writes, using the exact same create logic
-   as the real REST routes.
-5. **HSN/SAC made mandatory everywhere** (2026-08-11) after the write tools
-   were observed inventing plausible-but-fake HSN codes — fixed at the
-   shared Zod schema level (`lineItemSchema.hsnCode` now required), closing
-   the gap for the agent and every create/edit form at once, plus fixed the
-   root cause: the PO create form had the same "field in state, missing from
-   JSX" bug.
-6. **First production deploy** (2026-08-12) — three missing Prisma
-   migrations applied directly to `zan-app` Supabase, `CRON_SECRET` set on
-   `zan-app-api`, deploy dance run for the first time for this code. A stale
-   type bug (`hsnCode?: string` vs. the now-mandatory `hsnCode: string`) was
-   caught and fixed in the process.
-7. **First deploy crashed on boot** — found via `vercel logs`, not a user
-   report. `docExtract.ts` had a static top-level `import { PDFParse } from
-   "pdf-parse"`; `pdf-parse` tries to load an optional native
-   `@napi-rs/canvas` package, unavailable on Vercel's Linux runtime, and its
-   fallback throws `ReferenceError: DOMMatrix is not defined` **at
-   require-time** — on the startup import chain, so that one throw crashed
-   the entire API including `/health`. Fixed by making the `pdf-parse`
-   import a **dynamic `await import()`** scoped inside the PDF-extraction
-   branch, wrapped in try/catch, confining any future failure to "PDF
-   extraction unavailable" instead of an app-wide outage. **General lesson:
-   any dependency with optional native bindings should be dynamically
-   imported, not statically, if it sits near a serverless app's startup
-   chain.**
-Fully live in production as of 2026-08-12, gated behind the two Settings
-configuration steps (agent visibility + at least one LLM provider).
-
-### Quotation → Order conversion was completely broken (2026-08-12)
-Clicking "Convert to order" on an accepted quotation always failed with
-`400 Quotation needs at least one line with a product`. Same "field in
-state, missing from JSX" pattern as the PO/HSN bug: neither the New nor Edit
-quotation modal ever rendered a Product `<select>`, so no quotation could
-ever have a `productId` set, and every Edit save silently stripped
-`productId` off existing lines too. Fixed by adding the missing dropdown to
-both modals (frontend-only). Shipped via normal `admin-web` auto-deploy.
-
-### Quotations couldn't be deleted (2026-08-12)
-No delete capability existed anywhere for quotations. Added
-`DELETE /quotations/:id` (refuses if already converted to an order or has
-an invoice/proforma created from it, so real financial records can never be
-orphaned) plus a Delete button on both the list and detail page. Backend
-route — needed the full deploy dance; verified live
-(`DELETE /quotations/<fake-id>` → 401, confirming the route exists).
-
----
-
-*History prior to 2026-08-12 was condensed into the changelog above from a
-much longer section-by-section log (originally §1–§66). If a specific
-historical decision's full rationale is needed and isn't captured here, it's
-recoverable from git history on this file.*
+3. Delete stale output: `Remove-Item -Recurse -Force .vercel\output, dist -ErrorAction SilentlyContinue`
+   (a leftover `.vercel\output` can otherwise be deployed silently).
+4. `npx vercel build --prod 2>&1 | Tee-Object build.log` — usually 5–20 min (once ~50), almost
+   all `@vercel/nft` tracing; rising CPU/memory is normal. Grep the log for errors afterwards.
+5. Confirm the new code is in the output, e.g.
+   `Select-String -Path .vercel\output\functions\api\index.func\apps\api\dist\routes\<file>.js -Pattern "<new string>"`.
+6. **Patch `@recd/shared`** (the workspace symlink doesn't survive tracing on Windows):
+   a. List `.vercel/output/functions/` and patch **every** `*.func` present (layout varies by CLI
+      version: `api/index.func`, sometimes also `index.func`).
+   b. In each `*.func/.vc-config.json`, delete the whole `"filePathMap"` key if it mentions
+      `@recd/shared` (otherwise deploy fails `ENOTDIR ... node_modules/@recd/shared`).
+   c. Create `node_modules/@recd` first, then copy `packages/shared/dist` + `package.json` into
+      `*.func/node_modules/@recd/shared`, and into `*.func/apps/api/node_modules/@recd/shared`
+      where that directory exists.
+   d. Make `apps/api/node_modules/@recd/shared` exist for the local preflight as a **junction**:
+      `New-Item -ItemType Junction -Path node_modules\@recd\shared -Target ..\..\packages\shared`.
+      Remove it after deploying with `(Get-Item node_modules\@recd\shared).Delete()` — never
+      leave a real copy there (it shadows the workspace link and hides future shared changes).
+   Write this as a `.ps1` and run with `-File`.
+7. `npx vercel deploy --prebuilt --prod`
+8. Verify: `GET /health` → 200; `POST /auth/login` with bad creds → 401 (proves DB/bcrypt ran);
+   an auth route like `GET /agent/providers` → 401 not 404; `npx vercel logs <url>` clean. A 401
+   does **not** prove a brand-new route exists (router-level `authenticate` answers first) —
+   test with a valid token + real id, or rely on step 5.
+
+Untried simplification: plain `vercel deploy --prod` (remote build) for the API might remove
+steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first.
+
+## 9. Recurring gotchas
+
+- **Field in state and payload but no `<input>` in JSX** — happened 3+ times (PO HSN, quotation
+  product, invoice edit). Check this first when "I can't set X".
+- Forgetting **`Order.lineItems`** in includes (agent, Sites list, Orders list).
+- **Check what the API already returns** before adding backend code — twice the data was there.
+- **PATCH responses are thin echoes** — reload with GET, don't merge (09-09 crash).
+- **Shared changes need a rebuild**; watch for a stale real copy in
+  `apps/api/node_modules/@recd/shared` shadowing the workspace link.
+- **`NODE_ENV=production` is set globally on the dev machine**: npm silently omits devDeps
+  (fixed by `.npmrc include=dev`; check `npm config get omit`), and OTP `devCode` is hidden
+  locally too.
+- **`npm install <pkg>` crashes** (arborist, null `location`): hand-edit `package.json`, run bare
+  `npm install` (add `--ignore-scripts` on EPERM, then build shared + `npx prisma generate`).
+- **`next dev` is broken locally** (globals.css through the RSC CSS loader) — use
+  `next build && next start`, with cwd **inside `apps/admin-web`** (Tailwind content glob is
+  cwd-relative; otherwise you get unstyled pages with only a warning). Kill whatever listens on
+  6011, not the launcher PID.
+- **Windows Prisma EPERM** on `query_engine-windows.dll.node`: kill the stray `node.exe`
+  (`Get-Process node | ? { $_.Modules.FileName -like '*query_engine*' }`).
+- **Windows symlink EPERM** in local `vercel build` for admin-web (Build Output step symlinks
+  identical functions; not a `next.config.js` issue). Use remote deploys, enable Developer Mode
+  (admin once), or build in WSL2.
+- **Native-binding deps (pdf-parse) must be dynamically imported** — a static import crashed the
+  whole API at boot.
+- Express: literal paths before `/:id`. DELETEs return 204 with an empty body (`apiClient`
+  handles it).
+- react-markdown v9: destructure `node` out of component props.
+- "Redeploy" on an old Vercel dashboard row rebuilds that pinned commit, not the latest.
+- Tooling: Desktop Commander strips `$` from inline commands — write `.ps1`/`.js` files and run
+  with `-File`. Cloud sessions without machine access can't run the API deploy. The agent can't
+  log into admin-web with a password; verify via SQL (Supabase MCP) and API calls. Supabase MCP
+  prod calls are intermittently blocked and need an explicit "proceed".
+- Work done from the mobile app lands on unmerged `claude/<slug>` branches — check
+  `git branch -a` before rebuilding anything.
+
+## 10. Current open items (as of 2026-09-27)
+
+**Deploy / decisions for Ferose**
+- **Three stacked PRs unmerged**: #3 (`security/google-only-super-admin` → master), #4
+  (`security/high-priority-hardening` → #3), then the 2026-09-27 open-items PR (→ #4). Merge in
+  that order. Then: deploy `zan-app-api` (§8), run the pending migration, make sure
+  `CRON_SECRET` is set on `zan-app-api`, verify, then admin-web.
+- **NVIDIA fallback returns HTTP 410.** Model id/key live in the `AgentLlmProvider` row, not
+  code. With the NVIDIA key, check `GET https://integrate.api.nvidia.com/v1/models`; then in
+  Settings → Agent providers try a current tool-calling model such as
+  `nvidia/llama-3.3-nemotron-super-49b-v1.5` or `mistralai/mistral-nemotron`. If every model
+  410s while `/models` works, the account lacks NVIDIA's "Public API Endpoints" entitlement
+  (help@build.nvidia.com) — or replace NVIDIA with another provider. Until fixed, the code skips
+  it and reports Gemini's error.
+- **admin-web auto-deploy**: GitHub commit statuses show the Vercel app building this repo on
+  master pushes (09-05, 09-09, 09-17) and PR branches (09-22); only `9c2ef20` (09-08) has none.
+  So the project is linked to this repo (not Platino) and webhooks work. Unverified: whether
+  those builds were **Production** or Preview. Check in Vercel → admin-web → Settings → Git
+  (Production Branch = `master`, Ignored Build Step empty) and Deployments (environment of the
+  09-09/09-17 builds). Until confirmed, verify `app.zanf.org` after every push.
+- **Agent tooling access**: the Vercel MCP connectors available to agents can't see the
+  `admin-web`/`zan-app-api` projects (403/empty) — reconnect with both projects authorized if
+  agents should inspect Vercel.
+
+**Needs real-user click-through (no code owed)**
+- Order value auto-fill, "Populate cost", "Update pricing"/"Add pricing" links (math is
+  unit-tested; UI isn't).
+- Accounting-Lite A–D (ledgers, CN/DN issue flow, split payments + TDS register, GSTR-1/3B vs a
+  real filing), vendor advances + order tags, agent Accounting reads, DataTable Columns/filters
+  and Print, "Create Drive folders", delete actions after the `apiClient` fix, Reports (filters,
+  Print, CSV), multi-product new order, order edit Save.
+
+**Data waiting on the user**
+- `RecdDelivery` is mostly empty for Ethen's 29 sites (only INTERGLOBE/Devanahalli and
+  VRL/Peenya have rows, both incomplete). Import from `Material_Delivery_Status_version_1.xlsx`
+  awaits approval; confirm whether sheet "BPCL, DEVANAGONTI" = DB "BPCL Hosakote".
+
+**Known gaps / tech debt**
+- Bill (vendor invoice) detail page has no advance section (apply advances from
+  `/finance/vendor-payments`).
+- No admin badge/filter for `requestedByCustomer` orders; customer product picker shows no
+  pricing.
+- Customer agent visibility toggle off in prod (deliberate). Most notification templates generic.
+- `Product.shape` enum too coarse (rich text parked in `ratingSpec`).
+- `apps/api/scripts/verify*.ts` throwaway scripts; lint not configured.
+- No audit log for quotations/POs (invoices have `InvoiceEditLog`).
+- Agent may invent HSN codes (Zod rejects them); no agent Drive upload; no agent edit tools;
+  mic absent on Firefox/iOS.
+- Next 16-only PostCSS advisory and Expo/RN high/critical advisories deferred (major upgrades).
+- API build slowness levers untried: Defender exclusion; `googleapis` → `@googleapis/drive`
+  (needs a real Drive OAuth round-trip test).
+
+## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-09-27 — Management couldn't see Orders/Sites/Customers (PR #5).** The code is fully
+  permission-driven (no role-name gates), so the cause is prod `RolePermission` rows: Management
+  never received the grants seed.ts defines (prod isn't seeded; grants were hand-applied per
+  role). New migration `20260927120000_management_all_permissions_except_settings` grants
+  Management every permission except `manage_settings` (and removes it if present); role
+  definitions moved to `prisma/roleDefinitions.ts` with tests; seed revokes `manage_settings`
+  from the all-but-settings roles; staff users can no longer carry a stray `vendorId` (which
+  empties Sites). **Deploy: `prisma migrate deploy`.**
+
+- **2026-09-27 — Open-items sweep (PR stacked on #4).** Vendor members blocked on every login
+  path and in `authenticate` unless the vendor is approved; agent fallback skips 410 providers,
+  logs every failure and never masks the primary error; first automated tests (`npm test`);
+  auto-deploy and Windows EPERM investigated (docs only); handover contradictions fixed and this
+  file compressed.
+- **2026-09-22 — Security hardening (PR #4).** Agent tool harness removed from prod; crons fail
+  closed on `CRON_SECRET`; Drive reads limited to the folder tree; crypto RNG for OTP/temp
+  passwords; OTP/phone data out of logs; Next 15.5.25, Nodemailer 10.0.10, PostCSS 8.5.28.
+- **2026-09-22 — Primary Super Admin Google-only (PR #3).** `authPolicy.ts`, migration
+  `20260922090000_make_super_admin_google_only`, seed updated.
+- **2026-09-17 — Deployed** `2403451` (order value hidden from customers, `view_orders`) and
+  `969de96` (customer GSTIN/State on create), API first.
+- **2026-09-09 — Multiple products on a new order**; inline "+ New product" removed.
+- **2026-09-09 — Order edit Save crash fixed** (reload via GET instead of merging PATCH echo).
+- **2026-09-09 — Order value auto-fill** from customer pricing, "Update pricing" links, then
+  "Populate cost" (sums every product) replacing the single "Use" button.
+- **2026-09-08/09 — Incident:** order edit (`9c2ef20`) wasn't live; found the global
+  `NODE_ENV=production` devDeps bug (fixed with `.npmrc`) and the Windows symlink EPERM; switched
+  admin-web to remote `vercel deploy --prod`.
+- **2026-09-05 — Order edit** (`updateOrderSchema`, `PATCH /orders/:id`, staff-only).
+- **2026-09-05 — Customer portal** multi-site, customer order requests, notification bell;
+  agent multi-tool name search, table link rule, `search_site_status_updates`.
+- **2026-09-05 — Incident:** prod API outage from the `filePathMap` / `@recd/shared` deploy issue
+  (now step 6b of the API procedure) plus a missing prod migration.
+- **2026-09-03 — Case-insensitive e-mail lookup** fix for silently swallowed OTP requests
+  (`0f96d3f`).

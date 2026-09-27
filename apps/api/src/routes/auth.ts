@@ -8,7 +8,7 @@ import { verifyGoogleIdToken } from "../lib/googleAuth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { authenticate, AuthenticatedRequest } from "../middleware/auth";
 import { rateLimit } from "../middleware/rateLimit";
-import { isGoogleOnlyStaffEmail } from "../lib/authPolicy";
+import { isGoogleOnlyStaffEmail, isVendorAccessBlocked } from "../lib/authPolicy";
 
 export const authRouter = Router();
 
@@ -65,13 +65,19 @@ authRouter.post("/login", authLimiter, async (req, res) => {
 
   const user = await prisma.user.findUnique({
     where: { email: parsed.data.email },
-    include: { role: true },
+    include: { role: true, vendor: { select: { status: true } } },
   });
   if (!user?.passwordHash || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
     return res.status(401).json({ error: "Invalid email or password" });
   }
   if (!user.isActive) {
     return res.status(401).json({ error: "Account is inactive" });
+  }
+  // Engineers of a vendor that is not (or no longer) approved - pending, rejected, archived -
+  // must not get a session. Same generic response as a bad password (see PR #3's pattern) so
+  // the vendor's status isn't disclosed to whoever holds the credentials.
+  if (isVendorAccessBlocked(user)) {
+    return res.status(401).json({ error: "Invalid email or password" });
   }
 
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
@@ -99,9 +105,16 @@ authRouter.post("/google", authLimiter, async (req, res) => {
     return res.status(401).json({ error: "Google sign-in failed" });
   }
 
-  const user = await prisma.user.findUnique({ where: { email: googleEmail.toLowerCase() }, include: { role: true } });
+  const user = await prisma.user.findUnique({
+    where: { email: googleEmail.toLowerCase() },
+    include: { role: true, vendor: { select: { status: true } } },
+  });
   if (!user) return res.status(401).json({ error: "No staff account is linked to this Google account" });
   if (!user.isActive) return res.status(401).json({ error: "Account is inactive" });
+  // Same vendor gate as /login; reuse the "not linked" wording so vendor status isn't disclosed.
+  if (isVendorAccessBlocked(user)) {
+    return res.status(401).json({ error: "No staff account is linked to this Google account" });
+  }
 
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({ token, user: { id: user.id, name: user.name, role: user.role.key } });
@@ -206,8 +219,11 @@ authRouter.post("/customer/verify", authLimiter, async (req, res) => {
   // page, which would be a dead end since they have no current password to enter.
   const userWithRole = await prisma.user.findUniqueOrThrow({
     where: { id: contact.id },
-    include: { role: true },
+    include: { role: true, vendor: { select: { status: true } } },
   });
+  // Defensive: a customer contact should never carry a vendorId, but if one does, apply the
+  // same vendor gate as every other login path.
+  if (isVendorAccessBlocked(userWithRole)) return res.status(401).json({ error: "Invalid or expired OTP code" });
   if (userWithRole.mustChangePassword) {
     await prisma.user.update({ where: { id: contact.id }, data: { mustChangePassword: false } });
   }
@@ -239,8 +255,16 @@ authRouter.post("/otp/request", authLimiter, async (req, res) => {
   const parsed = requestOtpSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const user = await prisma.user.findUnique({ where: { phone: parsed.data.phone } });
+  const user = await prisma.user.findUnique({
+    where: { phone: parsed.data.phone },
+    include: { vendor: { select: { status: true } } },
+  });
   if (!user) return res.status(404).json({ error: "No account found for that phone number" });
+  // Don't mint/send an OTP for an inactive user or a blocked vendor's engineer - /otp/verify
+  // would refuse it anyway. Respond exactly as if it had been sent.
+  if (!user.isActive || isVendorAccessBlocked(user)) {
+    return res.json({ ok: true, message: "OTP sent to your registered email" });
+  }
 
   const code = generateOtpCode();
   await prisma.otpCode.create({
@@ -261,8 +285,16 @@ authRouter.post("/otp/verify", authLimiter, async (req, res) => {
   const parsed = verifyOtpSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const user = await prisma.user.findUnique({ where: { phone: parsed.data.phone }, include: { role: true } });
+  const user = await prisma.user.findUnique({
+    where: { phone: parsed.data.phone },
+    include: { role: true, vendor: { select: { status: true } } },
+  });
   if (!user) return res.status(404).json({ error: "No account found for that phone number" });
+  // Previously this path checked neither isActive nor vendor status - a deactivated user or a
+  // rejected/archived vendor's engineer could get a fresh token here. Generic failure either way.
+  if (!user.isActive || isVendorAccessBlocked(user)) {
+    return res.status(401).json({ error: "Invalid or expired code" });
+  }
 
   const otp = await prisma.otpCode.findFirst({
     where: { userId: user.id, code: parsed.data.code, consumedAt: null, expiresAt: { gt: new Date() } },
@@ -306,7 +338,7 @@ async function findEmailOtpEligibleUser(email: string) {
   // the existing password login (see vendors.ts's approval flow, which is what provisions
   // this login in the first place).
   if (user.vendorId) {
-    return user.vendor?.status === "approved" ? user : null;
+    return isVendorAccessBlocked(user) ? null : user;
   }
 
   // Internal staff (no customerId/vendorId) don't use this door.

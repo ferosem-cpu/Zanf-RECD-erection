@@ -5,6 +5,7 @@ import { createUserSchema, updateUserSchema, PERMISSION_KEY, ROLE_KEY, VENDOR_ST
 import { asString } from "../lib/params";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
+import { roleAllowsVendor } from "../lib/authPolicy";
 
 export const usersRouter = Router();
 usersRouter.use(authenticate);
@@ -47,6 +48,11 @@ usersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (req
   // Erection engineers are subcontracted: they must belong to an approved vendor.
   if (parsed.data.roleKey === ROLE_KEY.ERECTION_ENGINEER && !parsed.data.vendorId) {
     return res.status(400).json({ error: "An erection engineer must be assigned to a vendor" });
+  }
+  // Only vendor-member roles may be tied to a vendor - a vendorId on a staff role would
+  // vendor-scope every site query for that user (empty Sites list for e.g. Management).
+  if (parsed.data.vendorId && !roleAllowsVendor(parsed.data.roleKey)) {
+    return res.status(400).json({ error: "Only erection engineers can be assigned to a vendor" });
   }
   if (parsed.data.vendorId) {
     const vendor = await prisma.vendor.findUnique({ where: { id: parsed.data.vendorId } });
@@ -129,6 +135,9 @@ usersRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_USERS), async (r
     const role = await prisma.role.findUnique({ where: { key: parsed.data.roleKey } });
     if (!role) return res.status(400).json({ error: `Unknown role key: ${parsed.data.roleKey}` });
     data.roleId = role.id;
+    // Moving a vendor engineer to a non-vendor role detaches them from the vendor; otherwise the
+    // leftover vendorId keeps vendor-scoping their site queries under the new (staff) role.
+    if (!roleAllowsVendor(role.key) && existing.vendorId) data.vendorId = null;
   }
 
   const updated = await prisma.user.update({
