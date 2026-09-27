@@ -64,13 +64,12 @@ and deployments going forward. Cloned 2026-07-19 from
 `github.com/ferosem-cpu/Zanf-RECD-erection` (a one-time snapshot, not kept in
 sync with Platino's own repo).
 
-**Current state:** working tree clean; latest work is Order value auto-fill from customer
-pricing (2026-09-09, see top of Changelog), order editing (`PATCH /orders/:id` + an "Edit
-order" form), a project-level `.npmrc` fix for a `NODE_ENV=production`/npm devDependency bug
-on this machine, and a switch to remote (`vercel deploy --prod`, no `--prebuilt`) deploys for
-`admin-web` after local Windows builds started failing on a symlink step (see Changelog,
-2026-09-08/09). Start a new session by reading "Current open items" and the top of
-"Changelog" below.
+**Current state:** the primary Super Admin (`ferosem@gmail.com`) is now Google-only at both
+the API-policy and database layers (2026-09-22; see top of Changelog). The latest earlier
+feature work is Order value auto-fill from customer pricing (2026-09-09), order editing
+(`PATCH /orders/:id` + an "Edit order" form), and remote (`vercel deploy --prod`, no
+`--prebuilt`) admin-web deploys after local Windows builds started failing on a symlink step.
+Start a new session by reading "Current open items" and the top of "Changelog" below.
 
 ## Quick facts
 
@@ -623,6 +622,21 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### 2026-09-22 — Primary Super Admin changed to Google-only authentication
+
+- `ferosem@gmail.com` can no longer use `POST /auth/login`; the API returns the same generic
+  invalid-credentials response used for other failed password logins, avoiding account-policy
+  enumeration. Google ID-token login through `POST /auth/google` remains enabled.
+- Added `apps/api/src/lib/authPolicy.ts` as the single source of truth for Google-only staff
+  addresses.
+- Added Prisma migration `20260922090000_make_super_admin_google_only`, which clears the
+  existing production `passwordHash` for `ferosem@gmail.com`. Run `prisma migrate deploy`
+  against production before or with the API rollout.
+- Updated the seed so future seed runs create this account without a password and remove any
+  legacy password hash from an existing copy. Other staff accounts keep their current password
+  authentication behavior.
+- Verification: API TypeScript build passes after installing lockfile dependencies.
 
 ### Deploy: order value visibility fix + customer GSTIN/State fields, both now live (2026-09-17)
 

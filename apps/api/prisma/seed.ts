@@ -1,5 +1,6 @@
 import { PrismaClient, SitcPhase } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { isGoogleOnlyStaffEmail } from "../src/lib/authPolicy";
 import {
   ROLE_KEY,
   PERMISSION_KEY,
@@ -239,17 +240,19 @@ async function seedSampleUsers() {
   ];
 
   for (const u of internalUsers) {
+    const googleOnly = isGoogleOnlyStaffEmail(u.email);
     await prisma.user.upsert({
       where: { email: u.email },
       update: {
         roleId: roleIdByKey.get(u.roleKey)!,
         isActive: true,
         mustChangePassword: false,
+        ...(googleOnly ? { passwordHash: null } : {}),
       },
       create: {
         name: u.name,
         email: u.email,
-        passwordHash,
+        passwordHash: googleOnly ? null : passwordHash,
         title: u.title,
         roleId: roleIdByKey.get(u.roleKey)!,
         isActive: true,
