@@ -77,7 +77,7 @@ Start a new session by reading "Current open items" and the top of "Changelog" b
 |---|---|
 | **Local ports** | API `4011`, admin-web `6011` (deliberately different from Platino's `4001`/`6001` so both repos can run side by side — see gotcha below). Use `preview_start(name: "zan-api")` / `preview_start(name: "zan-admin-web")`. |
 | **Production DB** | Supabase project `zan-app`, ref `idqzupopsuusoihpmoqc`, region `ap-south-1` (Mumbai). |
-| **Vercel — admin-web** | `admin-web` project, **git-connected** in theory (push to `master` should auto-deploy) — **but this stopped firing at some point before 2026-09-08** (4+ days of commits never auto-deployed; root cause not found, see Changelog). Until that's diagnosed, deploy manually with `vercel deploy --prod` (no `--prebuilt` — local Windows builds fail on a symlink step, see Changelog) from the repo root. Production URL/alias: `app.zanf.org` (also reachable at `admin-web-three-blush.vercel.app`). |
+| **Vercel — admin-web** | `admin-web` project, git-connected to **this repo** (`ferosem-cpu/Zanf-RECD-erection`). GitHub commit statuses prove the Vercel app still builds on push: `Vercel – admin-web` "Deployment has completed" statuses exist on master pushes 2026-09-05, 09-09 and 09-17 and on PR-branch pushes 09-22 (see 2026-09-27 Changelog). **Whether a master push actually updates production is unverified** (no Vercel project access from the agent this session), so after any push confirm the new build is on `app.zanf.org`; if not, deploy with `vercel deploy --prod` from the repo root (remote build — **never `--prebuilt`**, local Windows builds fail on a symlink EPERM). Production URL/alias: `app.zanf.org` (also `admin-web-three-blush.vercel.app`). |
 | **Vercel — api** | `zan-app-api` project (`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`, team `ferose-salahudeen-s-projects`), **NOT git-connected** — needs the manual deploy dance below every time. URL: `zan-app-api.vercel.app`. |
 | **Google Drive (agent doc search + folder creation)** | Dedicated account `zanfpowersystems@gmail.com`, folder `ZanF_DropBox` (id `1M3V4MdO0NLMHPJMr7naK0EFGLIT8aIRU`). OAuth client `zan-app-agent-drive` (Desktop type) lives in Cloud project `MyPersonalAgent` (`mypersonalagent-503004`), owned by `ferosem@gmail.com` — **not** `zanfpowersystems@gmail.com`, which only owns the Drive folder itself. Consent screen was **published to production 2026-08-18**, which removed the old 7-day Testing-mode refresh-token expiry (confirmed: a token minted after publishing has no `refresh_token_expires_in` in Google's response at all, vs. exactly 604760s/7d before). Still shows an "unverified app" warning on re-consent since Drive scopes need Google review to fully verify — harmless, just click through Advanced. **Token scope is `drive.readonly` + `drive.file`** (as of 2026-08-18, later) — readonly alone can search/read pre-existing shared documents but can't create anything, which silently broke "Create Drive folders" even after the expiry was fixed; `drive.file` adds create/manage access scoped to files the app itself creates. Regenerate via `apps/api/scripts/getDriveRefreshToken.js` if this ever needs redoing (kept in the repo, not a one-off). |
 | **Working dir on user's machine** | `D:\Projects\Zan-APP` (reached via the Desktop Commander MCP — see tooling note below, not this harness's own `device_bash`). |
@@ -145,7 +145,23 @@ needs this sequence from `apps/api`:
    build's output before deploying** - don't rely on step 8's "401 not 404"
    check alone for a *new* route (see why below):
    `Select-String -Path ".vercel\output\functions\api\index.func\apps\api\dist\routes\<file>.js" -Pattern "<distinctive string from the new code>"`.
-6. **Patch `@recd/shared`** into the spots the npm-workspaces symlink doesn't
+6. **Patch `@recd/shared`** — ⚠ **Authoritative current procedure (reconciled 2026-09-27;
+   supersedes both the "3 spots" history below and the 2026-09-05 incident's 6-step list, which
+   are kept only as background):**
+   a. List `.vercel/output/functions/` — patch every `*.func` that exists (the layout changes
+      with CLI version: `api/index.func`, sometimes also `index.func`).
+   b. In each `*.func/.vc-config.json`, if there is a `"filePathMap"` key mentioning
+      `@recd/shared`, **delete the whole key** (otherwise `deploy --prebuilt` fails with
+      `ENOTDIR ... node_modules/@recd/shared`, as on 2026-09-05).
+   c. Create `node_modules/@recd` first, then copy real files (`packages/shared/dist` +
+      `packages/shared/package.json`) into `*.func/node_modules/@recd/shared` and, if that
+      directory exists, `*.func/apps/api/node_modules/@recd/shared`.
+   d. For the local preflight, make `apps/api/node_modules/@recd/shared` exist as a **junction**
+      (`New-Item -ItemType Junction -Path apps\api\node_modules\@recd\shared -Target packages\shared`),
+      deploy, then remove it with `(Get-Item ...).Delete()` — never leave a real copy there
+      (a stale real copy shadows the workspace link and silently hides future shared changes).
+   The older narrative follows:
+   Patch into the spots the npm-workspaces symlink doesn't
    survive Vercel's Windows-symlink-unaware function tracer — this step is
    required after every fresh build, since each build's own install step
    wipes it (confirmed 2026-08-28: the local `apps/api/node_modules/@recd/shared`
@@ -228,8 +244,10 @@ needs this sequence from `apps/api`:
    was never registered falls through to Express's bare fallback 404, which
    doesn't) or trust step 5's build-output check instead.
 
-`admin-web` needs none of this — it's git-connected, so `git push` to
-`master` is enough.
+`admin-web` needs none of this dance, but a `git push` to `master` is **not proven to be
+enough**: confirm the new build is live on `app.zanf.org` after pushing and, if it isn't, run
+`vercel deploy --prod` from the repo root (remote build; never `--prebuilt` from Windows). See
+the 2026-09-27 Changelog entry for what is and isn't known about auto-deploy.
 
 **Established deploy ordering rule (backend-first):** when a feature spans
 both apps, deploy `zan-app-api` and confirm it live (`/health` → 200) *before*
@@ -278,7 +296,7 @@ same session:
 
 - **Never push one commit that touches both `admin-web` and `apps/api` when
   the frontend change depends on a new/changed API field.** `admin-web`
-  auto-deploys instantly on push; `zan-app-api` doesn't deploy until someone
+  can go live as soon as it's pushed/deployed; `zan-app-api` doesn't deploy until someone
   runs the manual dance, which can be minutes to hours later. **Caused a real
   production outage 2026-08-20**: a commit added `order.product`-dependent
   Sites columns with no optional chaining (assumed always present) in the
@@ -387,60 +405,39 @@ same session:
   check for these before assuming a feature doesn't exist or rebuilding it
   from scratch.**
 
-## Current open items (as of 2026-09-17, updated later same day)
+## Current open items (as of 2026-09-27)
 
-- **RESOLVED same day: Vercel CLI login + connector scoping, both fixes deployed.**
-  - The CLI login blocker (`vercel whoami`/`pull`/`build` all failing "A new login is
-    required") was fixed by running `npx vercel login` and completing the device-auth flow
-    (`vercel.com/oauth/device?user_code=...`) in the browser — no cached credentials existed
-    on this machine, this was a genuine first login for CLI 59.20.0. `npx vercel whoami` now
-    reports `ferosem-1321`, correct team `ferose-salahudeen-s-projects`.
-  - Separately, the Claude↔Vercel MCP connector (`mcp__Vercel__*` tools) had been scoped
-    (via "Sign in with Vercel" OAuth) to only 5 unrelated projects, NOT `zan-app-api`/
-    `admin-web` — despite matching the correct team ID. Vercel's dashboard has **no UI
-    anywhere** to edit an OAuth connection's authorized-projects list after the fact (checked
-    Team Integrations, Integrations Console, Connect page, Security & Privacy, and the
-    connection's own detail page under Account Settings → Sign in with Vercel). The only fix
-    is disconnecting/reconnecting the connector from **Claude's own side** (Settings →
-    Connectors → Vercel → reconnect, re-picking both projects at the consent screen) — done,
-    confirmed via `mcp__Vercel__get_project` succeeding for both project IDs afterward.
-  - **Both commits below were then deployed the same session** — `zan-app-api` via the full
-    manual deploy dance (`vercel pull` → clean → `vercel build --prod` → patch `@recd/shared`
-    into the 3 documented spots → `vercel deploy --prebuilt --prod`), verified live
-    (`GET /health` → `{"ok":true}`, `GET /orders` unauthenticated → 401 not 404, confirmed the
-    build output actually contained `VIEW_ORDERS`/`gstin`/`value: null` before deploying).
-    Then `admin-web` via `vercel deploy --prod` (remote build, no `--prebuilt`) from the repo
-    root — build succeeded clean, aliased to `app.zanf.org`, verified `GET /login` → 200.
-  - One side-effect worth knowing for next time: regaining connector access caused a stale
-    queued git-triggered auto-deploy of `zan-app-api` to fire and fail with "No entrypoint
-    found" (expected — `zan-app-api` is deliberately not git-connected per its own manual
-    deploy dance; this did NOT affect the live production alias, confirmed via `/health`
-    before the real deploy). Not a new bug, just noise from the connector reconnect.
-  - `2403451` (2026-09-09, order value visibility fix) and `969de96` (2026-09-17, customer
-    GSTIN/State fields) are **both fully live now** — DB permission grant (already live),
-    API enforcement, and admin-web frontend gating all deployed and verified together.
-- **Order value auto-fill from customer pricing + "Update pricing" links (shipped and
-  deployed 2026-09-09) not yet click-tested by a real user** - see Changelog for full detail.
-  Owed: verify the auto-fill, the blank-when-no-override case, the edit-form "Use" button, and
-  both "Update pricing"/"Add pricing" deep links against a real customer with pricing set up.
-- **`admin-web` git auto-deploy has stopped firing on push, root cause not found** (discovered
-  2026-09-08/09) — 4+ days of commits never auto-deployed before this was caught. Manual
-  `vercel deploy --prod` from the repo root works and is the current workaround. Owed: check
-  the GitHub App/webhook connection and Vercel's project Git integration settings to find why,
-  and confirm it's fixed before trusting auto-deploy again.
-- **Local (Windows) `admin-web` builds fail on a symlink EPERM in the final build-output
-  step** (`vercel build --prod` locally, not `vercel deploy --prod` remote) — Developer Mode
-  isn't enabled on this machine and a registry-based enable attempt was denied (no admin
-  rights). Until either is resolved, always deploy `admin-web` with plain `vercel deploy
-  --prod` (remote build), never `--prebuilt` from a local Windows build.
-- **New root `.npmrc` (`include=dev`) was added 2026-09-09** to work around `NODE_ENV=production`
-  being set persistently on this machine, which was silently omitting all devDependencies
-  (`typescript`, `tailwindcss`, etc.) from every `npm install` with zero error output. If a
-  future session ever sees a dev tool "not recognized" right after a successful-looking
-  install, check `npm config get omit` before assuming `node_modules` is just stale.
-- **Order editing (`PATCH /orders/:id` + "Edit order" form) shipped 2026-09-05, deployed and
-  confirmed live 2026-09-09** (delayed by the auto-deploy gap above) — see Changelog for full
-  detail and live verification.
+- **Three stacked PRs are unmerged**: #3 (`security/google-only-super-admin` → master), #4
+  (`security/high-priority-hardening` → #3) and the 2026-09-27 open-items PR (→ #4). Merge in
+  that order. Deploy `zan-app-api` first (manual procedure), run `prisma migrate deploy` for
+  `20260922090000_make_super_admin_google_only`, make sure `CRON_SECRET` is set on
+  `zan-app-api`, confirm live, then admin-web.
+- **NVIDIA agent fallback returns HTTP 410** — the model id and key are in the
+  `AgentLlmProvider` DB row, not code. Owed (user): with the NVIDIA key, check
+  `GET https://integrate.api.nvidia.com/v1/models` works; then in Settings → Agent providers try a
+  current tool-calling model id such as `nvidia/llama-3.3-nemotron-super-49b-v1.5` or
+  `mistralai/mistral-nemotron`. If every model still 410s while `/models` works, the key's
+  account lacks NVIDIA's "Public API Endpoints" entitlement (contact help@build.nvidia.com) —
+  or replace NVIDIA with another provider (e.g. Groq/OpenRouter). Code since 2026-09-27 skips
+  410 providers and always reports the primary (Gemini) error first.
+- **admin-web auto-deploy**: the "stopped firing" diagnosis is contradicted by GitHub's commit
+  statuses (Vercel builds exist for master pushes on 09-05, 09-09 and 09-17). Only `9c2ef20`
+  (09-08, the order-edit commit) has no Vercel status. Owed (user, in the Vercel dashboard →
+  admin-web → Deployments/Settings → Git): confirm Production Branch = `master`, confirm the
+  09-09/09-17 git deployments are marked **Production** (not Preview), and check "Ignored
+  Build Step" is empty. See the 2026-09-27 Changelog entry.
+- **Local Windows admin-web `vercel build` fails on symlink EPERM** — Vercel's Build Output
+  step symlinks identical functions; not caused by `next.config.js` (which has no
+  `output`/tracing settings). Use remote `vercel deploy --prod`, or enable Windows Developer
+  Mode once (needs admin), or run `vercel build` in WSL2.
+- **Lint is not set up**: `npm run lint` fails in both apps (no ESLint installed/configured;
+  `next lint` prompts interactively). Type-checking (`tsc`/`next build`) and the new
+  `npm test` are the automated checks.
+- **Needs a real user click-through**: Order value auto-fill / "Populate cost" / "Update
+  pricing" links (the math is now unit-tested, the UI isn't), plus everything listed as "not
+  click-tested" under Older open items.
+- `.npmrc` (`include=dev`) stays: it is what keeps devDependencies installed on the dev
+  machine where `NODE_ENV=production` is set globally.
 
 ## Older open items (as of 2026-08-28)
 
@@ -501,11 +498,11 @@ same session:
   every phase (see the Phase A-C bullets above), and specifically for Phase
   D — pull a GSTR-1/3B for a real filing period and have someone who
   actually files these sanity-check the numbers against last period's real
-  filing before relying on it. Also a known pre-existing gap found while
-  building this, not part of Phase D's own scope and not yet fixed: the
-  invoice detail page never got the "show issued credit notes + net
-  outstanding / Create credit note button" the plan called for back in
-  Phase B — credit notes only surface via `/finance/credit-notes` today.
+  filing before relying on it. (Corrected 2026-09-27: an earlier note here claimed the invoice detail page
+  lacks the issued-credit-note list / "Create credit note" button. That was
+  wrong — `apps/admin-web/src/app/invoices/[id]/page.tsx` has the issued-CN
+  list, a "Credit notes issued" KPI and a "Create credit note" button for
+  issued/partially-paid/paid tax invoices, exactly as the Phase B entry says.)
 - **Vendor advances (pay a supplier without a bill), and optional order-ID
   tagging on them, are both built and deployed** (2026-08-28) — see
   Changelog (two entries). Verified by hitting the real dev server over
@@ -514,8 +511,8 @@ same session:
   and confirm the split, tag an advance to an order, apply an advance to a
   bill and see the order tags line up). Also note: applying an advance only
   works from the `/finance/vendor-payments` page today — the bill detail
-  page itself still has no credit/advance section, the vendor-side
-  counterpart of the Phase B gap noted below.
+  page itself still has no credit/advance section, (this gap is real and
+  still open; unlike the invoice/credit-note side, which is complete).
 - **The in-app AI assistant now has read access to the whole Accounting-
   Lite module** (2026-08-28) — see Changelog. Three new tools:
   `get_customer_ledger`, `search_credit_notes`, `get_customer_advances`,
@@ -622,6 +619,32 @@ same session:
 ---
 
 ## Changelog (condensed)
+
+### 2026-09-27 — Open-items sweep (PR stacked on #4)
+
+- **Security**: members of a vendor that is not `approved` (pending/rejected/archived) can no
+  longer sign in by any path (`/auth/login`, `/auth/google`, `/auth/otp/*`,
+  `/auth/email-otp/*`, `/auth/customer/verify`) and their existing JWTs are refused by the
+  `authenticate` middleware on the next request. Generic invalid-credentials responses, as in
+  PR #3. Helper: `isVendorAccessBlocked()` in `apps/api/src/lib/authPolicy.ts`. `/otp/verify`
+  also now checks `user.isActive` (it never did).
+- **Agent fallback**: providers answering HTTP 410 are logged and skipped for 60 min per
+  instance (cleared when the provider is edited); every provider failure is logged; the final
+  error lists the primary provider first; adapter/key-decrypt errors on a fallback can no
+  longer mask the primary error. Same for bill / customer-PO / document extraction.
+- **admin-web auto-deploy (investigated, not changed)**: the Vercel GitHub app posts
+  `Vercel – admin-web` statuses on this repo (e.g. `da94cd0`/`1047abb` 09-05, `16d86cf` and
+  `2403451` 09-09, `969de96`/`9127f09` 09-17, PR head `3d81ed5` 09-22), so the project is linked
+  to this repo, not Platino, and git builds are firing. Only `9c2ef20` (09-08) has no status.
+  Production-vs-preview for those builds could not be checked (the Vercel connectors have no
+  access to the project).
+- **Windows symlink EPERM**: documented; no config change (not caused by `next.config.js`).
+- **Tests**: first automated tests — `npm test` (node:test via tsx) covers the vendor login
+  gate, the 410 fallback logic and the order Value auto-fill / Populate cost math (extracted to
+  `apps/admin-web/src/lib/orderValue.ts`).
+- **Docs**: fixed the Quick facts / "git push is enough" contradiction, reconciled the two
+  `@recd/shared` patch procedures, corrected the false "invoice page has no credit-note
+  section" claim.
 
 ### 2026-09-22 — High-priority security hardening (feature-preserving)
 
