@@ -21,6 +21,12 @@ import type { AgentLlmProvider } from "@prisma/client";
 import { httpStatusOf } from "./types";
 
 export const RETIRED_SKIP_MS = 60 * 60 * 1000;
+/** A 429 that says the account is out of credits/quota (not a momentary rate limit) is just
+ * as hopeless as a 410 until someone tops up the account, so it is skipped too, for a shorter
+ * window. Seen 2026-09-28: the OpenAI primary answered every call with "429 You have no
+ * credits remaining", and every tool turn of every chat paid for that (plus SDK retries)
+ * before falling back - one of the reasons the chat sat on "Thinking…". */
+export const QUOTA_SKIP_MS = 15 * 60 * 1000;
 
 type ProviderIdentity = Pick<AgentLlmProvider, "id" | "name" | "model" | "baseUrl" | "priority"> & {
   updatedAt?: Date | null;
@@ -35,6 +41,11 @@ function providerKey(row: ProviderIdentity): string {
 /** HTTP 410 Gone: the provider says this resource is permanently gone. */
 export function isRetiredStatus(status: number | undefined): boolean {
   return status === 410;
+}
+
+/** HTTP 429 whose message says the quota/credits are exhausted (vs. a transient rate limit). */
+export function isQuotaExhausted(status: number | undefined, message: string): boolean {
+  return status === 429 && /insufficient_quota|no credits|credit balance|quota|billing/i.test(message);
 }
 
 export function isMarkedRetired(row: ProviderIdentity, now = Date.now()): boolean {
@@ -84,6 +95,13 @@ export function recordProviderFailure(
         `${RETIRED_SKIP_MS / 60000} min on this instance. Fix: update its model id or key under ` +
         `Settings > Agent providers, or deactivate it. Detail: ${message}`,
     );
+  } else if (isQuotaExhausted(status, message)) {
+    retiredUntil.set(providerKey(row), (opts.now ?? Date.now()) + QUOTA_SKIP_MS);
+    console.error(
+      `${label} is out of credits/quota (HTTP 429). Skipping this provider for ${QUOTA_SKIP_MS / 60000} min ` +
+        `on this instance. Fix: top up the account, or deactivate/reorder it under Settings > Agent providers. ` +
+        `Detail: ${message}`,
+    );
   } else {
     console.error(`${label} failed${status ? ` (HTTP ${status})` : ""}: ${message}`);
   }
@@ -103,7 +121,7 @@ export function formatProviderFailures(failures: ProviderFailure[], skipped: Pro
     (f) => `${f.primary ? "Primary" : "Fallback"} ${f.providerName}${f.status ? ` [HTTP ${f.status}]` : ""}: ${f.message}`,
   );
   for (const s of skipped) {
-    lines.push(`Skipped ${s.name}: returned HTTP 410 Gone recently - update or deactivate it in Settings > Agent providers`);
+    lines.push(`Skipped ${s.name}: recently returned HTTP 410 Gone or "out of credits" (429) - fix, top up or deactivate it in Settings > Agent providers`);
   }
   return lines.join("\n");
 }

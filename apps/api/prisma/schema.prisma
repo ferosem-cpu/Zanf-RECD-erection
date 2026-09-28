@@ -820,7 +820,12 @@ model Supplier {
   gstin        String?
   pan          String?
   state        String?
+  /// Street address / address line 1 (may be multi-line for legacy rows created before
+  /// addressLine2/city/pincode existed - those rows keep working unchanged).
   address      String?
+  addressLine2 String?
+  city         String?
+  pincode      String?
   contactName  String?
   contactEmail String?
   contactPhone String?
@@ -1082,8 +1087,20 @@ model PurchaseOrder {
   supplier     Supplier @relation(fields: [supplierId], references: [id])
   /// draft | issued | partially_received | received | cancelled | closed  (PO_STATUS in shared)
   status       String   @default("draft")
+  /// The PO date shown on the document ("PO date"); defaults to the creation day.
   orderDate    DateTime
   expectedDate DateTime?
+  /// Supplier's quotation this PO is placed against (number + date), printed on the PO.
+  vendorQuoteRef  String?
+  vendorQuoteDate DateTime?
+  /// Ship-to / delivery address. Null on legacy POs - the UI and printout fall back to
+  /// DEFAULT_PO_SHIP_TO_ADDRESS (Zan-F's own address) from @recd/shared.
+  shipToAddress   String?
+  /// Place of supply (state). When set AND the supplier has a state, it drives the
+  /// CGST+SGST vs IGST split (see poTaxStates in routes/purchase-orders.ts); otherwise
+  /// the legacy always-intra-state behaviour is kept.
+  placeOfSupply   String?
+  paymentTerms    String?
   /// Optional job-costing links: which customer order / site this spend is for.
   orderId      String?
   order        Order?   @relation(fields: [orderId], references: [id])

@@ -4,13 +4,16 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { formatINR, formatDate, numberToIndianWords } from "@/lib/finance";
+import { DEFAULT_PO_SHIP_TO_ADDRESS } from "@recd/shared";
+import { supplierAddressLines, type Supplier } from "@/lib/supplier";
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; taxRatePct: string; lineTotal: string; }
 interface PoDetail {
   id: string; poNumber: string; status: string; orderDate: string; expectedDate?: string | null;
   subtotal: string; cgstAmount: string; sgstAmount: string; igstAmount: string; total: string;
   notes?: string | null; terms?: string | null;
-  supplier: { id: string; name: string; gstin?: string | null; state?: string | null; address?: string | null; contactName?: string | null; contactPhone?: string | null; contactEmail?: string | null };
+  vendorQuoteRef?: string | null; vendorQuoteDate?: string | null; shipToAddress?: string | null; placeOfSupply?: string | null; paymentTerms?: string | null;
+  supplier: Supplier;
   lineItems: LineItem[];
 }
 interface Company { legalName?: string | null; address?: string | null; city?: string | null; pinCode?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; email?: string | null; website?: string | null; phone?: string | null; logoDataUrl?: string | null; purchaseOrderTerms?: string | null; documentFooterNote?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
@@ -173,7 +176,10 @@ export default function PurchaseOrderPrintPage() {
               <div className="print-doc-title">PURCHASE ORDER</div>
               <div className="print-meta">
                 <div>No. <b>{po.poNumber}</b></div>
-                <div>Date: <b>{formatDate(po.orderDate)}</b></div>
+                <div>PO date: <b>{formatDate(po.orderDate)}</b></div>
+                {po.vendorQuoteRef && (
+                  <div>Your quotation: <b>{po.vendorQuoteRef}</b>{po.vendorQuoteDate && <> dated <b>{formatDate(po.vendorQuoteDate)}</b></>}</div>
+                )}
                 {company?.gstin && <div>GSTIN: <b>{company.gstin}</b></div>}
               </div>
             </div>
@@ -183,7 +189,9 @@ export default function PurchaseOrderPrintPage() {
             <div className="print-panel-bill">
               <div className="print-panel-label">Vendor</div>
               <div className="name">{po.supplier.name}</div>
-              <div className="addr">{po.supplier.address}</div>
+              <div className="addr">
+                {supplierAddressLines(po.supplier).map((line, i) => <div key={i}>{line}</div>)}
+              </div>
               {po.supplier.gstin && <div className="gstin">GSTIN: {po.supplier.gstin}</div>}
             </div>
             <AttnBlock
@@ -191,6 +199,17 @@ export default function PurchaseOrderPrintPage() {
               validLabel="Expected delivery"
               validValue={po.expectedDate ? formatDate(po.expectedDate) : null}
             />
+          </div>
+
+          <div className="print-panels">
+            <div className="print-panel-bill">
+              <div className="print-panel-label">Ship to / Delivery address</div>
+              <div className="addr" style={{ whiteSpace: "pre-line" }}>{po.shipToAddress || DEFAULT_PO_SHIP_TO_ADDRESS}</div>
+            </div>
+            <div className="print-panel-attn">
+              {po.placeOfSupply && <div className="line">Place of supply: <b>{po.placeOfSupply}</b></div>}
+              {po.paymentTerms && <div className="line">Payment terms: <b>{po.paymentTerms}</b></div>}
+            </div>
           </div>
 
           <table className="print-table">

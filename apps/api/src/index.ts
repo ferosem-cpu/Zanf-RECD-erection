@@ -34,7 +34,23 @@ import { agentCronRouter } from "./routes/agentCron";
 import { backupRouter } from "./routes/backup";
 
 const app = express();
-app.use(cors());
+
+// No HTTP caching of API responses (2026-09-28 "Failed to fetch on first sign-in" fix).
+// Express adds a weak ETag to every JSON response by default, so browsers revalidated every
+// authenticated GET (/auth/me, /settings, lists...) with If-None-Match and got 304s - the
+// production logs are full of them. That's wrong for per-user bearer-token data (a cached
+// body can outlive a logout / user switch) and it is the path implicated in the intermittent
+// net::ERR_FAILED / "Failed to fetch" reports. Every response is now `no-store`, with no ETag.
+app.set("etag", false);
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+
+// Cache the CORS preflight for 10 minutes: every call from app.zanf.org is cross-origin with an
+// Authorization header, so without this each request is preceded by its own OPTIONS round trip
+// (double the requests, and double the exposure to a cold start or a flaky connection).
+app.use(cors({ maxAge: 600 }));
 // Raise the body limit so base64 data-URL payloads (site photos, company logo) fit;
 // the default 100kb rejects anything but a thumbnail.
 app.use(express.json({ limit: "10mb" }));

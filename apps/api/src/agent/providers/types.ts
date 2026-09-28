@@ -34,6 +34,8 @@ export interface SendMessageParams {
   systemPrompt: string;
   messages: UnifiedMessage[];
   tools: UnifiedToolSchema[];
+  /** Per-call timeout (ms). Adapters fall back to LLM_CALL_TIMEOUT_MS when omitted. */
+  timeoutMs?: number;
 }
 
 export interface SendMessageResult {
@@ -49,6 +51,8 @@ export interface ExtractDocumentParams {
   fileBase64: string;
   /** e.g. "image/jpeg", "image/png", "application/pdf". */
   mimeType: string;
+  /** Per-call timeout (ms). Adapters fall back to EXTRACTION_TIMEOUT_MS when omitted. */
+  timeoutMs?: number;
 }
 
 export interface LlmAdapter {

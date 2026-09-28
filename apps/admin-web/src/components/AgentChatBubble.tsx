@@ -5,7 +5,10 @@ import { useRouter } from "next/navigation";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ROLE_KEY } from "@recd/shared";
-import { api } from "@/lib/apiClient";
+import { api, NetworkError } from "@/lib/apiClient";
+
+/** Client-side cap on one assistant reply (server budget is ~55s, plus network slack). */
+const AGENT_REPLY_TIMEOUT_MS = 90_000;
 import { useAuth } from "@/components/AuthContext";
 import { captureFile } from "@/lib/fileCapture";
 
@@ -326,6 +329,9 @@ export default function AgentChatBubble() {
       const id = await ensureConversation();
       const result = await api<{ reply: string; messages: StoredMessage[] }>(`/agent/conversations/${id}/messages`, {
         method: "POST",
+        // The server gives up on its own after ~55s and answers with an explanation; this is
+        // the safety net so the bubble can never sit on "Thinking…" forever (2026-09-28).
+        timeoutMs: AGENT_REPLY_TIMEOUT_MS,
         body: JSON.stringify({
           message: text,
           attachment: attachment
@@ -336,7 +342,13 @@ export default function AgentChatBubble() {
       setMessages(result.messages ?? []);
       loadConversations();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(
+        err instanceof NetworkError && err.timedOut
+          ? "The assistant didn't answer in time. Your message may still have been processed - reopen this conversation from History in a moment, or try again with a shorter request."
+          : err instanceof Error
+            ? err.message
+            : String(err),
+      );
     } finally {
       setSending(false);
     }
@@ -373,7 +385,9 @@ export default function AgentChatBubble() {
     try {
       const result = await api<{ messages: StoredMessage[] }>(
         `/agent/conversations/${activeId}/actions/${actionId}/${outcome}`,
-        lineItems ? { method: "POST", body: JSON.stringify({ lineItems }) } : { method: "POST" },
+        lineItems
+          ? { method: "POST", body: JSON.stringify({ lineItems }), timeoutMs: 60000 }
+          : { method: "POST", timeoutMs: 60000 },
       );
       setMessages(result.messages ?? []);
     } catch (err) {

@@ -85,6 +85,46 @@ const searchVendors: AgentTool = {
   },
 };
 
+/** Suppliers (material/service sellers we raise POs to) are a DIFFERENT table from vendors
+ * (erection subcontractors). Before this tool existed the agent could only call
+ * search_vendors, found nothing, and dead-ended when asked to raise a PO (2026-09-28). */
+const searchSuppliers: AgentTool = {
+  name: "search_suppliers",
+  description:
+    "Search SUPPLIERS - the companies we buy material/services from and raise purchase orders " +
+    "to (NOT erection vendors; use this, not search_vendors, before create_purchase_order or " +
+    "create_vendor_invoice). Matches name, GSTIN or city. Returns id, name, GSTIN, state, full " +
+    "address and contact details.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Name, GSTIN or city (partial match). Omit to list suppliers." },
+    },
+  },
+  handler: async (input, auth) => {
+    if (!hasAny(auth, [PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, PERMISSION_KEY.VIEW_LEDGERS])) return forbidden("suppliers");
+    const query = input.query ? String(input.query).trim() : "";
+    const suppliers = await prisma.supplier.findMany({
+      where: query
+        ? {
+            OR: [
+              { name: { contains: query, mode: "insensitive" } },
+              { gstin: { contains: query, mode: "insensitive" } },
+              { city: { contains: query, mode: "insensitive" } },
+            ],
+          }
+        : {},
+      orderBy: { name: "asc" },
+      take: RESULT_LIMIT,
+    });
+    return suppliers.map((s) => ({
+      id: s.id, name: s.name, gstin: s.gstin, state: s.state,
+      address: [s.address, s.addressLine2, [s.city, s.pincode].filter(Boolean).join(" - ")].filter(Boolean).join(", ") || null,
+      contactName: s.contactName, contactPhone: s.contactPhone, contactEmail: s.contactEmail, isActive: s.isActive,
+    }));
+  },
+};
+
 const searchQuotations: AgentTool = {
   name: "search_quotations",
   description:
@@ -689,6 +729,7 @@ const getCustomerAdvances: AgentTool = {
 export const zanAppReadTools: AgentTool[] = [
   searchCustomers,
   searchVendors,
+  searchSuppliers,
   searchQuotations,
   searchInvoices,
   searchPurchaseOrders,

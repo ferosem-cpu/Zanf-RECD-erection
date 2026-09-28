@@ -6,10 +6,12 @@ import { useRouter, useParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { formatINR, formatDate, PO_STATUS_LABEL, BILL_STATUS_LABEL, statusPillClass } from "@/lib/finance";
+import { DEFAULT_PO_SHIP_TO_ADDRESS, DEFAULT_PO_PLACE_OF_SUPPLY } from "@recd/shared";
+import { poTaxMode, supplierAddressLines, type Supplier as SupplierRecord } from "@/lib/supplier";
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; taxRatePct: string; lineTotal: string; }
 interface Bill { id: string; billNumber: string; status: string; total: string; }
-interface Supplier { id: string; name: string; }
+type Supplier = Pick<SupplierRecord, "id" | "name" | "state" | "isActive">;
 type EditLine = { description: string; hsnCode: string; quantity: string; unitPrice: string; taxRatePct: string };
 interface PoDetail {
   id: string;
@@ -24,7 +26,12 @@ interface PoDetail {
   total: string;
   notes?: string | null;
   terms?: string | null;
-  supplier: { id: string; name: string; gstin?: string | null; state?: string | null; address?: string | null };
+  vendorQuoteRef?: string | null;
+  vendorQuoteDate?: string | null;
+  shipToAddress?: string | null;
+  placeOfSupply?: string | null;
+  paymentTerms?: string | null;
+  supplier: SupplierRecord;
   lineItems: LineItem[];
   bills: Bill[];
 }
@@ -60,7 +67,10 @@ export default function PurchaseOrderDetailPage() {
   // Editing - only draft POs can be edited (enforced server-side too).
   const [editOpen, setEditOpen] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState({ supplierId: "", expectedDate: "", notes: "", terms: "" });
+  const [editForm, setEditForm] = useState({
+    supplierId: "", orderDate: "", expectedDate: "", notes: "", terms: "",
+    vendorQuoteRef: "", vendorQuoteDate: "", shipToAddress: "", placeOfSupply: "", paymentTerms: "",
+  });
   const [editLines, setEditLines] = useState<EditLine[]>([]);
 
   function openEdit() {
@@ -68,9 +78,15 @@ export default function PurchaseOrderDetailPage() {
     setEditError(null);
     setEditForm({
       supplierId: po.supplier.id,
-      expectedDate: po.expectedDate ? po.expectedDate.slice(0, 10) : "",
+      orderDate: po.orderDate ? toDateInput(po.orderDate) : "",
+      expectedDate: po.expectedDate ? toDateInput(po.expectedDate) : "",
       notes: po.notes ?? "",
       terms: po.terms ?? "",
+      vendorQuoteRef: po.vendorQuoteRef ?? "",
+      vendorQuoteDate: po.vendorQuoteDate ? toDateInput(po.vendorQuoteDate) : "",
+      shipToAddress: po.shipToAddress ?? DEFAULT_PO_SHIP_TO_ADDRESS,
+      placeOfSupply: po.placeOfSupply ?? "",
+      paymentTerms: po.paymentTerms ?? "",
     });
     setEditLines(po.lineItems.map((l) => ({
       description: l.description,
@@ -98,9 +114,16 @@ export default function PurchaseOrderDetailPage() {
     try {
       await api(`/purchase-orders/${id}`, { method: "PUT", body: JSON.stringify({
         supplierId: editForm.supplierId,
-        expectedDate: editForm.expectedDate ? new Date(editForm.expectedDate).toISOString() : undefined,
+        orderDate: editForm.orderDate ? fromDateInput(editForm.orderDate) : undefined,
+        expectedDate: editForm.expectedDate ? fromDateInput(editForm.expectedDate) : undefined,
         notes: editForm.notes || undefined,
         terms: editForm.terms || undefined,
+        // Header fields: "" clears the value (the API stores it as null).
+        vendorQuoteRef: editForm.vendorQuoteRef,
+        vendorQuoteDate: editForm.vendorQuoteDate ? fromDateInput(editForm.vendorQuoteDate) : null,
+        shipToAddress: editForm.shipToAddress,
+        placeOfSupply: editForm.placeOfSupply,
+        paymentTerms: editForm.paymentTerms,
         lineItems: editLines.map((l) => ({
           description: l.description,
           hsnCode: l.hsnCode || undefined,
@@ -129,6 +152,37 @@ export default function PurchaseOrderDetailPage() {
       </div>
 
       {msg && <div className="rounded-lg bg-blue-50 px-4 py-2 text-sm text-blue-700">{msg}</div>}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="po-header-details">
+        <div className="card p-4 text-sm">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Supplier</h2>
+          <p className="font-semibold text-gray-900">{po.supplier.name}</p>
+          {supplierAddressLines(po.supplier).map((l, i) => <p key={i} className="text-gray-600">{l}</p>)}
+          {supplierAddressLines(po.supplier).length === 0 && (
+            <p className="text-amber-700 text-xs mt-1">No address on file.{canManage && <> <Link href={`/purchase-orders/suppliers?edit=${po.supplier.id}`} className="font-medium text-[var(--theme-accent)]">Add it</Link></>}</p>
+          )}
+          {po.supplier.gstin && <p className="mt-1 text-gray-700">GSTIN: <span className="font-medium">{po.supplier.gstin}</span></p>}
+          {(po.supplier.contactName || po.supplier.contactPhone || po.supplier.contactEmail) && (
+            <p className="mt-1 text-gray-600">{[po.supplier.contactName, po.supplier.contactPhone, po.supplier.contactEmail].filter(Boolean).join(" · ")}</p>
+          )}
+          {canManage && supplierAddressLines(po.supplier).length > 0 && (
+            <Link href={`/purchase-orders/suppliers?edit=${po.supplier.id}`} className="mt-2 inline-block text-xs font-medium text-[var(--theme-accent)]">Edit supplier</Link>
+          )}
+        </div>
+        <div className="card p-4 text-sm space-y-1">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Order details</h2>
+          <Row label="PO date" value={formatDate(po.orderDate)} />
+          {po.expectedDate && <Row label="Expected delivery" value={formatDate(po.expectedDate)} />}
+          <Row label="Vendor quotation" value={po.vendorQuoteRef ? `${po.vendorQuoteRef}${po.vendorQuoteDate ? ` dated ${formatDate(po.vendorQuoteDate)}` : ""}` : "-"} />
+          <Row label="Place of supply" value={po.placeOfSupply || "-"} />
+          <Row label="Payment terms" value={po.paymentTerms || "-"} />
+          <div className="pt-2">
+            <span className="text-gray-500">Ship to</span>
+            <p className="mt-1 whitespace-pre-line text-gray-700 text-xs">{po.shipToAddress || DEFAULT_PO_SHIP_TO_ADDRESS}</p>
+            {!po.shipToAddress && <p className="text-[11px] text-gray-400">(default - not set on this PO)</p>}
+          </div>
+        </div>
+      </div>
 
       <div className="card overflow-hidden">
         <div className="table-scroll">
@@ -220,9 +274,36 @@ export default function PurchaseOrderDetailPage() {
                   </select>
                 </div>
                 <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">PO date</label>
+                  <input type="date" className="field w-full" value={editForm.orderDate} onChange={(e) => setEditForm({ ...editForm, orderDate: e.target.value })} />
+                </div>
+                <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">Expected date</label>
                   <input type="date" className="field w-full" value={editForm.expectedDate} onChange={(e) => setEditForm({ ...editForm, expectedDate: e.target.value })} />
                 </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Vendor quotation no.</label>
+                  <input className="field w-full" value={editForm.vendorQuoteRef} onChange={(e) => setEditForm({ ...editForm, vendorQuoteRef: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Vendor quotation date</label>
+                  <input type="date" className="field w-full" value={editForm.vendorQuoteDate} onChange={(e) => setEditForm({ ...editForm, vendorQuoteDate: e.target.value })} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Place of supply</label>
+                  <input className="field w-full" placeholder={DEFAULT_PO_PLACE_OF_SUPPLY} value={editForm.placeOfSupply} onChange={(e) => setEditForm({ ...editForm, placeOfSupply: e.target.value })} />
+                  <p className="mt-1 text-[11px] text-gray-400">
+                    Tax: {poTaxMode(suppliers.find((x) => x.id === editForm.supplierId)?.state, editForm.placeOfSupply) === "inter" ? "IGST (supplier state differs)" : "CGST + SGST"}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Payment terms</label>
+                  <input className="field w-full" value={editForm.paymentTerms} onChange={(e) => setEditForm({ ...editForm, paymentTerms: e.target.value })} />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Ship to / delivery address</label>
+                <textarea className="field w-full text-xs" rows={5} value={editForm.shipToAddress} onChange={(e) => setEditForm({ ...editForm, shipToAddress: e.target.value })} />
               </div>
 
               <div>
@@ -268,6 +349,17 @@ export default function PurchaseOrderDetailPage() {
       )}
     </div>
   );
+}
+
+/** ISO timestamp -> yyyy-mm-dd in the user's local zone (for <input type="date">). */
+function toDateInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+/** yyyy-mm-dd -> ISO timestamp at local midnight. */
+function fromDateInput(d: string): string {
+  return new Date(`${d}T00:00:00`).toISOString();
 }
 
 function Row({ label, value, bold }: { label: string; value: string; bold?: boolean }) {

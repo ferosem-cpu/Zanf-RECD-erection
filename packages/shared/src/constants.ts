@@ -282,6 +282,29 @@ export const PO_STATUS = {
 } as const;
 export type PoStatus = (typeof PO_STATUS)[keyof typeof PO_STATUS];
 
+/** Default ship-to / delivery address for purchase orders (Zan-F's own premises). Pre-filled
+ * on new POs and used as the fallback on the detail page / printout for legacy POs that were
+ * created before PurchaseOrder.shipToAddress existed. */
+export const DEFAULT_PO_SHIP_TO_ADDRESS = [
+  "M/s Zan-F Power Systems",
+  "Block 1 F2, Jain's Green Acres, Zamin Pallavaram",
+  "Chennai, Tamil Nadu - 600 043",
+  "Phone: 9500245599  |  Email: info@zanf.in",
+  "GSTN: 33ACZPZ6285D1ZR",
+].join("\n");
+
+/** Default place of supply for purchase orders (goods are delivered to Chennai). */
+export const DEFAULT_PO_PLACE_OF_SUPPLY = "Tamil Nadu";
+
+/** Loose state comparison for GST (CGST+SGST vs IGST): case-, space- and punctuation-
+ * insensitive, and ignores a trailing GST state code like "(33)", so "Tamil Nadu",
+ * "tamil nadu" and "Tamil Nadu (33)" all match. Returns null for a blank value. */
+export function normalizeStateForGst(state: string | null | undefined): string | null {
+  if (!state) return null;
+  const n = state.toLowerCase().replace(/\(\s*\d+\s*\)/g, "").replace(/[^a-z]/g, "");
+  return n || null;
+}
+
 /** Vendor Invoice (Bill) workflow: uploaded -> verified -> approved -> (partially_paid ->
  * paid), plus rejected and cancelled as dead ends. Pre-workflow rows (created before this
  * feature existed) were migrated from the old "unpaid" status to "approved". */

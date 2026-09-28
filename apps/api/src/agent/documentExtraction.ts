@@ -10,6 +10,7 @@
 import { loadActiveProvidersInOrder, createAdapterForRow } from "./providers/factory";
 import { formatProviderFailures, providersToAttempt, recordProviderFailure, simpleFailure, type ProviderFailure } from "./providers/providerHealth";
 import { ExtractionUnavailableError } from "./billExtraction";
+import { EXTRACTION_TIMEOUT_MS, type AgentDeadline } from "./timeouts";
 
 export interface GenericExtraction {
   documentType?: string;
@@ -40,7 +41,11 @@ function stripJsonFences(text: string): string {
   return fenced ? fenced[1] : trimmed;
 }
 
-export async function extractGenericDocument(fileBase64: string, mimeType: string): Promise<GenericExtraction> {
+export async function extractGenericDocument(
+  fileBase64: string,
+  mimeType: string,
+  opts: { deadline?: AgentDeadline } = {},
+): Promise<GenericExtraction> {
   const providers = await loadActiveProvidersInOrder();
   if (providers.length === 0) {
     throw new ExtractionUnavailableError(
@@ -53,6 +58,10 @@ export async function extractGenericDocument(fileBase64: string, mimeType: strin
   const { attempt, skipped } = providersToAttempt(providers);
   for (const providerRow of attempt) {
     const primary = providerRow.id === primaryId;
+    if (opts.deadline?.expired()) {
+      failures.push(simpleFailure(providerRow, "not tried - out of time for this request", primary, "document-extraction"));
+      break;
+    }
     try {
       // Inside the try so a broken fallback row can't mask the primary provider's error.
       const adapter = createAdapterForRow(providerRow);
@@ -60,7 +69,12 @@ export async function extractGenericDocument(fileBase64: string, mimeType: strin
         failures.push(simpleFailure(providerRow, "does not support document extraction", primary, "document-extraction"));
         continue;
       }
-      const raw = await adapter.extractDocument({ instructions: INSTRUCTIONS, fileBase64, mimeType });
+      const raw = await adapter.extractDocument({
+        instructions: INSTRUCTIONS,
+        fileBase64,
+        mimeType,
+        timeoutMs: opts.deadline ? opts.deadline.callTimeoutMs(EXTRACTION_TIMEOUT_MS) : EXTRACTION_TIMEOUT_MS,
+      });
       const jsonText = stripJsonFences(raw);
       let parsed: unknown;
       try {

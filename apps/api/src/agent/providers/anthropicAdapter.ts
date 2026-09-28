@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { ExtractDocumentParams, LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
 import { ProviderCallError } from "./types";
+import { EXTRACTION_TIMEOUT_MS, LLM_CALL_TIMEOUT_MS, SDK_MAX_RETRIES } from "../timeouts";
 
 export interface AnthropicAdapterConfig {
   providerName: string; // the user-given label, for error messages
@@ -34,7 +35,8 @@ function toAnthropicMessages(messages: UnifiedMessage[]): Anthropic.MessageParam
 }
 
 export function createAnthropicAdapter(config: AnthropicAdapterConfig): LlmAdapter {
-  const client = new Anthropic({ apiKey: config.apiKey });
+  // The SDK default is a 10-minute timeout with 2 retries per call - see agent/timeouts.ts.
+  const client = new Anthropic({ apiKey: config.apiKey, timeout: LLM_CALL_TIMEOUT_MS, maxRetries: SDK_MAX_RETRIES });
 
   return {
     async sendMessage(params: SendMessageParams): Promise<SendMessageResult> {
@@ -49,7 +51,7 @@ export function createAnthropicAdapter(config: AnthropicAdapterConfig): LlmAdapt
             input_schema: t.inputSchema,
           })),
           messages: toAnthropicMessages(params.messages),
-        });
+        }, { timeout: params.timeoutMs ?? LLM_CALL_TIMEOUT_MS });
 
         const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text");
         const toolUseBlocks = response.content.filter(
@@ -93,7 +95,7 @@ export function createAnthropicAdapter(config: AnthropicAdapterConfig): LlmAdapt
           model: config.model,
           max_tokens: 4096,
           messages: [{ role: "user", content: [fileBlock, { type: "text", text: params.instructions }] }],
-        });
+        }, { timeout: params.timeoutMs ?? EXTRACTION_TIMEOUT_MS });
         const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text");
         return textBlocks.map((b) => b.text).join("\n").trim();
       } catch (err) {
