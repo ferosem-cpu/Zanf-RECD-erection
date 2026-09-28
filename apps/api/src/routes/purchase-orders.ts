@@ -6,6 +6,7 @@ import {
   PAYMENT_METHOD,
   FINANCE_DOC_TYPE,
   supplierCreateSchema,
+  supplierUpdateSchema,
   purchaseOrderCreateSchema,
   purchaseOrderUpdateSchema,
   purchaseOrderStatusSchema,
@@ -15,28 +16,62 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
+import { poTaxStates } from "../lib/purchaseOrderTax";
+import { normalizeSupplierInput } from "../lib/supplierInput";
+
 
 export const purchaseOrdersRouter = Router();
 purchaseOrdersRouter.use(authenticate);
 
 // --- Suppliers -------------------------------------------------------------
+// Reusable supplier records (name, GSTIN, state, structured address, contact). Suppliers reuse
+// the PO permissions: manage_purchase_orders to create/edit; reading is also open to
+// view_ledgers (party ledgers) as before.
+
 purchaseOrdersRouter.get("/suppliers", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, PERMISSION_KEY.VIEW_LEDGERS), async (_req, res) => {
   const suppliers = await prisma.supplier.findMany({ orderBy: { name: "asc" } });
   res.json(suppliers);
 });
 
+purchaseOrdersRouter.get("/suppliers/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, PERMISSION_KEY.VIEW_LEDGERS), async (req, res) => {
+  const id = asString(req.params.id);
+  const supplier = await prisma.supplier.findUnique({
+    where: { id },
+    include: { _count: { select: { purchaseOrders: true, bills: true } } },
+  });
+  if (!supplier) return res.status(404).json({ error: "Supplier not found" });
+  res.json(supplier);
+});
+
 purchaseOrdersRouter.post("/suppliers", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (req: AuthenticatedRequest, res) => {
   const parsed = supplierCreateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const supplier = await prisma.supplier.create({ data: parsed.data });
+  const { openingBalance, openingBalanceDate, ...rest } = normalizeSupplierInput(parsed.data);
+  const supplier = await prisma.supplier.create({
+    data: {
+      ...rest,
+      openingBalance: openingBalance ?? undefined,
+      openingBalanceDate: openingBalanceDate ? new Date(openingBalanceDate) : undefined,
+    },
+  });
   res.status(201).json(supplier);
 });
 
 purchaseOrdersRouter.put("/suppliers/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (req: AuthenticatedRequest, res) => {
   const id = asString(req.params.id);
-  const parsed = supplierCreateSchema.partial().safeParse(req.body);
+  const parsed = supplierUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
-  const supplier = await prisma.supplier.update({ where: { id }, data: parsed.data });
+  const existing = await prisma.supplier.findUnique({ where: { id } });
+  if (!existing) return res.status(404).json({ error: "Supplier not found" });
+  const { openingBalance, openingBalanceDate, ...rest } = normalizeSupplierInput(parsed.data);
+  const supplier = await prisma.supplier.update({
+    where: { id },
+    data: {
+      ...rest,
+      openingBalance: openingBalance ?? undefined,
+      openingBalanceDate: openingBalanceDate ? new Date(openingBalanceDate) : undefined,
+    },
+  });
   res.json(supplier);
 });
 
@@ -88,13 +123,23 @@ purchaseOrdersRouter.post(
 );
 
 // --- Purchase Orders -------------------------------------------------------
+
+/** A 400-worthy validation problem raised inside a PO transaction (e.g. unknown supplier). */
+export class PoInputError extends Error {}
+
+function blankToNull(v: string | null | undefined): string | null {
+  if (v === undefined || v === null) return null;
+  const t = v.trim();
+  return t === "" ? null : t;
+}
+
 function mapPoLine(line: {
   description: string;
   hsnCode?: string | null;
   quantity: number;
   unitPrice: number;
   taxRatePct: number;
-}) {
+}, index = 0) {
   return {
     description: line.description,
     hsnCode: line.hsnCode,
@@ -102,7 +147,8 @@ function mapPoLine(line: {
     unitPrice: new Prisma.Decimal(String(line.unitPrice)),
     taxRatePct: new Prisma.Decimal(String(line.taxRatePct)),
     lineTotal: new Prisma.Decimal(String(line.quantity * line.unitPrice)).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP),
-    sortOrder: 0,
+    // Keep the entered order on the detail page / printout (was always 0 before).
+    sortOrder: index,
   };
 }
 
@@ -136,15 +182,23 @@ export async function createPurchaseOrderRecord(
     siteId?: string | null;
     notes?: string | null;
     terms?: string | null;
+    vendorQuoteRef?: string | null;
+    vendorQuoteDate?: string | null;
+    shipToAddress?: string | null;
+    placeOfSupply?: string | null;
+    paymentTerms?: string | null;
   },
   createdById: string,
   poNumber: string,
-  companyState?: string | null,
 ) {
+  const supplier = await tx.supplier.findUnique({ where: { id: input.supplierId }, select: { state: true } });
+  if (!supplier) throw new PoInputError("Supplier not found");
+  const placeOfSupply = blankToNull(input.placeOfSupply);
+  const [taxFrom, taxTo] = poTaxStates(supplier.state, placeOfSupply);
   const totals = computeDocumentTotals(
     input.lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
-    companyState,
-    undefined,
+    taxFrom,
+    taxTo,
   );
   return tx.purchaseOrder.create({
     data: {
@@ -155,6 +209,11 @@ export async function createPurchaseOrderRecord(
       expectedDate: input.expectedDate ? new Date(input.expectedDate) : null,
       orderId: input.orderId ?? undefined,
       siteId: input.siteId ?? undefined,
+      vendorQuoteRef: blankToNull(input.vendorQuoteRef),
+      vendorQuoteDate: input.vendorQuoteDate ? new Date(input.vendorQuoteDate) : null,
+      shipToAddress: blankToNull(input.shipToAddress),
+      placeOfSupply,
+      paymentTerms: blankToNull(input.paymentTerms),
       subtotal: totals.subtotal,
       cgstAmount: totals.cgstAmount,
       sgstAmount: totals.sgstAmount,
@@ -163,7 +222,7 @@ export async function createPurchaseOrderRecord(
       notes: input.notes ?? undefined,
       terms: input.terms ?? undefined,
       createdById,
-      lineItems: { create: input.lineItems.map(mapPoLine) },
+      lineItems: { create: input.lineItems.map((l, i) => mapPoLine(l, i)) },
     },
     include: { lineItems: true },
   });
@@ -174,10 +233,18 @@ purchaseOrdersRouter.post("/", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
 
-  const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
-  const poNumber = await prisma.$transaction((tx) => nextDocumentNumber(tx, FINANCE_DOC_TYPE.PURCHASE_ORDER));
-  const po = await prisma.$transaction((tx) => createPurchaseOrderRecord(tx, data, req.auth!.userId, poNumber, company?.state));
-  res.status(201).json(po);
+  try {
+    // Number allocation and the insert share one transaction, so a failed insert (e.g. unknown
+    // supplier) never burns a PO number - same as the agent's confirm path.
+    const po = await prisma.$transaction(async (tx) => {
+      const poNumber = await nextDocumentNumber(tx, FINANCE_DOC_TYPE.PURCHASE_ORDER);
+      return createPurchaseOrderRecord(tx, data, req.auth!.userId, poNumber);
+    });
+    res.status(201).json(po);
+  } catch (err) {
+    if (err instanceof PoInputError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
 });
 
 purchaseOrdersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS), async (req: AuthenticatedRequest, res) => {
@@ -185,7 +252,7 @@ purchaseOrdersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHAS
   const po = await prisma.purchaseOrder.findUnique({
     where: { id },
     include: {
-      supplier: { select: { id: true, name: true, gstin: true, pan: true, state: true, address: true, contactName: true, contactPhone: true, contactEmail: true } },
+      supplier: { select: { id: true, name: true, gstin: true, pan: true, state: true, address: true, addressLine2: true, city: true, pincode: true, contactName: true, contactPhone: true, contactEmail: true } },
       order: { select: { id: true, orderNumber: true } },
       site: { select: { id: true } },
       lineItems: { orderBy: { sortOrder: "asc" } },
@@ -202,49 +269,56 @@ purchaseOrdersRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHAS
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   const data = parsed.data;
 
-  const existing = await prisma.purchaseOrder.findUnique({ where: { id } });
+  const existing = await prisma.purchaseOrder.findUnique({ where: { id }, include: { lineItems: true } });
   if (!existing) return res.status(404).json({ error: "Purchase order not found" });
   if (existing.status !== PO_STATUS.DRAFT) {
     return res.status(400).json({ error: "Only draft purchase orders can be edited" });
   }
 
-  const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+  const supplierId = data.supplierId ?? existing.supplierId;
+  const supplier = await prisma.supplier.findUnique({ where: { id: supplierId }, select: { state: true } });
+  if (!supplier) return res.status(400).json({ error: "Supplier not found" });
+
+  // Header fields: undefined = leave unchanged, null/"" = clear.
+  const header = {
+    supplierId: data.supplierId,
+    orderId: data.orderId,
+    siteId: data.siteId,
+    orderDate: data.orderDate ? new Date(data.orderDate) : undefined,
+    expectedDate: data.expectedDate ? new Date(data.expectedDate) : existing.expectedDate,
+    notes: data.notes,
+    terms: data.terms,
+    vendorQuoteRef: data.vendorQuoteRef === undefined ? undefined : blankToNull(data.vendorQuoteRef),
+    vendorQuoteDate: data.vendorQuoteDate === undefined ? undefined : data.vendorQuoteDate ? new Date(data.vendorQuoteDate) : null,
+    shipToAddress: data.shipToAddress === undefined ? undefined : blankToNull(data.shipToAddress),
+    placeOfSupply: data.placeOfSupply === undefined ? undefined : blankToNull(data.placeOfSupply),
+    paymentTerms: data.paymentTerms === undefined ? undefined : blankToNull(data.paymentTerms),
+  };
+
+  // Totals depend on the lines AND on the supplier's state / place of supply, so a draft's
+  // totals are always recomputed on save (using the stored lines if only the header changed).
+  // Legacy POs without a place of supply keep computing CGST+SGST exactly as before.
+  const placeOfSupply = header.placeOfSupply === undefined ? existing.placeOfSupply : header.placeOfSupply;
+  const lines = data.lineItems
+    ? data.lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, taxRatePct: l.taxRatePct }))
+    : existing.lineItems.map((l) => ({ quantity: Number(l.quantity), unitPrice: Number(l.unitPrice), taxRatePct: Number(l.taxRatePct) }));
+  const [taxFrom, taxTo] = poTaxStates(supplier.state, placeOfSupply);
+  const totals = computeDocumentTotals(lines.map((l) => ({ ...l, discountPct: 0 })), taxFrom, taxTo);
+
   const po = await prisma.$transaction(async (tx) => {
     if (data.lineItems) {
-      const totals = computeDocumentTotals(
-        data.lineItems.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
-        company?.state,
-        undefined,
-      );
       await tx.purchaseOrderLineItem.deleteMany({ where: { purchaseOrderId: id } });
-      return tx.purchaseOrder.update({
-        where: { id },
-        data: {
-          supplierId: data.supplierId,
-          orderId: data.orderId,
-          siteId: data.siteId,
-          expectedDate: data.expectedDate ? new Date(data.expectedDate) : existing.expectedDate,
-          notes: data.notes,
-          terms: data.terms,
-          subtotal: totals.subtotal,
-          cgstAmount: totals.cgstAmount,
-          sgstAmount: totals.sgstAmount,
-          igstAmount: totals.igstAmount,
-          total: totals.total,
-          lineItems: { create: data.lineItems.map(mapPoLine) },
-        },
-        include: { lineItems: true },
-      });
     }
     return tx.purchaseOrder.update({
       where: { id },
       data: {
-        supplierId: data.supplierId,
-        orderId: data.orderId,
-        siteId: data.siteId,
-        expectedDate: data.expectedDate ? new Date(data.expectedDate) : existing.expectedDate,
-        notes: data.notes,
-        terms: data.terms,
+        ...header,
+        subtotal: totals.subtotal,
+        cgstAmount: totals.cgstAmount,
+        sgstAmount: totals.sgstAmount,
+        igstAmount: totals.igstAmount,
+        total: totals.total,
+        ...(data.lineItems ? { lineItems: { create: data.lineItems.map((l, i) => mapPoLine(l, i)) } } : {}),
       },
       include: { lineItems: true },
     });

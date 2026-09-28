@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Script from "next/script";
 import { useAuth } from "@/components/AuthContext";
-import { api } from "@/lib/apiClient";
+import { api, warmUpApi } from "@/lib/apiClient";
 
 declare global {
   interface Window {
@@ -44,6 +44,9 @@ export default function LoginPage() {
       const result = await api<{ token: string; user: { name: string } }>("/auth/google", {
         method: "POST",
         body: JSON.stringify({ credential: response.credential }),
+        // Re-sending the same Google credential is harmless, so ride out one dropped connection.
+        networkRetries: 1,
+        timeoutMs: 30000,
       });
       await login(result.token);
     } catch (err) {
@@ -69,6 +72,9 @@ export default function LoginPage() {
   }
 
   useEffect(() => {
+    // Wake the API function while the user is still typing, so the first sign-in doesn't hit
+    // a cold start (one of the contributors to the first-attempt "Failed to fetch").
+    warmUpApi();
     // The GSI script may already be loaded/cached from a previous visit, in which case
     // next/script's onLoad won't fire again - so also try once on mount.
     initGoogleButton();
@@ -106,6 +112,10 @@ export default function LoginPage() {
       const result = await api<{ token: string; user: { name: string } }>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
+        // A repeated password login only issues another token, so retry one network failure
+        // instead of showing "Failed to fetch" on the first attempt.
+        networkRetries: 1,
+        timeoutMs: 30000,
       });
       await login(result.token);
     } catch (err) {

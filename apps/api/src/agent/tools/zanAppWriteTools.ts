@@ -6,9 +6,10 @@
  * in agentConversations.ts), which reuses the same logic as the real REST create-route.
  */
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, PAYMENT_METHOD, INVOICE_DOC_TYPE, COMPLAINT_CATEGORY } from "@recd/shared";
+import { PERMISSION_KEY, PAYMENT_METHOD, INVOICE_DOC_TYPE, COMPLAINT_CATEGORY, DEFAULT_PO_SHIP_TO_ADDRESS, DEFAULT_PO_PLACE_OF_SUPPLY } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { computeDocumentTotals } from "../../services/taxCalc";
+import { poTaxStates } from "../../lib/purchaseOrderTax";
 import { assertOwnSite } from "../../routes/complaints";
 import { computeBillTotals } from "../../routes/bills";
 import { computeCustomerPoTotals } from "../../routes/customer-purchase-orders";
@@ -118,20 +119,42 @@ interface PoLineItemInput {
 const createPurchaseOrderTool: AgentTool = {
   name: "create_purchase_order",
   description:
-    "Propose a new purchase order to a supplier (material/service procurement - steel, " +
-    "piping, transport, subcontract labour). This does NOT create the PO immediately - it " +
-    "prepares it and shows the user a confirm card in the chat; only THEY can approve it by " +
-    "clicking Confirm. The PO number is only allocated at confirm time (GST numbering must " +
-    "stay gap-free, so nothing is reserved for a proposal that might be rejected). After " +
-    "calling this, tell the user you've prepared it for their review - never say it has " +
-    "been created or quote a PO number, since none exists yet.",
+    "Propose a new purchase order to a SUPPLIER (material/service procurement - steel, " +
+    "piping, panels, transport, subcontract labour). Resolve the supplier with search_suppliers " +
+    "first (suppliers are not erection vendors). If the supplier doesn't exist yet and the user " +
+    "wants it added, pass its details in newSupplier - it is created together with the PO when " +
+    "the user confirms. This does NOT create the PO immediately - it prepares it and shows the " +
+    "user a confirm card in the chat; only THEY can approve it by clicking Confirm. The PO number " +
+    "is only allocated at confirm time (GST numbering must stay gap-free, so nothing is reserved " +
+    "for a proposal that might be rejected). After calling this, tell the user you've prepared it " +
+    "for their review - never say it has been created or quote a PO number, since none exists yet.",
   inputSchema: {
     type: "object",
     properties: {
-      supplierId: { type: "string", description: "Supplier id, if already known (e.g. from a prior search)." },
+      supplierId: { type: "string", description: "Supplier id, if already known (e.g. from search_suppliers)." },
       supplierName: {
         type: "string",
-        description: "Supplier name to look up if supplierId isn't known. Provide one of supplierId or supplierName.",
+        description: "Supplier name to look up if supplierId isn't known. Provide supplierId, supplierName or newSupplier.",
+      },
+      newSupplier: {
+        type: "object",
+        description:
+          "Only when the user wants a supplier that does not exist yet: its details (e.g. read from the " +
+          "attached quotation). Created on Confirm together with the PO. Never use this if search_suppliers " +
+          "found a match.",
+        properties: {
+          name: { type: "string" },
+          gstin: { type: "string" },
+          state: { type: "string", description: "Indian state, e.g. Tamil Nadu." },
+          address: { type: "string", description: "Address line 1 (building / street)." },
+          addressLine2: { type: "string" },
+          city: { type: "string" },
+          pincode: { type: "string", description: "6-digit PIN code." },
+          contactName: { type: "string" },
+          contactPhone: { type: "string" },
+          contactEmail: { type: "string" },
+        },
+        required: ["name"],
       },
       lineItems: {
         type: "array",
@@ -143,13 +166,18 @@ const createPurchaseOrderTool: AgentTool = {
             hsnCode: { type: "string", description: "REQUIRED - HSN/SAC code for GST. Never omit or guess; ask the user for the correct code if you don't know it for certain." },
             quantity: { type: "number" },
             unitPrice: { type: "number", description: "Per-unit price in rupees, before tax." },
-            taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
+            taxRatePct: { type: "number", description: "TOTAL GST rate for the line, e.g. 18 (for CGST 9% + SGST 9% pass 18, not 9). Defaults to 18." },
           },
           required: ["description", "hsnCode", "quantity", "unitPrice"],
         },
       },
-      orderDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
+      orderDate: { type: "string", description: "PO date, ISO (YYYY-MM-DD). Defaults to today if omitted." },
       expectedDate: { type: "string", description: "ISO date (YYYY-MM-DD) - when the goods/service are expected." },
+      vendorQuoteRef: { type: "string", description: "Supplier's quotation number this PO is against, e.g. PASQ/1611/26-27." },
+      vendorQuoteDate: { type: "string", description: "Supplier's quotation date, ISO (YYYY-MM-DD)." },
+      shipToAddress: { type: "string", description: "Delivery address. Omit to use Zan-F's own Chennai address (the default)." },
+      placeOfSupply: { type: "string", description: `State of supply. Omit for the default (${DEFAULT_PO_PLACE_OF_SUPPLY}).` },
+      paymentTerms: { type: "string", description: "Payment terms, e.g. '100% against delivery' or 'Immediate'." },
       notes: { type: "string" },
       terms: { type: "string" },
     },
@@ -159,15 +187,25 @@ const createPurchaseOrderTool: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS)) return forbidden("purchase orders");
     if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
 
-    const supplierId = input.supplierId ? String(input.supplierId) : null;
-    const supplierName = input.supplierName ? String(input.supplierName) : null;
+    const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+    const supplierId = text(input.supplierId);
+    const supplierName = text(input.supplierName);
+    const newSupplierRaw = input.newSupplier && typeof input.newSupplier === "object" ? (input.newSupplier as Record<string, unknown>) : null;
     const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as PoLineItemInput[]) : [];
-    const orderDateStr = input.orderDate ? String(input.orderDate) : new Date().toISOString().slice(0, 10);
-    const expectedDateStr = input.expectedDate ? String(input.expectedDate) : null;
-    const notes = input.notes ? String(input.notes) : null;
-    const terms = input.terms ? String(input.terms) : null;
+    const orderDateStr = text(input.orderDate) ?? new Date().toISOString().slice(0, 10);
+    const expectedDateStr = text(input.expectedDate);
+    const vendorQuoteRef = text(input.vendorQuoteRef);
+    const vendorQuoteDate = text(input.vendorQuoteDate);
+    const shipToAddress = text(input.shipToAddress) ?? DEFAULT_PO_SHIP_TO_ADDRESS;
+    const placeOfSupply = text(input.placeOfSupply) ?? DEFAULT_PO_PLACE_OF_SUPPLY;
+    const paymentTerms = text(input.paymentTerms);
+    const notes = text(input.notes);
+    const terms = text(input.terms);
 
-    if (!supplierId && !supplierName) return { error: "Provide either supplierId or supplierName." };
+    for (const [label, v] of [["orderDate", orderDateStr], ["expectedDate", expectedDateStr], ["vendorQuoteDate", vendorQuoteDate]] as const) {
+      if (v && Number.isNaN(new Date(v).getTime())) return { error: `${label} "${v}" is not a valid date - use YYYY-MM-DD.` };
+    }
+    if (!supplierId && !supplierName && !newSupplierRaw) return { error: "Provide supplierId, supplierName, or newSupplier." };
     if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
     for (const [i, li] of lineItemsRaw.entries()) {
       if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
@@ -176,28 +214,58 @@ const createPurchaseOrderTool: AgentTool = {
       if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
     }
 
+    // Resolve an existing supplier: explicit id > exact/partial name > newSupplier's GSTIN/name.
     let supplier = supplierId ? await prisma.supplier.findUnique({ where: { id: supplierId } }) : null;
-    if (!supplier && supplierName) {
+    if (supplierId && !supplier) return { error: `No supplier found with id ${supplierId}. Use search_suppliers to find the right one.` };
+    const lookupName = supplierName ?? text(newSupplierRaw?.name);
+    const lookupGstin = text(newSupplierRaw?.gstin);
+    if (!supplier && lookupGstin) {
+      supplier = await prisma.supplier.findFirst({ where: { gstin: { equals: lookupGstin, mode: "insensitive" } } });
+    }
+    if (!supplier && lookupName) {
       const matches = await prisma.supplier.findMany({
-        where: { name: { contains: supplierName, mode: "insensitive" } },
+        where: { name: { contains: lookupName, mode: "insensitive" } },
         take: 5,
       });
-      if (matches.length === 1) {
-        supplier = matches[0];
+      const exact = matches.find((m) => m.name.trim().toLowerCase() === lookupName.toLowerCase());
+      if (exact || matches.length === 1) {
+        supplier = exact ?? matches[0];
       } else if (matches.length > 1) {
         return {
-          error: `Multiple suppliers match "${supplierName}": ${matches
+          error: `Multiple suppliers match "${lookupName}": ${matches
             .map((s) => `${s.name} (id: ${s.id})`)
             .join(", ")}. Ask the user which one, then retry with the exact supplierId.`,
         };
-      } else {
-        const allSuppliers = await prisma.supplier.findMany({ select: { name: true }, take: 20 });
-        return {
-          error: `No supplier matching "${supplierName}". Existing suppliers: ${allSuppliers.map((s) => s.name).join(", ") || "(none yet)"}. Ask the user which one, or offer to add a new supplier first.`,
-        };
       }
     }
-    if (!supplier) return { error: `No supplier found with id ${supplierId}.` };
+
+    let newSupplier: Record<string, string | null> | null = null;
+    if (!supplier) {
+      if (!newSupplierRaw || !text(newSupplierRaw.name)) {
+        const allSuppliers = await prisma.supplier.findMany({ select: { name: true }, orderBy: { name: "asc" }, take: 20 });
+        return {
+          error:
+            `No supplier matching "${lookupName ?? supplierId}". Existing suppliers: ${allSuppliers.map((s) => s.name).join(", ") || "(none yet)"}. ` +
+            "Ask the user which one to use - or, if they want a new supplier, call create_purchase_order again with newSupplier " +
+            "(name plus any GSTIN / state / address / city / PIN / contact you know, e.g. from the attached quotation). " +
+            "It will be created together with the PO when they confirm.",
+        };
+      }
+      const pincode = text(newSupplierRaw.pincode)?.replace(/\s+/g, "") ?? null;
+      if (pincode && !/^\d{6}$/.test(pincode)) return { error: `newSupplier.pincode "${pincode}" must be 6 digits.` };
+      newSupplier = {
+        name: text(newSupplierRaw.name),
+        gstin: text(newSupplierRaw.gstin)?.toUpperCase() ?? null,
+        state: text(newSupplierRaw.state),
+        address: text(newSupplierRaw.address),
+        addressLine2: text(newSupplierRaw.addressLine2),
+        city: text(newSupplierRaw.city),
+        pincode,
+        contactName: text(newSupplierRaw.contactName),
+        contactPhone: text(newSupplierRaw.contactPhone),
+        contactEmail: text(newSupplierRaw.contactEmail),
+      };
+    }
 
     const normalizedLines = lineItemsRaw.map((li) => ({
       description: li.description,
@@ -207,32 +275,56 @@ const createPurchaseOrderTool: AgentTool = {
       taxRatePct: li.taxRatePct ?? 18,
     }));
 
-    const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
-    // Purchase orders always compute tax as intra-state (CGST+SGST) - matches routes/purchase-orders.ts,
-    // which never passes a placeOfSupply for POs.
+    // Same CGST+SGST vs IGST rule as the REST route (routes/purchase-orders.ts poTaxStates).
+    const [taxFrom, taxTo] = poTaxStates(supplier ? supplier.state : newSupplier?.state, placeOfSupply);
     const totals = computeDocumentTotals(
       normalizedLines.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discountPct: 0, taxRatePct: l.taxRatePct })),
-      company?.state,
-      undefined,
+      taxFrom,
+      taxTo,
     );
 
     const preview = {
-      supplier: supplier.name,
+      supplier: supplier ? supplier.name : `${newSupplier!.name} (NEW supplier - will be created on Confirm)`,
+      ...(newSupplier
+        ? {
+            newSupplierGstin: newSupplier.gstin,
+            newSupplierAddress: [newSupplier.address, newSupplier.addressLine2, [newSupplier.city, newSupplier.pincode].filter(Boolean).join(" - "), newSupplier.state]
+              .filter(Boolean)
+              .join(", "),
+          }
+        : {}),
       lineItems: normalizedLines.map((l) => ({ ...l, lineTotal: l.quantity * l.unitPrice })),
       subtotal: Number(totals.subtotal),
       cgst: Number(totals.cgstAmount),
       sgst: Number(totals.sgstAmount),
       igst: Number(totals.igstAmount),
       total: Number(totals.total),
-      orderDate: orderDateStr,
+      poDate: orderDateStr,
       expectedDate: expectedDateStr,
+      vendorQuotation: vendorQuoteRef ? `${vendorQuoteRef}${vendorQuoteDate ? ` dated ${vendorQuoteDate}` : ""}` : null,
+      placeOfSupply,
+      paymentTerms,
+      shipTo: shipToAddress === DEFAULT_PO_SHIP_TO_ADDRESS ? "Zan-F Power Systems, Chennai (default)" : shipToAddress,
     };
 
     const pending = await prisma.agentPendingAction.create({
       data: {
         conversationId: auth.conversationId,
         toolName: "create_purchase_order",
-        input: { supplierId: supplier.id, lineItems: normalizedLines, orderDate: orderDateStr, expectedDate: expectedDateStr, notes, terms },
+        input: {
+          supplierId: supplier?.id ?? null,
+          newSupplier,
+          lineItems: normalizedLines,
+          orderDate: orderDateStr,
+          expectedDate: expectedDateStr,
+          vendorQuoteRef,
+          vendorQuoteDate,
+          shipToAddress,
+          placeOfSupply,
+          paymentTerms,
+          notes,
+          terms,
+        },
         preview,
         createdById: auth.userId,
       },

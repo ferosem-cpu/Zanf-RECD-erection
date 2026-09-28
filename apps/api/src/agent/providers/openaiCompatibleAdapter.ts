@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { ExtractDocumentParams, LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
 import { ProviderCallError } from "./types";
+import { EXTRACTION_TIMEOUT_MS, LLM_CALL_TIMEOUT_MS, SDK_MAX_RETRIES } from "../timeouts";
 
 export interface OpenAICompatibleAdapterConfig {
   providerName: string; // the user-given label, for error messages
@@ -60,6 +61,8 @@ async function extractDocumentViaNativeGemini(
   try {
     response = await fetch(url, {
       method: "POST",
+      // No timeout here used to let a slow PDF read hang the whole chat request.
+      signal: AbortSignal.timeout(params.timeoutMs ?? EXTRACTION_TIMEOUT_MS),
       headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
       body: JSON.stringify({
         contents: [
@@ -93,7 +96,8 @@ async function extractDocumentViaNativeGemini(
 }
 
 export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterConfig): LlmAdapter {
-  const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseUrl });
+  // The SDK default is a 10-minute timeout with 2 retries per call - see agent/timeouts.ts.
+  const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseUrl, timeout: LLM_CALL_TIMEOUT_MS, maxRetries: SDK_MAX_RETRIES });
 
   return {
     async sendMessage(params: SendMessageParams): Promise<SendMessageResult> {
@@ -105,7 +109,7 @@ export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterCon
             type: "function",
             function: { name: t.name, description: t.description, parameters: t.inputSchema },
           })),
-        });
+        }, { timeout: params.timeoutMs ?? LLM_CALL_TIMEOUT_MS });
 
         const message = response.choices[0]?.message;
         if (!message) {
@@ -176,7 +180,7 @@ export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterCon
               ],
             },
           ],
-        });
+        }, { timeout: params.timeoutMs ?? EXTRACTION_TIMEOUT_MS });
         return (response.choices[0]?.message?.content ?? "").trim();
       } catch (err) {
         throw new ProviderCallError(

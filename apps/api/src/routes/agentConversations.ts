@@ -10,12 +10,14 @@ import { FINANCE_DOC_TYPE, INVOICE_STATUS, BILL_STATUS, BILL_AUDIT_ACTION, CUSTO
 import { prisma } from "../lib/prisma";
 import { authenticate, requireAgentAccess, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
+import { AgentDeadline } from "../agent/timeouts";
 import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { allTools } from "../agent/tools/registry";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
 import { createQuotationRecord } from "./quotations";
 import { createPurchaseOrderRecord } from "./purchase-orders";
+import { normalizeSupplierInput } from "../lib/supplierInput";
 import { createComplaintRecord } from "./complaints";
 import { mapBillLine, type BillLineInput } from "./bills";
 import { computeCustomerPoTotals } from "./customer-purchase-orders";
@@ -78,11 +80,11 @@ interface ChatAttachment {
  * message" rather than a much larger change to every adapter's multi-turn message shape.
  * Never throws - an extraction failure is folded into the composed text instead, so the
  * conversation degrades to "couldn't read the attachment" rather than a 500. */
-async function composeMessageWithAttachment(message: string, attachment: ChatAttachment): Promise<string> {
+async function composeMessageWithAttachment(message: string, attachment: ChatAttachment, deadline: AgentDeadline): Promise<string> {
   const trimmedMessage = message.trim();
   let extractionText: string;
   try {
-    const extraction = await extractGenericDocument(attachment.fileBase64, attachment.mimeType);
+    const extraction = await extractGenericDocument(attachment.fileBase64, attachment.mimeType, { deadline });
     const fieldLines = Object.entries(extraction.fields)
       .map(([k, v]) => `- ${k}: ${v}`)
       .join("\n");
@@ -128,8 +130,11 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
     return res.status(404).json({ error: "Conversation not found" });
   }
 
+  // One time budget for the whole request (attachment read + every tool turn) - see
+  // agent/timeouts.ts for the "stuck on Thinking…" history.
+  const deadline = new AgentDeadline();
   const effectiveMessage = attachment
-    ? await composeMessageWithAttachment(message ?? "", attachment)
+    ? await composeMessageWithAttachment(message ?? "", attachment, deadline)
     : (message as string);
 
   const priorHistory = (row.messages as unknown as UnifiedMessage[]) ?? [];
@@ -142,6 +147,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
       history: newHistory,
       tools: allTools,
       auth: { ...req.auth!, conversationId: row.id },
+      deadline,
     });
 
     const updated = await prisma.agentConversation.update({
@@ -192,22 +198,56 @@ async function executeConfirmedAction(
         unitPrice: number;
         taxRatePct: number;
       }
-      const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
+      const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
       const po = await prisma.$transaction(async (tx) => {
+        // The proposal may carry a NEW supplier (the user asked for a PO to a supplier that
+        // didn't exist yet). It is only created now, on Confirm, in the same transaction as
+        // the PO - rejecting the card leaves no stray supplier behind. If an identical
+        // supplier appeared in the meantime (same GSTIN, or same name when there is no
+        // GSTIN), that one is reused instead of creating a duplicate.
+        let supplierId = str(input.supplierId);
+        const newSupplier = input.newSupplier as Record<string, unknown> | null | undefined;
+        if (!supplierId && newSupplier && str(newSupplier.name)) {
+          const data = normalizeSupplierInput({
+            name: String(newSupplier.name),
+            gstin: str(newSupplier.gstin),
+            pan: str(newSupplier.pan),
+            state: str(newSupplier.state),
+            address: str(newSupplier.address),
+            addressLine2: str(newSupplier.addressLine2),
+            city: str(newSupplier.city),
+            pincode: str(newSupplier.pincode),
+            contactName: str(newSupplier.contactName),
+            contactEmail: str(newSupplier.contactEmail),
+            contactPhone: str(newSupplier.contactPhone),
+          });
+          const existing = await tx.supplier.findFirst({
+            where: data.gstin
+              ? { gstin: { equals: data.gstin, mode: "insensitive" } }
+              : { name: { equals: data.name, mode: "insensitive" } },
+          });
+          supplierId = existing ? existing.id : (await tx.supplier.create({ data })).id;
+        }
+        if (!supplierId) throw new Error("This proposal has no supplier - ask the assistant to prepare it again.");
+
         const poNumber = await nextDocumentNumber(tx, FINANCE_DOC_TYPE.PURCHASE_ORDER);
         return createPurchaseOrderRecord(
           tx,
           {
-            supplierId: String(input.supplierId),
+            supplierId,
             lineItems: (input.lineItems as PendingPoLine[]) ?? [],
-            orderDate: input.orderDate ? String(input.orderDate) : undefined,
-            expectedDate: input.expectedDate ? String(input.expectedDate) : undefined,
+            orderDate: input.orderDate ? new Date(String(input.orderDate)).toISOString() : undefined,
+            expectedDate: input.expectedDate ? new Date(String(input.expectedDate)).toISOString() : undefined,
             notes: (input.notes as string | null) ?? undefined,
             terms: (input.terms as string | null) ?? undefined,
+            vendorQuoteRef: str(input.vendorQuoteRef),
+            vendorQuoteDate: input.vendorQuoteDate ? new Date(String(input.vendorQuoteDate)).toISOString() : null,
+            shipToAddress: str(input.shipToAddress),
+            placeOfSupply: str(input.placeOfSupply),
+            paymentTerms: str(input.paymentTerms),
           },
           userId,
           poNumber,
-          company?.state,
         );
       });
       return po.id;

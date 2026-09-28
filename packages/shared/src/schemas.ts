@@ -455,18 +455,46 @@ export const paymentAllocationCreateSchema = z.object({
   amount: z.number().positive("Allocation amount must be > 0"),
 });
 
+/** Optional free-text field that also accepts null / "" (the forms send "" for a cleared input;
+ * routes normalise "" to null so an edit can actually clear a value). */
+const optText = (max: number) => z.string().trim().max(max).nullable().optional();
+
 export const supplierCreateSchema = z.object({
-  name: z.string().min(1),
-  gstin: z.string().max(20).optional(),
-  pan: z.string().max(20).optional(),
-  state: z.string().max(100).optional(),
-  address: z.string().max(1000).optional(),
-  contactName: z.string().max(200).optional(),
-  contactEmail: z.string().email().optional(),
-  contactPhone: z.string().max(20).optional(),
+  name: z.string().trim().min(1, "Supplier name is required").max(200),
+  gstin: optText(20),
+  pan: optText(20),
+  state: optText(100),
+  /** Address line 1 (street / building). Kept as `address` for backward compatibility. */
+  address: optText(1000),
+  addressLine2: optText(500),
+  city: optText(100),
+  pincode: z
+    .string()
+    .trim()
+    .max(10)
+    .refine((v) => v === "" || /^\d{6}$/.test(v.replace(/\s+/g, "")), "PIN code must be 6 digits")
+    .nullable()
+    .optional(),
+  contactName: optText(200),
+  contactEmail: z.union([z.string().trim().email(), z.literal("")]).nullable().optional(),
+  contactPhone: optText(30),
   openingBalance: z.number().optional(),
   openingBalanceDate: z.string().optional(),
 });
+
+export const supplierUpdateSchema = supplierCreateSchema.partial().extend({
+  isActive: z.boolean().optional(),
+});
+
+/** PO header fields added 2026-09-28 (vendor quotation ref, ship-to, place of supply, payment
+ * terms). All optional so older clients and the agent keep working. */
+const purchaseOrderHeaderFields = {
+  vendorQuoteRef: optText(100),
+  vendorQuoteDate: z.string().datetime().nullable().optional(),
+  shipToAddress: optText(1000),
+  placeOfSupply: optText(100),
+  paymentTerms: optText(1000),
+};
 
 export const purchaseOrderCreateSchema = z.object({
   supplierId: z.string().min(1),
@@ -476,6 +504,7 @@ export const purchaseOrderCreateSchema = z.object({
   expectedDate: z.string().datetime().optional(),
   notes: z.string().max(2000).optional(),
   terms: z.string().max(2000).optional(),
+  ...purchaseOrderHeaderFields,
   lineItems: z.array(lineItemSchema).min(1, "At least one line item is required"),
 });
 
