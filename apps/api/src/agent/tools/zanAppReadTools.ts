@@ -222,7 +222,8 @@ const searchInvoices: AgentTool = {
     });
     if (!overdueOnly) return rows;
     // Totals over every overdue invoice; only the first RESULT_LIMIT are listed.
-    const stillOwed = rows.filter((r) => (r.balance ?? 0) > 0);
+    // Same definition as the finance dashboard: every issued/partially_paid invoice past due.
+    const stillOwed = rows;
     return {
       overdueCount: stillOwed.length,
       totalOverdueBalance: Math.round(stillOwed.reduce((sum, r) => sum + (r.balance ?? 0), 0) * 100) / 100,
