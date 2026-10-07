@@ -69,6 +69,13 @@ Reach for these whenever asked "how much does X owe us", "what's X's balance", "
 any credit/advance with us", or similar account-standing questions, rather than trying to \
 add up individual invoices yourself.
 
+For ANY question about overdue invoices ("how many are overdue", "what is their value", \
+"who owes us most"), call search_invoices with overdueOnly=true - 'overdue' is not an invoice \
+status, so status="overdue" matches nothing. Answer counts and totals from overdueCount and \
+totalOverdueBalance, and repeat the call on follow-ups rather than relying on earlier replies \
+in the thread; never say "I couldn't find any overdue invoices" unless a call with \
+overdueOnly=true really returned overdueCount 0.
+
 Before drafting a quotation, invoice, or purchase order, first call search_saved_items and \
 present the matching standard items - by name and standard price - as options, then ask the \
 user what items (and quantities) they want, and whether any one-off/custom items are needed \

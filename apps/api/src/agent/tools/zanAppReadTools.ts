@@ -166,21 +166,30 @@ const searchInvoices: AgentTool = {
     "id, invoiceNumber, docType, customer, status, issueDate, dueDate, total, creditNoteTotal " +
     "(sum of any issued credit notes against it), amountPaid, balance (net of credit notes, " +
     "after allocated payments and pro-rated TDS), and whether it's overdue. Use " +
-    "get_document_detail for line items/payments/credit notes.",
+    "get_document_detail for line items/payments/credit notes. 'overdue' is NOT a status - to " +
+    "list or total overdue invoices set overdueOnly=true (never status='overdue'). With " +
+    "overdueOnly the result also carries overdueCount and totalOverdueBalance computed over " +
+    "ALL overdue invoices (the list itself is capped), so use those for 'how many'/'how much'.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "Invoice number or customer name (partial match)." },
       status: { type: "string", description: "Optional filter: draft | issued | partially_paid | paid | cancelled" },
+      overdueOnly: { type: "boolean", description: "True = only issued/partially_paid invoices past their due date. Use this for anything about overdue invoices." },
     },
   },
   handler: async (input, auth) => {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_INVOICES)) return forbidden("invoices");
     const query = input.query ? String(input.query) : undefined;
-    const status = input.status ? String(input.status) : undefined;
+    const rawStatus = input.status ? String(input.status).trim().toLowerCase() : undefined;
+    // Models often pass status="overdue"; it is not a stored status, so treat it as the flag.
+    const overdueOnly = input.overdueOnly === true || rawStatus === "overdue";
+    const status = rawStatus && rawStatus !== "overdue" ? rawStatus : undefined;
     const invoices = await prisma.invoice.findMany({
       where: {
-        ...(status ? { status } : {}),
+        ...(overdueOnly
+          ? { status: status ? status : { in: ["issued", "partially_paid"] }, dueDate: { lt: new Date() } }
+          : status ? { status } : {}),
         ...(query
           ? { OR: [{ invoiceNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }] }
           : {}),
@@ -193,11 +202,11 @@ const searchInvoices: AgentTool = {
         paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
         creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
       },
-      orderBy: { invoiceNumber: "asc" },
-      take: RESULT_LIMIT,
+      orderBy: overdueOnly ? { dueDate: "asc" } : { invoiceNumber: "asc" },
+      take: overdueOnly ? 500 : RESULT_LIMIT,
     });
     const now = Date.now();
-    return invoices.map((inv) => {
+    const rows = invoices.map((inv) => {
       const paid = settledFromAllocations(inv.paymentAllocations);
       const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
       const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), cnTotal);
@@ -211,6 +220,15 @@ const searchInvoices: AgentTool = {
         creditNoteTotal: num(cnTotal), amountPaid: num(paid), balance: num(balance), overdue,
       };
     });
+    if (!overdueOnly) return rows;
+    // Totals over every overdue invoice; only the first RESULT_LIMIT are listed.
+    const stillOwed = rows.filter((r) => (r.balance ?? 0) > 0);
+    return {
+      overdueCount: stillOwed.length,
+      totalOverdueBalance: Math.round(stillOwed.reduce((sum, r) => sum + (r.balance ?? 0), 0) * 100) / 100,
+      listed: Math.min(stillOwed.length, RESULT_LIMIT),
+      invoices: stillOwed.slice(0, RESULT_LIMIT),
+    };
   },
 };
 
