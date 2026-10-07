@@ -12,6 +12,21 @@ import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/fac
 import { AgentDeadline, LLM_CALL_TIMEOUT_MS } from "./timeouts";
 
 const MAX_TOOL_TURNS = 8;
+/** Search tools cap their lists (RESULT_LIMIT = 15 in zanAppReadTools). */
+const LIST_CAP_HINT = 15;
+
+/** Bare arrays give the model no way to tell "15 of 200" from "exactly 15", or an empty
+ * list from a wrong filter - the cause of wrong counts and "couldn't find any" answers. */
+function annotateListResult(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  if (value.length === 0) {
+    return { resultCount: 0, results: [], note: "No rows matched these exact filters. This does not prove nothing exists - check the filter values (status values are listed in the tool description) and try a broader query or another relevant tool before telling the user nothing was found." };
+  }
+  if (value.length >= LIST_CAP_HINT) {
+    return { resultCount: value.length, possiblyTruncated: true, results: value, note: "List is capped, so more rows may exist. Do NOT report this count as a total; say 'at least N' or narrow the query." };
+  }
+  return value;
+}
 
 export const TIMEOUT_REPLY =
   "Sorry - this is taking longer than I'm allowed to spend on one message, so I stopped here. " +
@@ -125,7 +140,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
           if (!tool) {
             resultValue = { error: `Unknown tool: ${call.name}` };
           } else {
-            resultValue = await tool.handler(call.input, params.auth);
+            resultValue = annotateListResult(await tool.handler(call.input, params.auth));
           }
         }
       } catch (err) {
