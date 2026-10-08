@@ -18,13 +18,17 @@ export const driveTools: AgentTool[] = [
   {
     name: "search_documents",
     description:
-      "Full-text search over documents in the company's shared document folder (vendor files, " +
-      "quotes, attachments, etc). Searches file content, not just names. Returns matches with " +
-      "fileId, name, and a link - use get_document_content on a fileId to read the actual text.",
+      "Search documents in the company's shared document folder (ZanF_DropBox) and ALL its " +
+      "subfolders (vendor files, quotes, proforma/tax invoices, PCR reports, attachments). Matches " +
+      "the phrase or every word in file/folder names and in indexed file content. Returns up to 25 " +
+      "matches (name matches first) with fileId, name, folderPath, webViewLink and totalMatches - use " +
+      "get_document_content on a fileId to read the text. Try a shorter or alternative term (e.g. 'PI', " +
+      "'proforma', a customer or site name) before saying nothing exists; files outside the shared " +
+      "folder are not visible.",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Search terms to look for in document content." },
+        query: { type: "string", description: "Words to look for in file names and content (e.g. 'proforma invoice', 'PCR')." },
       },
       required: ["query"],
     },
@@ -37,7 +41,8 @@ export const driveTools: AgentTool[] = [
   {
     name: "list_documents",
     description:
-      "Lists all documents in the company's shared document folder, most recently modified first. " +
+      "Lists the 50 most recently modified documents anywhere in the company's shared document " +
+      "folder and its subfolders, with folderPath and webViewLink. " +
       "Use this to browse what's available when the user isn't searching for something specific.",
     inputSchema: { type: "object", properties: {} },
     handler: async (_input, auth) => {
