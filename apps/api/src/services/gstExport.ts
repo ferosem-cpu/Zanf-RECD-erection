@@ -163,11 +163,12 @@ export async function buildGstr3b(from: Date, to: Date): Promise<Gstr3bResult> {
       status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID, INVOICE_STATUS.PAID] },
       issueDate: { gte: from, lte: to },
     },
-    select: { subtotal: true, discountAmount: true, cgstAmount: true, sgstAmount: true, igstAmount: true },
+    select: { subtotal: true, cgstAmount: true, sgstAmount: true, igstAmount: true },
   });
   let outwardTaxableValue = ZERO, outwardCgst = ZERO, outwardSgst = ZERO, outwardIgst = ZERO;
   for (const inv of invoices) {
-    outwardTaxableValue = outwardTaxableValue.plus(D(inv.subtotal)).minus(D(inv.discountAmount));
+    // subtotal is already after line discounts (taxCalc) - discountAmount is display-only.
+    outwardTaxableValue = outwardTaxableValue.plus(D(inv.subtotal));
     outwardCgst = outwardCgst.plus(D(inv.cgstAmount));
     outwardSgst = outwardSgst.plus(D(inv.sgstAmount));
     outwardIgst = outwardIgst.plus(D(inv.igstAmount));
