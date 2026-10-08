@@ -6,7 +6,7 @@
  * the DB, so Decimal precision loss here is safe.
  */
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, CREDIT_NOTE_STATUS } from "@recd/shared";
+import { PERMISSION_KEY, CREDIT_NOTE_STATUS, STAGE_KEY } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { buildCustomerLedger } from "../../services/ledger";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
@@ -461,16 +461,40 @@ const searchExpenses: AgentTool = {
 /** Order has no status column, and nothing in the app (Orders list, dashboards) labels an
  * order open/closed - the only lifecycle it has is its site's SITC stage (StageDefinition rows,
  * ordered by sequenceOrder; the customer portal treats every stage up to the current one as
- * done). So: an order is open until its site reaches the final stage; no site yet = open. */
-export function isOrderOpen(stageSeq: number | null, finalStageSeq: number | null): boolean {
-  if (stageSeq == null || finalStageSeq == null) return true;
-  return stageSeq < finalStageSeq;
+ * done). Business rule: an order is open until its site reaches the Commissioned stage (or any
+ * later one, e.g. customer sign-off); no site yet = open. `closedFromSeq` is the sequenceOrder
+ * of that cutoff stage - see resolveOpenCutoff. */
+export function isOrderOpen(stageSeq: number | null, closedFromSeq: number | null): boolean {
+  if (stageSeq == null || closedFromSeq == null) return true;
+  return stageSeq < closedFromSeq;
 }
 
-export function orderOpenWhere(finalStageSeq: number): Prisma.OrderWhereInput {
+export function orderOpenWhere(closedFromSeq: number): Prisma.OrderWhereInput {
   return {
-    OR: [{ site: { is: null } }, { site: { is: { currentStage: { sequenceOrder: { lt: finalStageSeq } } } } }],
+    OR: [{ site: { is: null } }, { site: { is: { currentStage: { sequenceOrder: { lt: closedFromSeq } } } } }],
   };
+}
+
+type StageRef = { label: string; sequenceOrder: number } | null;
+
+/** Picks the stage from which an order counts as closed: the Commissioned stage (looked up by
+ * key/label at runtime, since stages are DB rows). If it isn't configured, falls back to the
+ * final stage and says so; with no stages at all every order is open. */
+export function resolveOpenCutoff(commissioned: StageRef, finalStage: StageRef): { closedFromSeq: number | null; openDefinition: string } {
+  const base = "Order has no status field.";
+  if (commissioned) {
+    return {
+      closedFromSeq: commissioned.sequenceOrder,
+      openDefinition: `${base} An order is open until its site reaches the "${commissioned.label}" SITC stage or any later stage; an order with no site yet is open.`,
+    };
+  }
+  if (finalStage) {
+    return {
+      closedFromSeq: finalStage.sequenceOrder,
+      openDefinition: `${base} No "Commissioned" SITC stage is configured, so as a fallback an order is open until its site reaches the final stage ("${finalStage.label}"); an order with no site yet is open.`,
+    };
+  }
+  return { closedFromSeq: null, openDefinition: "No SITC stages are configured, so every order counts as open." };
 }
 
 export interface OrderSummaryRow {
@@ -483,7 +507,7 @@ export interface OrderSummaryRow {
 
 /** Counts, value and units over EVERY matching order (not just the listed page). Order.value
  * is the whole order's value (all its products), so line items add units but never value. */
-export function summarizeOrders(rows: OrderSummaryRow[], finalStageSeq: number | null) {
+export function summarizeOrders(rows: OrderSummaryRow[], closedFromSeq: number | null) {
   const units = new Map<string, number>();
   const stages = new Map<string, { stage: string; sequenceOrder: number; count: number; values: Array<number | null> }>();
   const open: OrderSummaryRow[] = [];
@@ -496,7 +520,7 @@ export function summarizeOrders(rows: OrderSummaryRow[], finalStageSeq: number |
     entry.count += 1;
     entry.values.push(r.value);
     stages.set(stage, entry);
-    if (isOrderOpen(r.stage?.sequenceOrder ?? null, finalStageSeq)) open.push(r);
+    if (isOrderOpen(r.stage?.sequenceOrder ?? null, closedFromSeq)) open.push(r);
   }
   return {
     count: rows.length,
@@ -525,7 +549,7 @@ const searchOrdersAndSites: AgentTool = {
     "cover every order. Lists up to 15 orders (newest first): id, orderNumber, customer, " +
     "product, quantity, additionalLineItems (extra products on the same order - an order can " +
     "carry more than one RECD/product), order value, dispatch dates, open (true until the site " +
-    "reaches the final SITC stage), and - if a site exists - its address, end-client company " +
+    "reaches the Commissioned SITC stage or later), and - if a site exists - its address, end-client company " +
     "name, current SITC stage, assigned engineer, and erection vendor. ALWAYS also returns " +
     "totalCount and totals {count, totalValue, ordersWithoutValue, totalUnits, unitsByProduct, " +
     "openCount, openValue, completedCount, byStage} computed over EVERY matching order - quote " +
@@ -541,7 +565,7 @@ const searchOrdersAndSites: AgentTool = {
     type: "object",
     properties: {
       query: { type: "string", description: "Order number, customer name, site company name, or site address/location (partial match)." },
-      openOnly: { type: "boolean", description: "True = only open orders: no site yet, or the site is not yet at the final SITC stage (customer sign-off)." },
+      openOnly: { type: "boolean", description: "True = only open orders: no site yet, or the site has not yet reached the Commissioned SITC stage (commissioned / customer sign-off = closed)." },
       stageKey: { type: "string", description: "Optional: only orders whose site is currently at this SITC stage key, e.g. dispatched, installing, commissioned, customer_signoff." },
     },
   },
@@ -576,13 +600,21 @@ const searchOrdersAndSites: AgentTool = {
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
     }
 
-    // Stages are DB rows, so "final stage" is read, not hard-coded (customer_signoff in the seed).
-    const finalStage = await prisma.stageDefinition.findFirst({
-      orderBy: { sequenceOrder: "desc" },
-      select: { label: true, sequenceOrder: true },
-    });
-    const finalStageSeq = finalStage?.sequenceOrder ?? null;
-    if (openOnly && finalStageSeq != null) filters.push(orderOpenWhere(finalStageSeq));
+    // Stages are DB rows, so the Commissioned cutoff is read by key/label, not hard-coded
+    // (sequenceOrder 11 in the seed, just before customer_signoff).
+    const [commissionedStage, finalStage] = await Promise.all([
+      prisma.stageDefinition.findFirst({
+        where: { OR: [{ key: STAGE_KEY.COMMISSIONED }, { label: { equals: "Commissioned", mode: "insensitive" } }] },
+        orderBy: { sequenceOrder: "asc" },
+        select: { label: true, sequenceOrder: true },
+      }),
+      prisma.stageDefinition.findFirst({
+        orderBy: { sequenceOrder: "desc" },
+        select: { label: true, sequenceOrder: true },
+      }),
+    ]);
+    const { closedFromSeq, openDefinition } = resolveOpenCutoff(commissionedStage, finalStage);
+    if (openOnly && closedFromSeq != null) filters.push(orderOpenWhere(closedFromSeq));
     if (stageKey) filters.push({ site: { is: { currentStage: { key: stageKey } } } });
     const where: Prisma.OrderWhereInput = { AND: filters };
 
@@ -620,14 +652,12 @@ const searchOrdersAndSites: AgentTool = {
         lineItems: o.lineItems.map((li) => ({ product: productLabel(li.product), quantity: li.quantity })),
         stage: o.site ? o.site.currentStage : null,
       })),
-      finalStageSeq,
+      closedFromSeq,
     );
 
     return {
       ...listMeta(orders.length, allMatching.length),
-      openDefinition: finalStage
-        ? `Order has no status field. An order is open until its site reaches the final SITC stage ("${finalStage.label}"); an order with no site yet is open.`
-        : "No SITC stages are configured, so every order counts as open.",
+      openDefinition,
       totals,
       orders: orders.map((o) => ({
         id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
@@ -637,7 +667,7 @@ const searchOrdersAndSites: AgentTool = {
         })),
         value: num(o.value),
         orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
-        open: isOrderOpen(o.site?.currentStage.sequenceOrder ?? null, finalStageSeq),
+        open: isOrderOpen(o.site?.currentStage.sequenceOrder ?? null, closedFromSeq),
         site: o.site
           ? {
               id: o.site.id,

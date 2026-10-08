@@ -91,8 +91,10 @@ complete: false only means some ROWS were not listed; totalCount and the totals 
 exact for the whole set. Use "at least" / "minimum" / "possibly more" ONLY when complete is \
 false, and even then never for totalCount or a server total - only for claims you made from \
 the listed rows themselves (e.g. "the largest one listed").
-- Open / pending / in-progress orders: search_orders_and_sites with openOnly=true (Order has no \
-status field - the result's openDefinition says what "open" means; quote it if asked). \
+- Open / pending / in-progress orders: search_orders_and_sites with openOnly=true. Order has no \
+status field: an order is open until its site reaches the Commissioned SITC stage (Commissioned \
+or Customer sign-off = closed; no site yet = open) - the result's openDefinition states the \
+exact rule in force; quote it if asked. \
 Unpaid / partly paid / outstanding invoices: search_invoices with status="issued,partially_paid".
 - Collections / payments received ("how much did we collect", "which months", "payments from \
 X"): search_payments. Dates are yyyy-mm-dd; month trends come from byMonth, never from \

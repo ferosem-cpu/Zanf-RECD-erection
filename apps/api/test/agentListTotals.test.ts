@@ -1,15 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  summarizeOrders, isOrderOpen, orderOpenWhere, summarizeInvoices, resolveInvoiceFilter, invoiceStatusWhere,
+  summarizeOrders, isOrderOpen, orderOpenWhere, resolveOpenCutoff, summarizeInvoices, resolveInvoiceFilter, invoiceStatusWhere,
   summarizePayments, isoDateIST, istDayStart, statusBreakdown, sumMoney, type OrderSummaryRow,
 } from "../src/agent/tools/zanAppReadTools";
 import { annotateListResult, listMeta, listPage, LIST_LIMIT, truncatedListNote } from "../src/agent/listResult";
 
+const COMMISSIONED = 11; // commissioned in the seed
 const FINAL = 12; // customer_signoff in the seed
 const stage = (sequenceOrder: number) => ({ label: `Stage ${sequenceOrder}`, sequenceOrder });
 
-/** The production shape: 21 orders, 12 open (9 at the final stage). */
+/** 21 orders, 12 open (3 at Commissioned + 6 at customer sign-off = 9 closed). */
 function productionOrders(): OrderSummaryRow[] {
   const rows: OrderSummaryRow[] = [];
   for (let i = 0; i < 21; i++) {
@@ -18,7 +19,7 @@ function productionOrders(): OrderSummaryRow[] {
       quantity: 1,
       product: i % 2 ? "RECD (RECD-500)" : "RECD (RECD-380)",
       lineItems: i === 3 ? [{ product: "RECD (RECD-500)", quantity: 2 }] : [],
-      stage: i < 9 ? stage(FINAL) : i < 11 ? null : stage((i % 11) + 1),
+      stage: i < 3 ? stage(COMMISSIONED) : i < 9 ? stage(FINAL) : i < 11 ? null : stage((i % 11) + 1),
     });
   }
   return rows;
@@ -26,7 +27,7 @@ function productionOrders(): OrderSummaryRow[] {
 
 test("order totals cover all 21 orders, not the first 15", () => {
   const rows = productionOrders();
-  const out = summarizeOrders(rows, FINAL);
+  const out = summarizeOrders(rows, COMMISSIONED);
   assert.equal(out.count, 21);
   assert.equal(out.openCount, 12);
   assert.equal(out.completedCount, 9);
@@ -35,7 +36,7 @@ test("order totals cover all 21 orders, not the first 15", () => {
   const expectedValue = sumMoney(rows.map((r) => r.value));
   assert.equal(out.totalValue, expectedValue);
   assert.equal(out.totalValue, 2190095); // 20 x 100000 + 1000.5 x (0+..+19)
-  const open = rows.filter((r) => isOrderOpen(r.stage?.sequenceOrder ?? null, FINAL));
+  const open = rows.filter((r) => isOrderOpen(r.stage?.sequenceOrder ?? null, COMMISSIONED));
   assert.equal(out.openValue, sumMoney(open.map((r) => r.value)));
   assert.equal(out.totalUnits, 23);
   assert.deepEqual(out.unitsByProduct, [
@@ -47,15 +48,30 @@ test("order totals cover all 21 orders, not the first 15", () => {
   assert.equal(sumMoney(out.byStage.map((b) => b.value)), out.totalValue);
 });
 
-test("open = no site yet, or site before the final SITC stage", () => {
-  assert.equal(isOrderOpen(null, FINAL), true);
-  assert.equal(isOrderOpen(1, FINAL), true);
-  assert.equal(isOrderOpen(11, FINAL), true);
-  assert.equal(isOrderOpen(12, FINAL), false);
+test("open = no site yet, or site before the Commissioned SITC stage", () => {
+  assert.equal(isOrderOpen(null, COMMISSIONED), true); // no site
+  assert.equal(isOrderOpen(1, COMMISSIONED), true);
+  assert.equal(isOrderOpen(10, COMMISSIONED), true); // commissioning (before Commissioned)
+  assert.equal(isOrderOpen(11, COMMISSIONED), false); // at Commissioned
+  assert.equal(isOrderOpen(12, COMMISSIONED), false); // after (customer sign-off)
   assert.equal(isOrderOpen(5, null), true);
-  assert.deepEqual(orderOpenWhere(FINAL), {
-    OR: [{ site: { is: null } }, { site: { is: { currentStage: { sequenceOrder: { lt: FINAL } } } } }],
+  assert.deepEqual(orderOpenWhere(COMMISSIONED), {
+    OR: [{ site: { is: null } }, { site: { is: { currentStage: { sequenceOrder: { lt: COMMISSIONED } } } } }],
   });
+});
+
+test("open cutoff: Commissioned stage, else final stage fallback, else everything open", () => {
+  const commissioned = { label: "Commissioned", sequenceOrder: COMMISSIONED };
+  const signoff = { label: "Customer sign-off", sequenceOrder: FINAL };
+  const found = resolveOpenCutoff(commissioned, signoff);
+  assert.equal(found.closedFromSeq, COMMISSIONED);
+  assert.match(found.openDefinition, /"Commissioned" SITC stage or any later stage/);
+  const fallback = resolveOpenCutoff(null, signoff);
+  assert.equal(fallback.closedFromSeq, FINAL);
+  assert.match(fallback.openDefinition, /No "Commissioned" SITC stage is configured/);
+  const none = resolveOpenCutoff(null, null);
+  assert.equal(none.closedFromSeq, null);
+  assert.equal(isOrderOpen(11, none.closedFromSeq), true);
 });
 
 test("completeness comes from a real count: exactly 15 complete rows are not flagged", () => {
