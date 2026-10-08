@@ -614,14 +614,16 @@ export interface RevenueInvoiceRow { subtotal: number; gst: number; total: numbe
 export interface RevenuePaymentRow { amount: number; tdsAmount: number; method: string }
 
 /** Invoiced = issued tax invoices dated in the period (taxable value excl. GST), less issued
- * credit notes dated in the period. Collected = payments received in the period, cash only
- * (legacy "TDS Deducted" rows and tdsAmount are TDS, not cash) - the Finance dashboard's
- * "Revenue" bars. */
+ * credit notes dated in the period. Collected = payments received in the period split by
+ * paymentSplit into cash (the Finance dashboard's "Revenue" bars) and TDS (legacy "TDS
+ * Deducted" rows are all TDS), plus the settled total = cash + TDS. */
 export function summarizeRevenue(invoices: RevenueInvoiceRow[], creditNotes: RevenueInvoiceRow[], payments: RevenuePaymentRow[]) {
   const sum = (rows: RevenueInvoiceRow[], k: keyof RevenueInvoiceRow) => sumMoney(rows.map((r) => r[k]));
   const inv = { taxable: sum(invoices, "subtotal"), gst: sum(invoices, "gst"), gross: sum(invoices, "total") };
   const cn = { taxable: sum(creditNotes, "subtotal"), gst: sum(creditNotes, "gst"), gross: sum(creditNotes, "total") };
   const split = payments.map((p) => splitPayment(p));
+  const cashReceived = sumMoney(split.map((s) => Number(s.cash)));
+  const tdsDeducted = sumMoney(split.map((s) => Number(s.tds)));
   return {
     invoiced: {
       basis: "Issued tax invoices (issued, partially paid or paid; drafts, cancelled and proforma invoices excluded) by invoice date, net of issued credit notes dated in the same period.",
@@ -634,10 +636,11 @@ export function summarizeRevenue(invoices: RevenueInvoiceRow[], creditNotes: Rev
       creditNotesExclGst: cn.taxable,
     },
     collected: {
-      basis: "Payments received in the period, cash actually received (GST-inclusive as paid; TDS excluded) - the same basis as the Finance dashboard's 'Revenue' chart.",
+      basis: "Payments received in the period: cashReceived = cash actually received (GST-inclusive as paid; the Finance dashboard's 'Revenue' chart), tdsDeducted = TDS deducted by customers (tdsAmount, or the whole amount of a legacy 'TDS Deducted' row), settledTotal = cash + TDS (what the invoices were settled by). Quote all three.",
       paymentCount: payments.length,
-      cashReceived: sumMoney(split.map((s) => Number(s.cash))),
-      tdsDeducted: sumMoney(split.map((s) => Number(s.tds))),
+      cashReceived,
+      tdsDeducted,
+      settledTotal: sumMoney([cashReceived, tdsDeducted]),
     },
   };
 }
@@ -650,7 +653,8 @@ const getRevenueSummary: AgentTool = {
     "Q4 Jan-Mar) in IST; current periods run to today ('to date'). Use all_time for 'total invoiced'. Returns the " +
     "exact period dates and two server-computed figures, each with its basis: invoiced (issued tax invoices by " +
     "invoice date, net of credit notes: netExclGst = taxable value EXCL. GST, netGst, netInclGst = INCL. GST) and " +
-    "collected (cash received, the Finance dashboard 'Revenue' basis). Answer with BOTH excl. and incl. GST " +
+    "collected (cashReceived, tdsDeducted and settledTotal = cash + TDS; quote all three, never cash alone as " +
+    "'collected'). Answer with BOTH excl. and incl. GST " +
     "invoiced figures, state the period dates and invoiced vs collected. Revenue = tax invoices only; proforma " +
     "invoices are excluded - say so briefly. Quote these, never add up invoice/payment rows.",
   inputSchema: {
@@ -700,7 +704,7 @@ const getRevenueSummary: AgentTool = {
       ),
       revenueRule: REVENUE_RULE,
       proformaInvoicesInPeriod: { count: proformaCount, note: "Proforma invoices are not revenue and are excluded from every figure above." },
-      answerRule: "State the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or cash collected), and say briefly: tax invoices only, proformas excluded.",
+      answerRule: "State the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or collections as cash + TDS = settled total - all three, never cash alone as 'collected'), and say briefly: tax invoices only, proformas excluded.",
     };
   },
 };

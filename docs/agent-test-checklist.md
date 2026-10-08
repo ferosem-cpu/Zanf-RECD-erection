@@ -68,7 +68,7 @@ General pass criteria for every row:
 
 | # | Question | Expected tool(s) | Admin-web page to cross-check | Pass criteria | Result |
 |---|---|---|---|---|---|
-| 25 | How much did we collect last month? | search_payments (from/to) | /finance/payments | Cash collected and TDS stated separately; totals cover all payments, not 15 listed | |
+| 25 | How much did we collect last month? / this FY? | get_revenue_summary (last_month / this_fy) or search_payments (from/to) | /finance/payments, /reports/tds | Cash received, TDS deducted and settled total (cash + TDS) all stated - never cash alone as "collected"; a legacy "TDS Deducted" row counts as TDS; totals cover all payments, not 15 listed | |
 | 26 | How much TDS has been deducted by customers this FY? | search_payments (no method filter) | /reports/tds | TDS = tdsAmount + full amount of method "tds" (TDS Deducted) payments; matches TDS report | |
 | 27 | Show payments from <customer X> with UTR. | search_payments (query) | /finance/payments, /finance/ledgers | References, IST received dates, amounts match; a "TDS Deducted" payment is not counted as cash | |
 

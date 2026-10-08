@@ -79,7 +79,7 @@ test("revenue periods resolve to explicit dates", () => {
   assert.ok("error" in resolveRevenuePeriod({ period: "fortnight" }, today));
 });
 
-test("revenue: invoiced excl. GST net of credit notes; collected = cash only (TDS out)", () => {
+test("revenue: invoiced excl. GST net of credit notes; collected = cash, TDS and settled total", () => {
   const out = summarizeRevenue(
     [{ subtotal: 100000, gst: 18000, total: 118000 }, { subtotal: 50000, gst: 9000, total: 59000 }],
     [{ subtotal: 10000, gst: 1800, total: 11800 }],
@@ -93,7 +93,9 @@ test("revenue: invoiced excl. GST net of credit notes; collected = cash only (TD
   assert.equal(out.invoiced.netInclGst, 165200);
   assert.equal(out.invoiced.invoiceCount, 2);
   assert.equal(out.collected.cashReceived, 100000);
-  assert.equal(out.collected.tdsDeducted, 5000);
+  assert.equal(out.collected.tdsDeducted, 5000); // 2000 tdsAmount + the whole legacy "tds" row
+  assert.equal(out.collected.settledTotal, 105000);
+  assert.match(out.collected.basis, /settledTotal = cash \+ TDS/);
   assert.match(out.invoiced.basis, /net of issued credit notes/);
   assert.match(out.collected.basis, /Finance dashboard/);
 });
@@ -177,9 +179,19 @@ test("get_revenue_summary counts tax invoices only; proformas are excluded and t
     count: async (args: any) => rows.filter((r) => r.docType === args.where.docType).length,
   });
   replace("creditNote", { findMany: async () => [] });
-  replace("paymentReceived", { findMany: async () => [] });
+  replace("paymentReceived", {
+    findMany: async () => [
+      { amount: "50000.00", tdsAmount: "1000.00", method: "neft" },
+      { amount: "2000.00", tdsAmount: "0", method: "tds" },
+    ],
+  });
 
   const res: any = await tool.handler({ period: "this_fy" }, auth);
+  assert.deepEqual(
+    [res.collected.cashReceived, res.collected.tdsDeducted, res.collected.settledTotal],
+    [50000, 3000, 53000],
+  );
+  assert.match(res.answerRule, /cash \+ TDS = settled total/);
   assert.equal(invoiceWheres[0].docType, "tax_invoice");
   assert.equal(res.invoiced.invoiceCount, 1);
   assert.equal(res.invoiced.netExclGst, 100000);
