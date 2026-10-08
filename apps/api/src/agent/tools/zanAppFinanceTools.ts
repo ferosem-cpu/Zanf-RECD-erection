@@ -353,7 +353,7 @@ const searchVendorBills: AgentTool = {
         const paid = sumMoney(b.payments.map((p) => money(p.amount)));
         const balance = isPayableStatus(b.status) ? Math.max(sumMoney([money(b.total), -paid]), 0) : 0;
         const { daysPastDue } = ageingBucket(b.dueDate ?? b.billDate, now);
-        const overdue = isPayableStatus(b.status) && balance > 0 && !!b.dueDate && b.dueDate.getTime() < now.getTime();
+        const overdue = isPayableStatus(b.status) && balance > 0 && !!b.dueDate && daysPastDue > 0;
         return {
           id: b.id, billNumber: b.billNumber, supplier: b.supplier.name, status: b.status,
           billDate: isoDateIST(b.billDate), dueDate: b.dueDate ? isoDateIST(b.dueDate) : null,

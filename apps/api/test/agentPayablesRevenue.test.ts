@@ -29,6 +29,18 @@ test("ageing buckets match the payables report (days past due date, else bill da
   assert.equal(ageingBucket(d("2026-10-20T00:00:00Z"), NOW).daysPastDue, 0);
 });
 
+test("days past due = difference of IST calendar dates (bills and invoices alike)", () => {
+  const d = (s: string) => new Date(s);
+  const nineOctMorningIST = d("2026-10-08T23:30:00.000Z"); // 09 Oct 05:00 IST
+  assert.deepEqual(ageingBucket(d("2026-09-29T00:00:00.000Z"), nineOctMorningIST), { bucket: "days0_30", daysPastDue: 10 });
+  // Due 28 Sep 18:30 UTC = 29 Sep 00:00 IST: still 29 Sep, still 10 days.
+  assert.equal(ageingBucket(d("2026-09-28T18:30:00.000Z"), nineOctMorningIST).daysPastDue, 10);
+  // Due today (IST) or later: not yet due.
+  assert.deepEqual(ageingBucket(d("2026-10-09T00:00:00.000Z"), nineOctMorningIST), { bucket: "current", daysPastDue: 0 });
+  assert.deepEqual(ageingBucket(d("2026-10-08T18:30:00.000Z"), nineOctMorningIST), { bucket: "current", daysPastDue: 0 });
+  assert.equal(ageingBucket(d("2026-10-08T00:00:00.000Z"), nineOctMorningIST).daysPastDue, 1);
+});
+
 test("payables = approved/partially paid bills minus payments; fully paid bills drop out; per-vendor + ageing add up", () => {
   const bill = (over: Partial<PayableBillRow>): PayableBillRow => ({
     id: "b", billNumber: "B", supplierId: "s1", supplier: "Selvam Enterprises", status: "approved",
