@@ -607,6 +607,9 @@ export function resolveRevenuePeriod(input: { period?: unknown; from?: unknown; 
   }
 }
 
+/** Revenue counts tax invoices only; proformas are never revenue. */
+export const REVENUE_RULE = "Revenue = tax invoices only; proforma invoices are excluded.";
+
 export interface RevenueInvoiceRow { subtotal: number; gst: number; total: number }
 export interface RevenuePaymentRow { amount: number; tdsAmount: number; method: string }
 
@@ -648,7 +651,8 @@ const getRevenueSummary: AgentTool = {
     "exact period dates and two server-computed figures, each with its basis: invoiced (issued tax invoices by " +
     "invoice date, net of credit notes: netExclGst = taxable value EXCL. GST, netGst, netInclGst = INCL. GST) and " +
     "collected (cash received, the Finance dashboard 'Revenue' basis). Answer with BOTH excl. and incl. GST " +
-    "invoiced figures, state the period dates and invoiced vs collected. Quote these, never add up invoice/payment rows.",
+    "invoiced figures, state the period dates and invoiced vs collected. Revenue = tax invoices only; proforma " +
+    "invoices are excluded - say so briefly. Quote these, never add up invoice/payment rows.",
   inputSchema: {
     type: "object",
     properties: {
@@ -694,8 +698,9 @@ const getRevenueSummary: AgentTool = {
         creditNotes.map(doc),
         payments.map((p) => ({ amount: money(p.amount), tdsAmount: money(p.tdsAmount), method: p.method })),
       ),
-      proformaInvoicesInPeriod: { count: proformaCount, note: "Proforma invoices are not revenue and are excluded." },
-      answerRule: "State the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or cash collected).",
+      revenueRule: REVENUE_RULE,
+      proformaInvoicesInPeriod: { count: proformaCount, note: "Proforma invoices are not revenue and are excluded from every figure above." },
+      answerRule: "State the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or cash collected), and say briefly: tax invoices only, proformas excluded.",
     };
   },
 };

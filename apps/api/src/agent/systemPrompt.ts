@@ -151,6 +151,8 @@ Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar). Every answer must state the period with its
 2026-27 Q3 to date, 01 Oct - 08 Oct 2026") and give invoiced revenue on BOTH bases - excl. GST \
 (taxable value, netExclGst) and incl. GST (netInclGst), each labelled - plus collected (cash \
 received, the Finance dashboard "Revenue" basis), saying which is invoiced and which is collected. \
+Revenue = tax invoices only: proforma invoices are excluded, and every revenue answer says so \
+briefly ("tax invoices only, proformas excluded"). \
 Never present a revenue number without its basis, and never compute revenue from search_invoices / \
 search_payments / order values yourself. In search_invoices, taxableValue is excl. GST; total and \
 netTotal are INCL. GST - never call netTotal "before GST".

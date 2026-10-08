@@ -57,12 +57,12 @@ General pass criteria for every row:
 
 | # | Question | Expected tool(s) | Admin-web page to cross-check | Pass criteria | Result |
 |---|---|---|---|---|---|
-| 19 | What is our revenue this quarter? | get_revenue_summary (this_quarter) | /reports/finance, /invoices | States period (e.g. Q3 FY26-27, 1 Oct - today); gives invoiced excl. GST and incl. GST net of credit notes, and collected cash separately | |
+| 19 | What is our revenue this quarter? | get_revenue_summary (this_quarter) | /reports/finance, /invoices | States period (e.g. Q3 FY26-27, 1 Oct - today); gives invoiced excl. GST and incl. GST net of credit notes, and collected cash separately; says "tax invoices only, proformas excluded" (proforma invoices never counted) | |
 | 20 | And last quarter? (follow-up) | get_revenue_summary (last_quarter) | /reports/finance | Re-calls tool; Q2 = Jul-Sep; same three bases stated | |
 | 21 | Revenue last month? | get_revenue_summary (last_month) | /reports/finance | Calendar month in IST stated; figures match | |
 | 22 | Turnover this financial year to date? | get_revenue_summary (this_fy) | /reports/finance, /reports/gst-returns | FY = 1 Apr - today; invoiced excl. GST matches GST returns outward taxable value net of credit notes | |
 | 23 | Revenue in Q4 of last FY? | get_revenue_summary (from/to) | /reports/finance | Q4 = Jan-Mar of the later calendar year (not Oct-Dec); period stated | |
-| 24 | How much has been invoiced in total ever? | get_revenue_summary (all_time) | /invoices | Basis stated; credit notes deducted; drafts/cancelled excluded | |
+| 24 | How much has been invoiced in total ever? | get_revenue_summary (all_time) | /invoices | Basis stated; credit notes deducted; drafts/cancelled and proforma invoices excluded (tax invoices only) | |
 
 ## 6. Collections and TDS
 

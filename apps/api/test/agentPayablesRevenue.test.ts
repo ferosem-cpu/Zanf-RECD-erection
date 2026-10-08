@@ -152,3 +152,40 @@ test("get_payables: tolerant supplier filter, separate POs/awaiting approval, un
   assert.match(missing.error, /No supplier matches/);
   assert.ok(missing.suppliers.includes("Selvam Enterprises"));
 });
+
+test("get_revenue_summary counts tax invoices only; proformas are excluded and the rule is stated", async (t) => {
+  const tool = zanAppFinanceTools.find((x) => x.name === "get_revenue_summary")!;
+  const auth = { userId: "f", roleKey: "finance", permissions: new Set([PERMISSION_KEY.VIEW_FINANCE_DASHBOARD]) };
+  const replace = (key: string, value: unknown) => {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  };
+  const rows = [
+    { docType: "tax_invoice", subtotal: "100000.00", cgstAmount: "9000.00", sgstAmount: "9000.00", igstAmount: "0", total: "118000.00" },
+    { docType: "proforma", subtotal: "500000.00", cgstAmount: "45000.00", sgstAmount: "45000.00", igstAmount: "0", total: "590000.00" },
+  ];
+  const invoiceWheres: any[] = [];
+  replace("invoice", {
+    findMany: async (args: any) => {
+      invoiceWheres.push(args.where);
+      return rows.filter((r) => r.docType === args.where.docType);
+    },
+    count: async (args: any) => rows.filter((r) => r.docType === args.where.docType).length,
+  });
+  replace("creditNote", { findMany: async () => [] });
+  replace("paymentReceived", { findMany: async () => [] });
+
+  const res: any = await tool.handler({ period: "this_fy" }, auth);
+  assert.equal(invoiceWheres[0].docType, "tax_invoice");
+  assert.equal(res.invoiced.invoiceCount, 1);
+  assert.equal(res.invoiced.netExclGst, 100000);
+  assert.equal(res.invoiced.netInclGst, 118000);
+  assert.equal(res.proformaInvoicesInPeriod.count, 1);
+  assert.match(res.revenueRule, /tax invoices only; proforma invoices are excluded/);
+  assert.match(res.answerRule, /tax invoices only, proformas excluded/);
+  assert.match(tool.description, /proforma/);
+});
