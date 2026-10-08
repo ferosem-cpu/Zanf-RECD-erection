@@ -8,9 +8,13 @@ import { PERMISSION_KEY, BILL_STATUS, PO_STATUS, INVOICE_STATUS, INVOICE_DOC_TYP
 import { prisma } from "../../lib/prisma";
 import { splitPayment } from "../../services/paymentSplit";
 import { settledFromAllocations } from "../../services/settlement";
-import { ageingBucket, emptyAgeing, type AgeingBucket } from "../../services/ageing";
-import { LIST_LIMIT } from "../listResult";
-import { exclGstPortion, isoDateIST, istDayStart, sumMoney } from "./zanAppReadTools";
+import { ageingBucket, emptyAgeing } from "../../services/ageing";
+import {
+  PAYABLE_BILL_STATUSES, AWAITING_VERIFICATION_BILL_STATUSES, DEAD_BILL_STATUSES, isPayableStatus,
+  summarizePayables as summarizePayablesShared, type PayableBillRow,
+} from "../../services/payables";
+import { LIST_LIMIT, listMeta } from "../listResult";
+import { exclGstPortion, isoDateIST, istDayStart, sumMoney, normalizeLabel, resolveLookupFilter, validValuesList } from "./zanAppReadTools";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const DAY_MS = 86_400_000;
@@ -60,75 +64,73 @@ export function supplierNameMatches(query: string, name: string): boolean {
 
 // --- Payables -----------------------------------------------------------------
 
-/** A bill is a payable once approved, until fully paid - the finance dashboard's definition
- * (routes/financeDashboard.ts). Uploaded/verified bills are awaiting approval (reported
- * separately); rejected/cancelled ones never were a liability. */
-export const PAYABLE_BILL_STATUSES: string[] = [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID];
-export const AWAITING_APPROVAL_BILL_STATUSES: string[] = [BILL_STATUS.UPLOADED, BILL_STATUS.VERIFIED];
+// Payable statuses/outstanding/ageing live in services/payables.ts, shared with the Finance
+// dashboard so the agent and the Outstanding payables KPI can never disagree.
+export { PAYABLE_BILL_STATUSES, AWAITING_VERIFICATION_BILL_STATUSES, ageingBucket };
+export type { PayableBillRow };
 /** Open POs = issued and not yet fully received/closed - commitments, not payables. */
 export const OPEN_PO_STATUSES: string[] = [PO_STATUS.ISSUED, PO_STATUS.PARTIALLY_RECEIVED];
+/** POs that count as placed orders for the PO-vs-bills comparison (drafts/cancelled don't). */
+const PLACED_PO_STATUSES: string[] = [PO_STATUS.ISSUED, PO_STATUS.PARTIALLY_RECEIVED, PO_STATUS.RECEIVED, PO_STATUS.CLOSED];
 
 export const PAYABLES_BASIS =
-  "Payables = vendor invoices (bills) in status approved or partially_paid, outstanding = bill total (incl. GST) " +
-  "minus vendor payments recorded against the bill - the same rule as the Finance dashboard 'Outstanding payables' " +
-  "and the Payables ageing report. Vendor payments carry no TDS field, so no TDS is deducted; debit notes are not " +
-  "netted (shown separately). Bills awaiting approval (uploaded/verified) are NOT payables yet and rejected/cancelled " +
-  "bills are excluded. Open purchase orders are commitments, not payables, and are listed separately.";
+  "Payables = vendor invoices (bills) in status verified, approved or partially_paid; outstanding = bill total (incl. GST) " +
+  "minus vendor payments recorded against the bill - the same shared rule as the Finance dashboard 'Outstanding payables' " +
+  "and the Payables ageing report (services/payables.ts). Vendor payments carry no TDS field, so no TDS is deducted; debit " +
+  "notes are not netted (shown separately). Uploaded (not yet verified) bills are listed separately; rejected, cancelled, " +
+  "deleted and paid bills are excluded. Open purchase orders are commitments, not payables, and are listed separately.";
 
-export interface PayableBillRow {
-  id: string;
-  billNumber: string;
-  supplierId: string;
-  supplier: string;
-  status: string;
-  billDate: Date;
-  dueDate: Date | null;
-  total: number;
-  paid: number;
-  debitNotes: number;
-}
-
-// Same buckets/anchor as the Finance receivables/payables ageing reports (services/ageing.ts).
-export { ageingBucket };
-
+/** Agent view of the shared payables summary: dates as IST yyyy-mm-dd. */
 export function summarizePayables(bills: PayableBillRow[], now: Date, listLimit = LIST_LIMIT) {
-  const open = bills
-    .map((b) => {
-      const outstanding = sumMoney([b.total, -b.paid]);
-      const { bucket, daysPastDue } = ageingBucket(b.dueDate ?? b.billDate, now);
-      return { ...b, outstanding, bucket, daysPastDue };
-    })
-    .filter((b) => b.outstanding > 0);
-
-  const ageing = emptyAgeing();
-  const vendors = new Map<string, { supplierId: string; supplier: string; billCount: number; outstanding: number; ageing: Record<AgeingBucket, number> }>();
-  for (const b of open) {
-    ageing[b.bucket] = sumMoney([ageing[b.bucket], b.outstanding]);
-    const v = vendors.get(b.supplierId) ?? { supplierId: b.supplierId, supplier: b.supplier, billCount: 0, outstanding: 0, ageing: emptyAgeing() };
-    v.billCount += 1;
-    v.outstanding = sumMoney([v.outstanding, b.outstanding]);
-    v.ageing[b.bucket] = sumMoney([v.ageing[b.bucket], b.outstanding]);
-    vendors.set(b.supplierId, v);
-  }
-  // Due list: most overdue first, then by due/bill date.
-  const due = [...open].sort((a, b) => b.daysPastDue - a.daysPastDue || (a.dueDate ?? a.billDate).getTime() - (b.dueDate ?? b.billDate).getTime());
-
+  const s = summarizePayablesShared(bills, now, listLimit);
   return {
-    totalOutstanding: sumMoney(open.map((b) => b.outstanding)),
-    billCount: open.length,
-    vendorCount: vendors.size,
-    overdueCount: open.filter((b) => b.daysPastDue > 0).length,
-    overdueAmount: sumMoney(open.filter((b) => b.daysPastDue > 0).map((b) => b.outstanding)),
-    debitNotesAgainstOpenBills: sumMoney(open.map((b) => b.debitNotes)),
-    ageing,
-    byVendor: [...vendors.values()].sort((a, b) => b.outstanding - a.outstanding || a.supplier.localeCompare(b.supplier)),
-    complete: due.length <= listLimit,
-    dueList: due.slice(0, listLimit).map((b) => ({
+    ...s,
+    dueList: s.dueList.map((b) => ({
       id: b.id, billNumber: b.billNumber, supplier: b.supplier, status: b.status,
       billDate: isoDateIST(b.billDate), dueDate: b.dueDate ? isoDateIST(b.dueDate) : null,
       total: b.total, paid: b.paid, outstanding: b.outstanding, daysPastDue: b.daysPastDue, ageingBucket: b.bucket,
     })),
   };
+}
+
+export interface PoVsBillsInput {
+  supplierId: string;
+  supplier: string;
+  pos: { total: number; status: string; billedAgainst: number }[];
+  bills: { total: number; paid: number; status: string }[];
+}
+
+/** Per vendor: PO value placed vs billed vs paid vs still owed vs open (unbilled) commitment. */
+export function poVsBillsByVendor(rows: PoVsBillsInput[]) {
+  return rows
+    .map((r) => ({
+      supplierId: r.supplierId,
+      supplier: r.supplier,
+      poCount: r.pos.length,
+      poValue: sumMoney(r.pos.map((p) => p.total)),
+      billCount: r.bills.length,
+      billedTotal: sumMoney(r.bills.map((b) => b.total)),
+      paidTotal: sumMoney(r.bills.map((b) => b.paid)),
+      billBalance: sumMoney(r.bills.filter((b) => isPayableStatus(b.status)).map((b) => Math.max(sumMoney([b.total, -b.paid]), 0))),
+      openPoCommitment: sumMoney(
+        r.pos.filter((p) => OPEN_PO_STATUSES.includes(p.status)).map((p) => Math.max(sumMoney([p.total, -p.billedAgainst]), 0)),
+      ),
+    }))
+    .filter((v) => v.poCount > 0 || v.billCount > 0)
+    .sort((a, b) => b.billBalance - a.billBalance || b.poValue - a.poValue || a.supplier.localeCompare(b.supplier));
+}
+
+/** Resolves a supplier name typed by the user to supplier ids (tolerant matching). */
+async function resolveSuppliers(query: string): Promise<{ ids: string[]; names: string[] } | { error: string; suppliers: string[] }> {
+  const suppliers = await prisma.supplier.findMany({ select: { id: true, name: true } });
+  const matched = suppliers.filter((s) => supplierNameMatches(query, s.name));
+  if (matched.length === 0) {
+    return {
+      error: `No supplier matches "${query}". Check the spelling with search_suppliers before saying nothing is owed.`,
+      suppliers: suppliers.map((s) => s.name).sort().slice(0, 50),
+    };
+  }
+  return { ids: matched.map((s) => s.id), names: matched.map((s) => s.name) };
 }
 
 const getPayables: AgentTool = {
@@ -137,11 +139,13 @@ const getPayables: AgentTool = {
     "What WE OWE suppliers/vendors: 'how much is pending to pay', 'payables', 'to whom do we owe', " +
     "'pending to be paid to vendor X'. Returns server-computed totalOutstanding, billCount, " +
     "overdueCount/overdueAmount, ageing buckets (current, 0-30, 31-60, 61-90, 90+ days past due), byVendor " +
-    "(outstanding per supplier) and a dueList of open vendor invoices (most overdue first), over EVERY " +
-    "approved/partially paid vendor invoice - basis states the exact rule. Also returns, SEPARATELY, " +
-    "awaitingApproval (uploaded/verified bills - not payable yet), openPurchaseOrders (commitments, not " +
-    "payables) and unappliedAdvances (money already paid ahead to a supplier). Optional supplier filter is " +
-    "tolerant (case, punctuation, 'Ent.' = 'Enterprises', partial names).",
+    "(outstanding per supplier), byStatus and a dueList of open vendor invoices (most overdue first), over EVERY " +
+    "verified/approved/partially paid vendor invoice - basis states the exact rule (same as the Finance dashboard). " +
+    "Also returns, SEPARATELY, awaitingVerification (uploaded bills), poVsBills (per vendor: PO value vs billed vs " +
+    "paid vs bill balance vs open PO commitment), openPurchaseOrders (commitments, not payables) and " +
+    "unappliedAdvances. Use it for 'to whom?', 'ageing?', 'PO vs bills'. For individual bills by status " +
+    "(Rejected, Paid, ...) use search_vendor_bills. Optional supplier filter is tolerant (case, punctuation, " +
+    "'Ent.' = 'Enterprises', partial names).",
   inputSchema: {
     type: "object",
     properties: {
@@ -159,39 +163,31 @@ const getPayables: AgentTool = {
     let supplierIds: string[] | undefined;
     let matchedSuppliers: string[] | undefined;
     if (supplierQuery) {
-      const suppliers = await prisma.supplier.findMany({ select: { id: true, name: true } });
-      const matched = suppliers.filter((s) => supplierNameMatches(supplierQuery, s.name));
-      if (matched.length === 0) {
-        return {
-          error: `No supplier matches "${supplierQuery}". Check the spelling with search_suppliers before saying nothing is owed.`,
-          suppliers: suppliers.map((s) => s.name).sort().slice(0, 50),
-        };
-      }
-      supplierIds = matched.map((s) => s.id);
-      matchedSuppliers = matched.map((s) => s.name);
+      const resolved = await resolveSuppliers(supplierQuery);
+      if ("error" in resolved) return resolved;
+      supplierIds = resolved.ids;
+      matchedSuppliers = resolved.names;
     }
     const bySupplier = supplierIds ? { supplierId: { in: supplierIds } } : {};
     const now = new Date();
 
-    const [bills, awaiting, openPos, advances] = await Promise.all([
+    // Every live (not rejected/cancelled/deleted) bill: payables, awaiting verification and
+    // the PO-vs-bills comparison all come from this one set.
+    const [liveBills, placedPos, advances] = await Promise.all([
       prisma.bill.findMany({
-        where: { ...bySupplier, status: { in: PAYABLE_BILL_STATUSES } },
+        where: { ...bySupplier, status: { notIn: DEAD_BILL_STATUSES } },
         include: {
           supplier: { select: { name: true } },
           payments: { select: { amount: true } },
           debitNotes: { select: { amount: true } },
         },
-      }),
-      prisma.bill.findMany({
-        where: { ...bySupplier, status: { in: AWAITING_APPROVAL_BILL_STATUSES } },
-        select: { id: true, billNumber: true, status: true, billDate: true, total: true, supplier: { select: { name: true } } },
         orderBy: { billDate: "asc" },
       }),
       prisma.purchaseOrder.findMany({
-        where: { ...bySupplier, status: { in: OPEN_PO_STATUSES } },
+        where: { ...bySupplier, status: { in: PLACED_PO_STATUSES } },
         select: {
-          id: true, poNumber: true, status: true, orderDate: true, total: true, supplier: { select: { name: true } },
-          bills: { where: { status: { notIn: [BILL_STATUS.REJECTED, BILL_STATUS.CANCELLED, BILL_STATUS.DELETED] } }, select: { total: true } },
+          id: true, poNumber: true, status: true, orderDate: true, total: true, supplierId: true, supplier: { select: { name: true } },
+          bills: { where: { status: { notIn: DEAD_BILL_STATUSES } }, select: { total: true } },
         },
         orderBy: { orderDate: "asc" },
       }),
@@ -201,15 +197,26 @@ const getPayables: AgentTool = {
       }),
     ]);
 
-    const summary = summarizePayables(
-      bills.map((b) => ({
-        id: b.id, billNumber: b.billNumber, supplierId: b.supplierId, supplier: b.supplier.name, status: b.status,
-        billDate: b.billDate, dueDate: b.dueDate, total: money(b.total),
-        paid: sumMoney(b.payments.map((p) => money(p.amount))),
-        debitNotes: sumMoney(b.debitNotes.map((d) => money(d.amount))),
-      })),
-      now,
-    );
+    const billRows = liveBills.map((b) => ({
+      id: b.id, billNumber: b.billNumber, supplierId: b.supplierId, supplier: b.supplier.name, status: b.status,
+      billDate: b.billDate, dueDate: b.dueDate, total: money(b.total),
+      paid: sumMoney(b.payments.map((p) => money(p.amount))),
+      debitNotes: sumMoney(b.debitNotes.map((d) => money(d.amount))),
+    }));
+    const summary = summarizePayables(billRows, now);
+    const awaiting = billRows.filter((b) => AWAITING_VERIFICATION_BILL_STATUSES.includes(b.status));
+    const openPos = placedPos.filter((po) => OPEN_PO_STATUSES.includes(po.status));
+
+    const vendorRows = new Map<string, PoVsBillsInput>();
+    const vendorRow = (id: string, name: string) => {
+      const row = vendorRows.get(id) ?? { supplierId: id, supplier: name, pos: [], bills: [] };
+      vendorRows.set(id, row);
+      return row;
+    };
+    for (const po of placedPos) {
+      vendorRow(po.supplierId, po.supplier.name).pos.push({ total: money(po.total), status: po.status, billedAgainst: sumMoney(po.bills.map((b) => money(b.total))) });
+    }
+    for (const b of billRows) vendorRow(b.supplierId, b.supplier).bills.push({ total: b.total, paid: b.paid, status: b.status });
 
     const advanceBySupplier = new Map<string, { supplier: string; amount: number }>();
     for (const a of advances) {
@@ -230,13 +237,17 @@ const getPayables: AgentTool = {
       basis: PAYABLES_BASIS,
       ...(matchedSuppliers ? { supplierFilter: supplierQuery, matchedSuppliers } : {}),
       ...summary,
-      awaitingApproval: {
-        note: "Recorded but not yet approved in Finance > Vendor Invoices - not payable until approved; not included in totalOutstanding.",
+      awaitingVerification: {
+        note: "Uploaded but not yet verified in Finance > Vendor Invoices - not included in totalOutstanding until verified.",
         count: awaiting.length,
-        total: sumMoney(awaiting.map((b) => money(b.total))),
+        total: sumMoney(awaiting.map((b) => b.total)),
         bills: awaiting.slice(0, LIST_LIMIT).map((b) => ({
-          id: b.id, billNumber: b.billNumber, supplier: b.supplier.name, status: b.status, billDate: isoDateIST(b.billDate), total: money(b.total),
+          id: b.id, billNumber: b.billNumber, supplier: b.supplier, status: b.status, billDate: isoDateIST(b.billDate), total: b.total,
         })),
+      },
+      poVsBills: {
+        note: "Per vendor: poValue = issued/received/closed POs; billedTotal/paidTotal = live vendor invoices; billBalance = what is still owed on payable bills; openPoCommitment = issued or partially received PO value not yet billed (a commitment, not a payable).",
+        vendors: poVsBillsByVendor([...vendorRows.values()]).slice(0, 30),
       },
       openPurchaseOrders: {
         note: "COMMITMENTS, not payables: issued/partially received POs. A PO becomes payable only when the supplier's invoice is recorded and approved.",
@@ -250,6 +261,130 @@ const getPayables: AgentTool = {
         total: sumMoney([...advanceBySupplier.values()].map((a) => a.amount)),
         bySupplier: [...advanceBySupplier.values()],
       },
+    };
+  },
+};
+
+// --- Vendor bills (read) --------------------------------------------------------
+
+export const BILL_STATUS_OPTIONS = [
+  { key: BILL_STATUS.UPLOADED, label: "Uploaded" },
+  { key: BILL_STATUS.VERIFIED, label: "Verified" },
+  { key: BILL_STATUS.APPROVED, label: "Approved" },
+  { key: BILL_STATUS.PARTIALLY_PAID, label: "Partially Paid" },
+  { key: BILL_STATUS.PAID, label: "Paid" },
+  { key: BILL_STATUS.REJECTED, label: "Rejected" },
+  { key: BILL_STATUS.CANCELLED, label: "Cancelled" },
+  { key: BILL_STATUS.DELETED, label: "Deleted" },
+];
+const UNPAID_WORDS = new Set(["unpaid", "outstanding", "open", "due", "pending", "payable", "payables", "not paid"]);
+
+/** Status filter: keys or labels in any case, comma lists, and "unpaid"/"outstanding" = the
+ * payable statuses. Unknown values are reported with the valid list. */
+export function resolveBillStatusFilter(value: unknown): { statuses?: string[]; unknown: string[] } {
+  const raw = Array.isArray(value) ? value.map(String) : value == null ? [] : String(value).split(",");
+  const tokens = raw.map((t) => t.trim()).filter(Boolean);
+  const statuses: string[] = [];
+  const rest: string[] = [];
+  for (const t of tokens) {
+    if (UNPAID_WORDS.has(normalizeLabel(t))) statuses.push(...PAYABLE_BILL_STATUSES);
+    else rest.push(t);
+  }
+  const resolved = resolveLookupFilter(rest, BILL_STATUS_OPTIONS);
+  const all = [...new Set([...statuses, ...resolved.keys])];
+  return { statuses: all.length > 0 ? all : undefined, unknown: resolved.unknown };
+}
+
+const searchVendorBills: AgentTool = {
+  name: "search_vendor_bills",
+  description:
+    "Search VENDOR INVOICES / supplier bills (what suppliers billed us - Finance > Vendor Invoices). Filters: " +
+    "supplier (tolerant: case, punctuation, 'Ent.' = 'Enterprises', partial), status (Uploaded, Verified, Approved, " +
+    "Partially Paid, Paid, Rejected, Cancelled, Deleted - keys or labels, any case, comma list; 'unpaid' = verified + " +
+    "approved + partially paid), billNumber, overdueOnly. Returns totalCount and totals {count, totalAmount, " +
+    "taxableAmount, gstAmount, paid, outstanding} and byStatus over EVERY matching bill, plus up to 15 bills (overdue " +
+    "first when overdueOnly, else newest): billNumber, supplier, status, billDate, dueDate, subtotal, taxAmount, total, " +
+    "paid, balance, daysOverdue, rejectedReason. Deleted bills only appear when status=deleted.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      supplier: { type: "string", description: "Optional supplier/vendor name." },
+      status: { type: "string", description: "Optional status filter (see description)." },
+      billNumber: { type: "string", description: "Optional bill / vendor invoice number (partial match)." },
+      overdueOnly: { type: "boolean", description: "True = only unpaid (verified/approved/partially paid) bills past their due date." },
+    },
+  },
+  handler: async (input, auth) => {
+    // Same permissions as GET /bills (record/approve vendor invoice) or the payables report.
+    if (auth.customerId) return forbidden("vendor invoices");
+    if (!hasAny(auth, [PERMISSION_KEY.VIEW_FINANCE_DASHBOARD, PERMISSION_KEY.APPROVE_VENDOR_INVOICE, PERMISSION_KEY.RECORD_VENDOR_INVOICE])) {
+      return forbidden("vendor invoices");
+    }
+    const filter = resolveBillStatusFilter(input.status);
+    if (filter.unknown.length > 0) {
+      return {
+        error: `Unknown vendor invoice status ${filter.unknown.map((u) => `"${u}"`).join(", ")}. Tell the user the valid statuses instead of saying nothing matched.`,
+        validStatuses: validValuesList(BILL_STATUS_OPTIONS),
+      };
+    }
+    let supplierIds: string[] | undefined;
+    let matchedSuppliers: string[] | undefined;
+    if (input.supplier && String(input.supplier).trim()) {
+      const resolved = await resolveSuppliers(String(input.supplier).trim());
+      if ("error" in resolved) return resolved;
+      supplierIds = resolved.ids;
+      matchedSuppliers = resolved.names;
+    }
+    const overdueOnly = input.overdueOnly === true;
+    const now = new Date();
+    const statuses = overdueOnly ? (filter.statuses ?? PAYABLE_BILL_STATUSES).filter(isPayableStatus) : filter.statuses;
+    const billNumber = input.billNumber ? String(input.billNumber).trim() : "";
+    const bills = await prisma.bill.findMany({
+      where: {
+        status: statuses ? { in: statuses } : { not: BILL_STATUS.DELETED },
+        ...(supplierIds ? { supplierId: { in: supplierIds } } : {}),
+        ...(billNumber ? { billNumber: { contains: billNumber, mode: "insensitive" } } : {}),
+      },
+      include: { supplier: { select: { name: true } }, payments: { select: { amount: true } } },
+      orderBy: { billDate: "desc" },
+    });
+    const rows = bills
+      .map((b) => {
+        const paid = sumMoney(b.payments.map((p) => money(p.amount)));
+        const balance = isPayableStatus(b.status) ? Math.max(sumMoney([money(b.total), -paid]), 0) : 0;
+        const { daysPastDue } = ageingBucket(b.dueDate ?? b.billDate, now);
+        const overdue = isPayableStatus(b.status) && balance > 0 && !!b.dueDate && b.dueDate.getTime() < now.getTime();
+        return {
+          id: b.id, billNumber: b.billNumber, supplier: b.supplier.name, status: b.status,
+          billDate: isoDateIST(b.billDate), dueDate: b.dueDate ? isoDateIST(b.dueDate) : null,
+          subtotal: money(b.subtotal), taxAmount: money(b.taxAmount), total: money(b.total), paid, balance,
+          overdue, daysOverdue: overdue ? daysPastDue : 0, rejectedReason: b.rejectedReason,
+        };
+      })
+      .filter((r) => !overdueOnly || r.overdue);
+    const listed = overdueOnly ? [...rows].sort((a, b) => b.daysOverdue - a.daysOverdue) : rows;
+    const byStatus: Record<string, { count: number; totalAmount: number; outstanding: number }> = {};
+    for (const r of rows) {
+      const s = byStatus[r.status] ?? { count: 0, totalAmount: 0, outstanding: 0 };
+      s.count += 1;
+      s.totalAmount = sumMoney([s.totalAmount, r.total]);
+      s.outstanding = sumMoney([s.outstanding, r.balance]);
+      byStatus[r.status] = s;
+    }
+    return {
+      ...listMeta(Math.min(listed.length, LIST_LIMIT), rows.length),
+      ...(matchedSuppliers ? { matchedSuppliers } : {}),
+      statusFilter: statuses ?? "all except deleted",
+      totals: {
+        count: rows.length,
+        totalAmount: sumMoney(rows.map((r) => r.total)),
+        taxableAmount: sumMoney(rows.map((r) => r.subtotal)),
+        gstAmount: sumMoney(rows.map((r) => r.taxAmount)),
+        paid: sumMoney(rows.map((r) => r.paid)),
+        outstanding: sumMoney(rows.map((r) => r.balance)),
+      },
+      byStatus,
+      bills: listed.slice(0, LIST_LIMIT),
     };
   },
 };
@@ -555,4 +690,4 @@ const getRevenueSummary: AgentTool = {
   },
 };
 
-export const zanAppFinanceTools: AgentTool[] = [getReceivables, getPayables, getRevenueSummary];
+export const zanAppFinanceTools: AgentTool[] = [getReceivables, getPayables, searchVendorBills, getRevenueSummary];

@@ -52,7 +52,7 @@ test("payables = approved/partially paid bills minus payments; fully paid bills 
   assert.equal(out.overdueCount, 2);
   assert.equal(out.dueList[0].billNumber, "SE/102"); // anchored on bill date 2026-09-01: most overdue
   assert.equal(out.dueList.at(-1)!.billNumber, "PA/9"); // not yet due
-  assert.deepEqual(PAYABLE_BILL_STATUSES, ["approved", "partially_paid"]);
+  assert.deepEqual(PAYABLE_BILL_STATUSES, ["verified", "approved", "partially_paid"]);
 });
 
 test("Indian FY quarters: 2026-10-08 is FY 2026-27 Q3 (01 Oct - 31 Dec 2026)", () => {
@@ -122,19 +122,17 @@ test("get_payables: tolerant supplier filter, separate POs/awaiting approval, un
   replace("bill", {
     findMany: async (args: any) => {
       billWheres.push(args.where);
-      if (args.where.status.in.includes("approved")) {
-        return [{
-          id: "b1", billNumber: "SE/101", supplierId: "s1", supplier: { name: "Selvam Enterprises" }, status: "approved",
-          billDate: new Date("2026-09-01T00:00:00Z"), dueDate: null, total: "118000.00", payments: [{ amount: "18000.00" }], debitNotes: [],
-        }];
-      }
-      return [];
+      assert.deepEqual(args.where.status, { notIn: ["rejected", "cancelled", "deleted"] });
+      return [{
+        id: "b1", billNumber: "SE/101", supplierId: "s1", supplier: { name: "Selvam Enterprises" }, status: "partially_paid",
+        billDate: new Date("2026-09-01T00:00:00Z"), dueDate: null, total: "118000.00", payments: [{ amount: "18000.00" }], debitNotes: [],
+      }];
     },
   });
   replace("purchaseOrder", {
     findMany: async () => [{
       id: "po1", poNumber: "PO/2026-27/0007", status: "issued", orderDate: new Date("2026-09-10T00:00:00Z"), total: "418900.00",
-      supplier: { name: "Platino Automotive" }, bills: [],
+      supplierId: "s2", supplier: { name: "Platino Automotive" }, bills: [],
     }],
   });
   replace("paymentMade", { findMany: async () => [] });
