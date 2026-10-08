@@ -7,8 +7,9 @@ import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, BILL_STATUS, PO_STATUS, INVOICE_STATUS, INVOICE_DOC_TYPE, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { splitPayment } from "../../services/paymentSplit";
+import { settledFromAllocations } from "../../services/settlement";
 import { LIST_LIMIT } from "../listResult";
-import { isoDateIST, istDayStart, sumMoney } from "./zanAppReadTools";
+import { exclGstPortion, isoDateIST, istDayStart, sumMoney } from "./zanAppReadTools";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const DAY_MS = 86_400_000;
@@ -260,6 +261,137 @@ const getPayables: AgentTool = {
   },
 };
 
+// --- Receivables --------------------------------------------------------------
+
+export const RECEIVABLES_BASIS =
+  "Receivables = invoices in status issued or partially_paid (proforma and tax invoices, exactly like the Finance " +
+  "dashboard 'Outstanding receivables' and the Receivables ageing report). Per invoice: outstanding incl. GST = " +
+  "invoice total incl. GST - issued credit notes against it (net floored at 0) - settled, where settled = receipts " +
+  "allocated to the invoice + each receipt's TDS pro-rata (legacy 'TDS Deducted' receipts settle as TDS) - " +
+  "services/settlement.ts, the app's single definition of 'paid'. Outstanding excl. GST = each invoice's outstanding " +
+  "x its taxable share (subtotal / total) - the finance pages have no excl.-GST figure, so this apportionment is the " +
+  "agent's documented basis; GST portion = incl. - excl. Unapplied customer advances are not netted (same as the " +
+  "dashboard; the customer ledger's closing balance does net them). This is an as-of balance, not invoiced or collected " +
+  "revenue for a period.";
+
+export interface ReceivableInvoiceRow {
+  id: string;
+  invoiceNumber: string;
+  docType: string;
+  customerId: string;
+  customer: string;
+  issueDate: Date;
+  dueDate: Date | null;
+  subtotal: number;
+  total: number;
+  creditNoteTotal: number;
+  settled: number;
+}
+
+export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, listLimit = LIST_LIMIT) {
+  const computed = rows.map((r) => {
+    const net = Math.max(sumMoney([r.total, -r.creditNoteTotal]), 0);
+    const outstandingInclGst = sumMoney([net, -r.settled]);
+    const outstandingExclGst = exclGstPortion(outstandingInclGst, r.subtotal, r.total);
+    const { bucket, daysPastDue } = ageingBucket(r.dueDate ?? r.issueDate, now);
+    return { ...r, outstandingInclGst, outstandingExclGst, gstPortion: sumMoney([outstandingInclGst, -outstandingExclGst]), bucket, daysPastDue };
+  });
+
+  const ageing = emptyAgeing();
+  const customers = new Map<string, { customerId: string; customer: string; invoiceCount: number; outstandingInclGst: number; outstandingExclGst: number; gstPortion: number }>();
+  for (const r of computed) {
+    if (r.outstandingInclGst > 0) ageing[r.bucket] = sumMoney([ageing[r.bucket], r.outstandingInclGst]);
+    const c = customers.get(r.customerId) ?? { customerId: r.customerId, customer: r.customer, invoiceCount: 0, outstandingInclGst: 0, outstandingExclGst: 0, gstPortion: 0 };
+    c.invoiceCount += 1;
+    c.outstandingInclGst = sumMoney([c.outstandingInclGst, r.outstandingInclGst]);
+    c.outstandingExclGst = sumMoney([c.outstandingExclGst, r.outstandingExclGst]);
+    c.gstPortion = sumMoney([c.gstPortion, r.gstPortion]);
+    customers.set(r.customerId, c);
+  }
+  const byDocType = (docType: string) => {
+    const g = computed.filter((r) => r.docType === docType);
+    return { count: g.length, outstandingInclGst: sumMoney(g.map((r) => r.outstandingInclGst)), outstandingExclGst: sumMoney(g.map((r) => r.outstandingExclGst)) };
+  };
+  const overdue = computed.filter((r) => r.daysPastDue > 0 && r.dueDate);
+  const listed = [...computed].filter((r) => r.outstandingInclGst > 0).sort((a, b) => b.outstandingInclGst - a.outstandingInclGst);
+
+  return {
+    totals: {
+      invoiceCount: computed.length,
+      outstandingInclGst: sumMoney(computed.map((r) => r.outstandingInclGst)),
+      outstandingExclGst: sumMoney(computed.map((r) => r.outstandingExclGst)),
+      gstPortion: sumMoney(computed.map((r) => r.gstPortion)),
+      overdueCount: overdue.length,
+      overdueInclGst: sumMoney(overdue.map((r) => r.outstandingInclGst)),
+      overdueExclGst: sumMoney(overdue.map((r) => r.outstandingExclGst)),
+    },
+    byDocType: { tax_invoice: byDocType(INVOICE_DOC_TYPE.TAX_INVOICE), proforma: byDocType(INVOICE_DOC_TYPE.PROFORMA) },
+    ageingInclGst: ageing,
+    byCustomer: [...customers.values()]
+      .filter((c) => c.outstandingInclGst !== 0)
+      .sort((a, b) => b.outstandingInclGst - a.outstandingInclGst || a.customer.localeCompare(b.customer)),
+    complete: listed.length <= listLimit,
+    invoices: listed.slice(0, listLimit).map((r) => ({
+      id: r.id, invoiceNumber: r.invoiceNumber, docType: r.docType, customer: r.customer,
+      issueDate: isoDateIST(r.issueDate), dueDate: r.dueDate ? isoDateIST(r.dueDate) : null,
+      total: r.total, creditNoteTotal: r.creditNoteTotal, settled: r.settled,
+      outstandingInclGst: r.outstandingInclGst, outstandingExclGst: r.outstandingExclGst, daysPastDue: r.daysPastDue,
+    })),
+  };
+}
+
+const getReceivables: AgentTool = {
+  name: "get_receivables",
+  description:
+    "What CUSTOMERS OWE US now: 'total receivable', 'outstanding', 'receivable excluding GST', 'and including " +
+    "GST?', 'who owes us most'. Returns an explicit asOf date, basis, and server-computed totals BOTH incl. GST " +
+    "and excl. GST (plus the GST portion), overdue figures, byCustomer (incl./excl. GST per customer), byDocType " +
+    "(tax invoice vs proforma), ageing and the largest open invoices. Call it again for every receivable follow-up " +
+    "question - never reuse a number from an earlier answer.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      customer: { type: "string", description: "Optional customer name (partial, any case)." },
+    },
+  },
+  handler: async (input, auth) => {
+    // Same permission as the Finance dashboard / Receivables report. Never for customers.
+    if (auth.customerId || !hasAny(auth, [PERMISSION_KEY.VIEW_FINANCE_DASHBOARD, PERMISSION_KEY.MANAGE_INVOICES])) {
+      return forbidden("receivables");
+    }
+    const customer = input.customer ? String(input.customer).trim() : "";
+    const now = new Date();
+    const invoices = await prisma.invoice.findMany({
+      where: {
+        status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] },
+        ...(customer ? { customer: { name: { contains: customer, mode: "insensitive" } } } : {}),
+      },
+      select: {
+        id: true, invoiceNumber: true, docType: true, customerId: true, issueDate: true, dueDate: true, subtotal: true, total: true,
+        customer: { select: { name: true } },
+        paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
+        creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
+      },
+    });
+    const summary = summarizeReceivables(
+      invoices.map((inv) => ({
+        id: inv.id, invoiceNumber: inv.invoiceNumber, docType: inv.docType, customerId: inv.customerId, customer: inv.customer.name,
+        issueDate: inv.issueDate, dueDate: inv.dueDate, subtotal: money(inv.subtotal), total: money(inv.total),
+        creditNoteTotal: sumMoney(inv.creditNotes.map((c) => money(c.total))),
+        settled: money(settledFromAllocations(inv.paymentAllocations)),
+      })),
+      now,
+    );
+    return {
+      asOf: isoDateIST(now),
+      basis: RECEIVABLES_BASIS,
+      ...(customer ? { customerFilter: customer } : {}),
+      ...summary,
+      answerRule: "Say 'as of <asOf>' and whether each figure is incl. or excl. GST. This is an outstanding balance, not revenue.",
+    };
+  },
+};
+
 // --- Revenue ------------------------------------------------------------------
 
 /** Indian financial year: Apr-Mar. Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar. */
@@ -419,4 +551,4 @@ const getRevenueSummary: AgentTool = {
   },
 };
 
-export const zanAppFinanceTools: AgentTool[] = [getPayables, getRevenueSummary];
+export const zanAppFinanceTools: AgentTool[] = [getReceivables, getPayables, getRevenueSummary];

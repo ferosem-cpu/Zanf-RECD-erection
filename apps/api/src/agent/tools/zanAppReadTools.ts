@@ -48,6 +48,15 @@ export function istDayStart(ymd: string): Date | undefined {
   return Number.isNaN(d.getTime()) || isoDateIST(d) !== ymd ? undefined : d;
 }
 
+/** Excl.-GST part of an invoice's outstanding balance. The finance pages only show receivables
+ * incl. GST, so the agent's excl.-GST basis is: apportion each invoice's outstanding by that
+ * invoice's own taxable share (subtotal / total; subtotal is already after line discounts).
+ * Mixed GST rates on one invoice are handled because the share uses the invoice's real totals. */
+export function exclGstPortion(outstanding: number, subtotal: number, total: number): number {
+  if (total <= 0) return outstanding;
+  return Math.round(outstanding * (subtotal / total) * 100) / 100;
+}
+
 type StatusGroup = { status: string; _count: { _all: number }; _sum?: { total?: Prisma.Decimal | null } };
 
 /** Count (and value, where the model has a total) per status over the FULL filtered set. */
@@ -265,6 +274,8 @@ export interface InvoiceSummaryRow {
   netTotal: number | null;
   amountPaid: number | null;
   balance: number | null;
+  /** balance excl. GST - see exclGstPortion. */
+  balanceExclGst?: number | null;
   overdue: boolean;
 }
 
@@ -293,6 +304,7 @@ export function summarizeInvoices<T extends InvoiceSummaryRow>(rows: T[], listLi
       netTotal: sumMoney(rows.map((r) => r.netTotal)),
       amountPaid: sumMoney(rows.map((r) => r.amountPaid)),
       outstandingBalance: sumMoney(receivable.map((r) => r.balance)),
+      outstandingBalanceExclGst: sumMoney(receivable.map((r) => r.balanceExclGst ?? r.balance)),
       overdueCount: overdue.length,
       overdueBalance: sumMoney(overdue.map((r) => r.balance)),
     },
@@ -313,9 +325,10 @@ const searchInvoices: AgentTool = {
     "creditNoteTotal (sum of issued credit notes against it), netTotal, amountPaid, balance " +
     "(net of credit notes, after allocated payments and pro-rated TDS), and whether it's " +
     "overdue. ALWAYS also returns totalCount, totals {count, totalAmount, creditNoteTotal, " +
-    "netTotal, amountPaid, outstandingBalance (issued + partially_paid only, same as the finance " +
-    "dashboard), overdueCount, overdueBalance} and byStatus, all computed over EVERY matching " +
-    "invoice - quote these for 'how many'/'how much', never add up rows. 'overdue' is NOT a " +
+    "netTotal, amountPaid, outstandingBalance (incl. GST; issued + partially_paid only, same as the finance " +
+    "dashboard), outstandingBalanceExclGst, overdueCount, overdueBalance} and byStatus, all computed over EVERY matching " +
+    "invoice - quote these for 'how many'/'how much', never add up rows. For 'total receivable' " +
+    "(incl. or excl. GST, per customer) prefer get_receivables. 'overdue' is NOT a " +
     "status - for overdue invoices set overdueOnly=true. For unpaid / partly paid / outstanding " +
     "invoices use status='issued,partially_paid'. Use get_document_detail for line " +
     "items/payments/credit notes.",
@@ -366,7 +379,8 @@ const searchInvoices: AgentTool = {
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
         docType: inv.docType, customer: inv.customer.name, status: inv.status,
         issueDate: inv.issueDate, dueDate: inv.dueDate, total: num(inv.total),
-        creditNoteTotal: num(cnTotal), netTotal: num(netTotal), amountPaid: num(paid), balance: num(balance), overdue,
+        creditNoteTotal: num(cnTotal), netTotal: num(netTotal), amountPaid: num(paid), balance: num(balance),
+        balanceExclGst: exclGstPortion(Number(balance), Number(inv.subtotal), Number(inv.total)), overdue,
       };
     });
     return summarizeInvoices(rows, RESULT_LIMIT, { overdueOnly });
