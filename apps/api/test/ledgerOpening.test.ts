@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Prisma } from "@prisma/client";
-import { buildStatement, type RawMovement } from "../src/services/ledger";
+import { buildStatement, buildSupplierLedger, BILL_LEDGER_STATUSES, type RawMovement } from "../src/services/ledger";
+import { PAYABLE_BILL_STATUSES } from "../src/services/payables";
+import { prisma } from "../src/lib/prisma";
 
 const dec = (n: number | string) => new Prisma.Decimal(String(n));
 const day = (s: string) => new Date(`${s}T00:00:00Z`);
@@ -56,4 +58,35 @@ test("ledger: supplier-style negative opening balance is a credit row on the fir
   assert.equal(s.entries[0].credit.toString(), "200");
   assert.equal(s.entries[0].date?.toISOString(), day("2026-06-01").toISOString());
   assert.equal(s.closingBalance.toString(), "-100");
+});
+
+test("supplier ledger posts the same bills as payables (verified on) and keeps paid bills against their payments", async (t) => {
+  const replace = (key: string, value: unknown) => {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  };
+  const bills = ["uploaded", "verified", "approved", "partially_paid", "paid", "rejected", "cancelled", "deleted"].map((status) => ({
+    id: status, billNumber: status, status, billDate: day("2026-06-01"), total: dec(1000),
+  }));
+  replace("supplier", { findUniqueOrThrow: async () => ({ id: "s1", name: "Selvam Enterprises", openingBalance: dec(0), openingBalanceDate: null }) });
+  replace("bill", { findMany: async (args: any) => bills.filter((b) => args.where.status.in.includes(b.status)) });
+  replace("paymentMade", {
+    findMany: async () => [
+      { id: "pp", amount: dec(400), paidDate: day("2026-06-10"), bill: { billNumber: "partially_paid" } },
+      { id: "pd", amount: dec(1000), paidDate: day("2026-06-10"), bill: { billNumber: "paid" } },
+    ],
+  });
+
+  const s = await buildSupplierLedger("s1");
+  assert.deepEqual(
+    s.entries.filter((e) => e.type === "bill").map((e) => e.refId).sort(),
+    ["approved", "paid", "partially_paid", "verified"],
+  );
+  assert.ok(PAYABLE_BILL_STATUSES.every((st) => BILL_LEDGER_STATUSES.includes(st)));
+  // Closing balance = payables outstanding: verified 1000 + approved 1000 + partially paid 600.
+  assert.equal(s.closingBalance.toString(), "2600");
 });

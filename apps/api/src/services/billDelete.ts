@@ -8,7 +8,7 @@ import { BILL_STATUS } from "@recd/shared";
  * schema change is needed and the trail (who/when/why, scan, original number) survives.
  *
  * Financially safe because a rejected bill never reaches the ledger, payables, GSTR-3B ITC or
- * site costs (all filter approved/partially_paid/paid), and payments can only be recorded on
+ * site costs (all filter on verified/approved/partially_paid/paid or a subset), and payments can only be recorded on
  * approved bills. Anything that did post (payments, applied advances, debit notes) blocks it.
  */
 export interface BillForDelete {

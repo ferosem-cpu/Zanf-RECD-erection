@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { isLegacyTdsPayment, splitPayment } from "./paymentSplit";
+import { PAYABLE_BILL_STATUSES } from "./payables";
 
 const D = (n: number | string | Prisma.Decimal): Prisma.Decimal =>
   n instanceof Prisma.Decimal ? n : new Prisma.Decimal(String(n));
@@ -155,8 +156,10 @@ export function customerPaymentMovements(payments: LedgerPayment[]): RawMovement
 
 /** Issued docs only (never drafts/cancelled) - an unissued or cancelled invoice isn't a real debt. */
 const INVOICE_LEDGER_STATUSES = [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID, INVOICE_STATUS.PAID];
-/** Bills not yet approved aren't a confirmed liability; rejected/cancelled ones never were. */
-const BILL_LEDGER_STATUSES = [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID, BILL_STATUS.PAID];
+/** Must match payables (services/payables.ts): a bill is a liability from Verified on. Paid bills
+ * stay too - their payments are in the ledger, so dropping the bill would leave a false advance.
+ * Uploaded (unverified), rejected, cancelled and deleted bills never post. */
+export const BILL_LEDGER_STATUSES: string[] = [...PAYABLE_BILL_STATUSES, BILL_STATUS.PAID];
 
 export async function buildCustomerLedger(customerId: string, from?: Date, to?: Date): Promise<LedgerStatement> {
   const customer = await prisma.customer.findUniqueOrThrow({
