@@ -1,4 +1,6 @@
-import Anthropic from "@anthropic-ai/sdk";
+// Type-only: the SDK itself is required when an adapter is created (agent calls only), to keep
+// it off the API's cold start.
+import type Anthropic from "@anthropic-ai/sdk";
 import type { ExtractDocumentParams, LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
 import { ProviderCallError } from "./types";
 import { EXTRACTION_TIMEOUT_MS, LLM_CALL_TIMEOUT_MS, SDK_MAX_RETRIES } from "../timeouts";
@@ -36,7 +38,8 @@ function toAnthropicMessages(messages: UnifiedMessage[]): Anthropic.MessageParam
 
 export function createAnthropicAdapter(config: AnthropicAdapterConfig): LlmAdapter {
   // The SDK default is a 10-minute timeout with 2 retries per call - see agent/timeouts.ts.
-  const client = new Anthropic({ apiKey: config.apiKey, timeout: LLM_CALL_TIMEOUT_MS, maxRetries: SDK_MAX_RETRIES });
+  const { default: AnthropicSdk } = require("@anthropic-ai/sdk") as typeof import("@anthropic-ai/sdk");
+  const client = new AnthropicSdk({ apiKey: config.apiKey, timeout: LLM_CALL_TIMEOUT_MS, maxRetries: SDK_MAX_RETRIES });
 
   return {
     async sendMessage(params: SendMessageParams): Promise<SendMessageResult> {

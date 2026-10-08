@@ -5,7 +5,7 @@
  * need OCR, not wired up) - callers should treat a thrown ExtractionError as "not searchable
  * content" rather than a hard failure.
  */
-import mammoth from "mammoth";
+// mammoth is imported lazily too (DOCX branch below), purely to keep it off the cold start.
 // pdf-parse is imported lazily inside extractText(), not statically here - importing it
 // eagerly at module load crashed the ENTIRE api function on Vercel's Linux runtime, not just
 // PDF extraction: pdf-parse tries to load the optional native "@napi-rs/canvas" package for
@@ -60,6 +60,7 @@ export async function extractText(buffer: Buffer, mimeType: string): Promise<str
   }
 
   if (mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    const { default: mammoth } = await import("mammoth");
     const result = await mammoth.extractRawText({ buffer });
     return result.value;
   }

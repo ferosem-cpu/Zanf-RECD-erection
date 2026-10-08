@@ -1,4 +1,6 @@
-import OpenAI from "openai";
+// Type-only: the SDK itself is required when an adapter is created (agent calls only), to keep
+// it off the API's cold start.
+import type OpenAI from "openai";
 import type { ExtractDocumentParams, LlmAdapter, SendMessageParams, SendMessageResult, UnifiedMessage } from "./types";
 import { ProviderCallError } from "./types";
 import { EXTRACTION_TIMEOUT_MS, LLM_CALL_TIMEOUT_MS, SDK_MAX_RETRIES } from "../timeouts";
@@ -97,7 +99,8 @@ async function extractDocumentViaNativeGemini(
 
 export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterConfig): LlmAdapter {
   // The SDK default is a 10-minute timeout with 2 retries per call - see agent/timeouts.ts.
-  const client = new OpenAI({ apiKey: config.apiKey, baseURL: config.baseUrl, timeout: LLM_CALL_TIMEOUT_MS, maxRetries: SDK_MAX_RETRIES });
+  const { default: OpenAISdk } = require("openai") as typeof import("openai");
+  const client = new OpenAISdk({ apiKey: config.apiKey, baseURL: config.baseUrl, timeout: LLM_CALL_TIMEOUT_MS, maxRetries: SDK_MAX_RETRIES });
 
   return {
     async sendMessage(params: SendMessageParams): Promise<SendMessageResult> {
