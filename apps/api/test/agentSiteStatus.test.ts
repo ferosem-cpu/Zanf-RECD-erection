@@ -114,3 +114,34 @@ test("search_orders_and_sites: updateStatus='Done' filters by each site's latest
   await tool.handler({ stageKey: "Customer Sign-off" }, auth);
   assert.deepEqual(wheres[0].AND.at(-1), { site: { is: { currentStage: { key: { in: ["customer_signoff"] } } } } });
 });
+
+test("search_orders_and_sites: 'which ones are installing' filters server-side before the 15-row cut", async (t) => {
+  const tool = zanAppReadTools.find((x) => x.name === "search_orders_and_sites")!;
+  const auth = { userId: "u1", roleKey: "management", permissions: new Set([PERMISSION_KEY.MANAGE_ORDERS]) };
+  const replace = (key: string, value: unknown) => {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  };
+  replace("stageDefinition", {
+    findFirst: async () => ({ label: "Commissioned", sequenceOrder: 11 }),
+    findMany: async () => STAGES,
+  });
+  replace("statusOption", { findMany: async () => STATUS_OPTIONS });
+  const calls: any[] = [];
+  replace("order", { findMany: async (args: any) => { calls.push(args); return []; } });
+
+  const out: any = await tool.handler({ stageKey: "installing", query: "Chennai" }, auth);
+  assert.equal(out.error, undefined);
+  // Both the listed page (take 15) and the totals query use the same filtered where.
+  assert.equal(calls.length, 2);
+  const listed = calls.find((c) => c.take != null);
+  const totals = calls.find((c) => c.take == null);
+  assert.ok(listed && totals);
+  assert.deepEqual(listed.where, totals.where);
+  assert.deepEqual(listed.where.AND.at(-1), { site: { is: { currentStage: { key: { in: ["installing"] } } } } });
+  assert.ok(listed.where.AND.some((f: any) => Array.isArray(f.OR)), "query filter is in the where too");
+});
