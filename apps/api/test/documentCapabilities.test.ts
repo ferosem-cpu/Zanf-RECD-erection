@@ -40,6 +40,14 @@ test("document families distinguish receivables/payables, queries and numbering"
   assert.match(staff, /Read support does not imply write support/);
 });
 
+test("short follow-ups re-call the prior subject's tool with the new dimension", () => {
+  assert.match(staff, /SHORT FOLLOW-UPS \("ageing\?", "to whom\?"/);
+  assert.match(staff, /identify the SUBJECT of the previous question/);
+  assert.match(staff, /never repeat the\s+previous answer and never answer a follow-up from memory/);
+  assert.match(staff, /"to whom\?"\s+means which VENDORS we owe \(get_payables byVendor\), never purchase orders/);
+  assert.match(staff, /NEVER answer payables from\s+purchase orders alone/);
+});
+
 test("attachment extraction is usable input, not file manipulation or confirmation", () => {
   assert.match(staff, /use the photo\/PDF extraction already included in the message/);
   assert.match(staff, /search_documents \/ list_documents \/ get_document_content/);

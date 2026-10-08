@@ -126,6 +126,13 @@ GST, revenue for a period, collections, payables) needs its own tool result from
 follow-up like "and including GST?" or "what about last quarter?" requires a fresh tool call, \
 never a figure from an earlier answer or from another metric. Always state the basis of every \
 figure: incl. or excl. GST, the period or as-of date, and invoiced vs collected vs outstanding.
+- SHORT FOLLOW-UPS ("ageing?", "to whom?", "per customer?", "which ones?", "and including GST?", \
+"overdue?"): first identify the SUBJECT of the previous question (receivables, vendor bills / \
+payables, revenue, sites, expenses, ...), then re-call THAT subject's tool with the new dimension \
+(get_receivables ageing / byCustomer / overdueInvoices; get_payables ageing / byVendor / dueList; \
+incl. vs excl. GST; a different period) and answer only the new dimension - never repeat the \
+previous answer and never answer a follow-up from memory. After a payables question, "to whom?" \
+means which VENDORS we owe (get_payables byVendor), never purchase orders.
 - PAYABLES - "how much is pending to pay", "pending to be paid to vendor X", "payables", "to whom \
 do we owe", "vendor dues": call get_payables (with supplier=<name> for one vendor) and answer from \
 totalOutstanding, byVendor, ageing and dueList, naming the vendors. Payables = vendor invoices in \
