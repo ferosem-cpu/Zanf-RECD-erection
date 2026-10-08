@@ -37,7 +37,7 @@ Ojas; InterGlobe Aviation appears as a site end-client (`Site.companyName`).
 
 | | |
 |---|---|
-| **Repo** | `github.com/ferosem-cpu/Zanf-RECD-erection`, default branch `master`. Dev machine: Windows, `D:\Projects\Zan-APP`. |
+| **Repo** | `github.com/ferosem-cpu/Zanf-RECD-erection`, default branch `master`. Dev machine: Windows, `D:\Projects\Zan-APP`; since 2026-10 also `D:\Apps\Zanf-RECD-erection` on DESKTOP-EKD438U (API deploys of 2026-10-08 ran from there). |
 | **Local ports** | API `4011`, admin-web `6011` (Platino uses 4001/6001, so both can run side by side). |
 | **Production DB** | Supabase project `zan-app`, ref `idqzupopsuusoihpmoqc`, `ap-south-1` (Mumbai). |
 | **Vercel team** | `ferose-salahudeen-s-projects` (`team_psJwhw81rjDAba1sPZSBqxzZ`, Hobby). Vercel CLI logged in as `ferosem-1321`. |
@@ -199,6 +199,8 @@ Ojas; InterGlobe Aviation appears as a site end-client (`Site.companyName`).
 - Conversations: `AgentConversation`; daily cron deletes threads > 30 days. **Test prompt/tool
   fixes in a new thread** (old history outweighs fixes). The manual tool harness
   (`agentTest.ts`) is mounted only outside production.
+- Manual QA question set (expected tool, admin-web page, pass criteria):
+  [`docs/agent-test-checklist.md`](agent-test-checklist.md).
 
 ## 7. Integrations and environment variables
 
@@ -281,6 +283,12 @@ run `npx prisma migrate deploy` after pulling schema changes.
    does **not** prove a brand-new route exists (router-level `authenticate` answers first) —
    test with a valid token + real id, or rely on step 5.
 
+**Ignored Build Step (since 2026-10-08):** project `zan-app-api` has `commandForIgnoringBuildStep`
+= `exit 0` and Root Directory left empty. Git-triggered builds failed "No entrypoint found"; setting
+Root Directory = `apps/api` instead would make git builds succeed and auto-promote WITHOUT the
+`@recd/shared` patch (step 6) and would clash with the `apps/api/.vercel` link. Git builds now show
+"Canceled by Ignored Build Step"; `--prebuilt` deploys are unaffected (verified).
+
 Untried simplification: plain `vercel deploy --prod` (remote build) for the API might remove
 steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first.
 
@@ -320,7 +328,22 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 - Work done from the mobile app lands on unmerged `claude/<slug>` branches — check
   `git branch -a` before rebuilding anything.
 
-## 10. Current open items (as of 2026-09-27)
+## 10. Current open items (as of 2026-10-09)
+
+**Branch `fix/ledger-opening-date-and-drive-search` - complete, READY FOR MERGE (pushed, NOT
+merged/deployed)** - see §11 2026-10-08/09. Merge `--no-ff` to master only with Ferose's approval;
+deploy API first (admin-web's "Delete rejected invoice" calls a new route), rollback target
+`dpl_BbA1zVGtVyQKXNbWBnfGYNHfkBpN`. No migration needed. After deploy, run
+`docs/agent-test-checklist.md` and verify against production: payables KPI includes Verified bills
+(Platino), Selvam Enterprises' partially paid bill in get_payables, receivables incl./excl. GST vs
+the Finance dashboard, sites with update status Done, Drive search for "proforma invoice" / "PCR",
+supplier ledger balances (now post Verified bills), GSTR-3B outward taxable value on discounted
+invoices. Progress note: `.claude-task/fix4b-progress.md` (local only).
+- **Drive access (Ferose):** the agent only sees files INSIDE `ZanF_DropBox` (any subfolder depth)
+  that `zanfpowersystems@gmail.com` can read. Move (not shortcut) the Zan-F invoice / PCR folders
+  into ZanF_DropBox, or share them to that account and add them inside it. Shortcuts are not followed.
+- **Still on Approved+ (decide if they should follow payables):** GSTR-3B 4A ITC
+  (`gstExport.ts`) and site vendor costs (`routes/sites.ts`) count bills from Approved, not Verified.
 
 **Deploy / decisions for Ferose**
 - **15 prod migrations without a `_prisma_migrations` row** (`20260813122825` …
@@ -379,6 +402,51 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-10-08/09 — Same branch, continued (not yet merged/deployed; READY FOR MERGE).**
+  `9578755` GST basis: search_invoices taxableValue + gstAmount, revenue "to date" + `all_time`.
+  `1838703` sites: stage/query filters apply before the 15-row cut (regression test). `7bf6da6`
+  prompt: short follow-ups re-call the prior subject's tool. `7224cfd` every Date in tool output in
+  IST. `bb203c4` expenses: IST date range, server total, per-category breakdown. `1191988` payables
+  test no longer clock-dependent. `d0e7ea9` chat bubble: a late thread load can't overwrite "+ New".
+  `5c7eec9` deleting a rejected vendor invoice is **admin-only** (Super Admin, Owner/Admin;
+  approvers can still reject). `7fcc661` supplier ledger posts the same bills as payables (Verified
+  on; Paid kept so its payments net off). `51ec2ff` GSTR-3B outward taxable value = subtotal (was
+  double-discounted). `ead572a` `docs/agent-test-checklist.md`. Tests: API 116, admin-web 26.
+
+- **2026-10-08 — Branch `fix/ledger-opening-date-and-drive-search` (on branch, not yet
+  merged/deployed).** `fb64153` ledger opening balance no longer dated 01 Jan 1970 (TDS register
+  checked: unaffected). `7ebdf42` sites "done" = latest status update (StatusOption `done`/"Done",
+  Sites list "Update status"); `search_orders_and_sites` gets `updateStatus`, label/case-tolerant
+  stage filter, `byUpdateStatus`; unknown filter values return the valid list. `71740cb`
+  `get_payables`, `get_revenue_summary` (Indian FY quarters, invoiced excl./incl. GST net of CNs vs
+  collected cash; period + basis stated). `9562f8b` + `5c5d1b4` `get_receivables`: outstanding
+  incl. GST (total − issued CNs − settled incl. TDS, `settlement.ts`) and excl. GST (outstanding ×
+  subtotal/total), per customer, ageing from shared `services/ageing.ts`, overdue invoice list.
+  `18cc0a5` delete REJECTED vendor invoices: soft delete (status `deleted`, number renamed so it can
+  be re-entered, audit entry kept; refused with payments/debit notes; admin-only since `5c7eec9`); GST
+  summary report excludes rejected/cancelled/deleted bills. `27dc264` Drive search covers the whole
+  ZanF_DropBox tree (cached folder tree, names or content, phrase or all words, all drives, paging,
+  folderPath); root cause was direct-children-only search. `da52fb1` read-only tool calls of one
+  step run concurrently (25 s per-tool timeout). `8d9129d` shared `services/payables.ts`
+  (Verified + Approved + Partially Paid) used by the Finance dashboard **(fixes Outstanding payables
+  missing Verified bills)** and the agent; new `search_vendor_bills`; PO-vs-bills per vendor. Tests:
+  API 107, admin-web 24. Root `CLAUDE.md` added.
+- **2026-10-08 — Merged + deployed to production.** Merges `e1086c9` (fix/agent-overdue-invoices),
+  `051ca09` (fix/agent-document-capabilities, tip `85e09bf`), `5ec3704` (fix/agent-orders-and-totals),
+  `ba88248` (fix/agent-tds-and-session-load). API deploys (manual §8, from `D:\Apps\Zanf-RECD-erection`,
+  Vercel CLI as ferosem-1321): `dpl_BAjebHYmqKobHoQ8oKbLtPGgNo4F` (051ca09),
+  `dpl_1dECiMNuuLEQUXrKjJ3pdCg5Z3Vo` (5ec3704), **`dpl_BbA1zVGtVyQKXNbWBnfGYNHfkBpN` (ba88248, current
+  production)**; admin-web auto-deployed on master push (e.g. `dpl_2tsHnYeZ2zFcenSUb2E4apMKhRPp` for
+  ba88248). Agent: `overdueOnly` + server-side totals/`complete` flags (`listResult.ts`),
+  `search_payments`, open order = site not yet Commissioned, `paymentSplit.ts` (legacy "TDS Deducted"
+  rows = all TDS) in TDS register/ledger/dashboard (dashboard received/revenue now cash only),
+  lazy-loaded googleapis/mammoth/openai/anthropic, admin-web fetches `/settings` in parallel with
+  `/auth/me`. `zan-app-api` Ignored Build Step set (see §8).
+
+**Token-saving practice for Claude sessions:** commit + write a progress note + update HANDOVER
+before `/compact` or `/clear`; reference files with `@path` instead of pasting; keep `CLAUDE.md`
+under 200 lines; use sub-agents for test runs and checklists; use plan mode for ambiguous designs.
 
 - **2026-10-01 — Capability-aware agent document responses (API deployed).**
   `apps/api/src/agent/systemPrompt.ts` now explains supported document proposals versus

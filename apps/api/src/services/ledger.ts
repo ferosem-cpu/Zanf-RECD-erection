@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { isLegacyTdsPayment, splitPayment } from "./paymentSplit";
+import { PAYABLE_BILL_STATUSES } from "./payables";
 
 const D = (n: number | string | Prisma.Decimal): Prisma.Decimal =>
   n instanceof Prisma.Decimal ? n : new Prisma.Decimal(String(n));
@@ -10,7 +11,8 @@ const ZERO = new Prisma.Decimal(0);
 export type LedgerEntryType = "opening_balance" | "invoice" | "payment" | "tds" | "credit_note" | "bill" | "payment_made";
 
 export interface LedgerEntry {
-  date: Date;
+  /** null only for an undated opening-balance row on an account with no movements. */
+  date: Date | null;
   type: LedgerEntryType;
   refNumber: string;
   refId: string | null;
@@ -38,6 +40,13 @@ export interface RawMovement {
   credit: Prisma.Decimal;
 }
 
+type LedgerEntryInput = Omit<LedgerEntry, "runningBalance">;
+
+/** An undated (opening-balance) row sorts before everything. */
+function sortTime(e: { date: Date | null }): number {
+  return e.date ? e.date.getTime() : Number.NEGATIVE_INFINITY;
+}
+
 /**
  * Pure query composition, no new tables (see docs/ACCOUNTING_LITE_PLAN.md par.5.2). Merges the
  * account's opening balance with every dated movement, computes a running balance across the
@@ -54,15 +63,17 @@ export function buildStatement(
   from?: Date,
   to?: Date,
 ): LedgerStatement {
-  const openingRow: RawMovement = {
-    date: openingBalanceDate ?? new Date(0),
+  // An undated opening balance sorts before everything (so it is always carried into a range);
+  // only for display is it dated at the first movement - never the 1970 epoch.
+  const openingRow: LedgerEntryInput = {
+    date: openingBalanceDate,
     type: "opening_balance",
     refNumber: "Opening balance",
     refId: null,
     debit: openingBalance.gte(0) ? openingBalance : ZERO,
     credit: openingBalance.lt(0) ? openingBalance.negated() : ZERO,
   };
-  const all: RawMovement[] = [openingRow, ...movements].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const all: LedgerEntryInput[] = [openingRow, ...movements].sort((a, b) => sortTime(a) - sortTime(b));
 
   let running = ZERO;
   const withRunning: LedgerEntry[] = all.map((m) => {
@@ -74,7 +85,7 @@ export function buildStatement(
   let rangeOpening = ZERO;
   if (from) {
     for (const e of withRunning) {
-      if (e.date.getTime() < from.getTime()) rangeOpening = e.runningBalance;
+      if (sortTime(e) < from.getTime()) rangeOpening = e.runningBalance;
       else break;
     }
   }
@@ -83,16 +94,19 @@ export function buildStatement(
   // at or before `to`.
   let closingBalance = ZERO;
   for (const e of withRunning) {
-    if (to && e.date.getTime() > to.getTime()) break;
+    if (to && sortTime(e) > to.getTime()) break;
     closingBalance = e.runningBalance;
   }
 
-  const entries = withRunning.filter((e) => {
-    if (e.type === "opening_balance") return !from; // only show the real row when viewing full history
-    if (from && e.date.getTime() < from.getTime()) return false;
-    if (to && e.date.getTime() > to.getTime()) return false;
-    return true;
-  });
+  const firstMovementDate = withRunning.find((e) => e.type !== "opening_balance")?.date ?? null;
+  const entries = withRunning
+    .filter((e) => {
+      if (e.type === "opening_balance") return !from; // only show the real row when viewing full history
+      if (from && sortTime(e) < from.getTime()) return false;
+      if (to && sortTime(e) > to.getTime()) return false;
+      return true;
+    })
+    .map((e) => (e.type === "opening_balance" && !e.date ? { ...e, date: firstMovementDate } : e));
 
   return {
     partyId,
@@ -142,8 +156,10 @@ export function customerPaymentMovements(payments: LedgerPayment[]): RawMovement
 
 /** Issued docs only (never drafts/cancelled) - an unissued or cancelled invoice isn't a real debt. */
 const INVOICE_LEDGER_STATUSES = [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID, INVOICE_STATUS.PAID];
-/** Bills not yet approved aren't a confirmed liability; rejected/cancelled ones never were. */
-const BILL_LEDGER_STATUSES = [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID, BILL_STATUS.PAID];
+/** Must match payables (services/payables.ts): a bill is a liability from Verified on. Paid bills
+ * stay too - their payments are in the ledger, so dropping the bill would leave a false advance.
+ * Uploaded (unverified), rejected, cancelled and deleted bills never post. */
+export const BILL_LEDGER_STATUSES: string[] = [...PAYABLE_BILL_STATUSES, BILL_STATUS.PAID];
 
 export async function buildCustomerLedger(customerId: string, from?: Date, to?: Date): Promise<LedgerStatement> {
   const customer = await prisma.customer.findUniqueOrThrow({

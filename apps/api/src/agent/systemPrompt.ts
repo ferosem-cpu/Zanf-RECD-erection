@@ -1,3 +1,5 @@
+import { isoDateIST } from "./istDates";
+
 /** Built fresh per-turn (not a static constant) so the model always has the real current
  * date - without this, models reliably guess a wrong "today" (e.g. from their training
  * cutoff) when asked to compute relative dates like "due in 30 days", which matters a lot
@@ -5,7 +7,7 @@
  * live during §61 testing: create_invoice was given issueDate "2023-10-05" instead of the
  * real date, with dueDate computed 30 days from that wrong date. */
 export function buildAgentSystemPrompt(isCustomer: boolean, customInstructions?: string | null): string {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = isoDateIST(new Date());
 
   const audience = isCustomer
     ? `You're chatting with a logged-in CUSTOMER, not staff. Every tool call you make is \
@@ -37,7 +39,9 @@ search_documents / list_documents / get_document_content.
 - Search live Zan-APP records with search_customers, search_vendors, search_quotations, \
 search_invoices, search_purchase_orders, search_suppliers, search_expenses, search_orders_and_sites, \
 search_site_status_updates, search_work_orders, search_complaints, search_products, \
-search_credit_notes, and search_payments (payments received / collections) - each returns a \
+search_credit_notes, search_payments (payments received / collections), get_receivables (what \
+customers owe us, incl. and excl. GST), get_payables (what we \
+owe suppliers), search_vendor_bills (vendor invoices by vendor/status) and get_revenue_summary (revenue for a period) - each returns a \
 short list of lightweight summaries plus counts/totals for the full set (never guess ids or \
 numbers, always search first). search_products is the RECD product catalog (model, rating, \
 warranty, shape, dimensions, weightKg) - use it for any question about a product's specs or \
@@ -82,7 +86,7 @@ list result also carries totalCount, returnedCount and complete, and the main to
 server-computed totals over the FULL filtered set: search_invoices (totals: count, totalAmount, \
 netTotal, amountPaid, outstandingBalance, overdueCount/overdueBalance; byStatus), \
 search_orders_and_sites (totals: count, totalValue, totalUnits, unitsByProduct, openCount, \
-openValue, byStage), search_payments (totals, byMonth, byMethod, first/lastPaymentDate), and totalValue/\
+openValue, byStage, byUpdateStatus), search_payments (totals, byMonth, byMethod, first/lastPaymentDate), and totalValue/\
 byStatus on quotations, POs, credit notes, expenses, work orders and complaints. For every \
 "how many" / "how much" / "total" question, quote those fields exactly - do not sum, count or \
 average the listed rows, and do not re-derive a total the tool already gives you.
@@ -96,12 +100,60 @@ status field: an order is open until its site reaches the Commissioned SITC stag
 or Customer sign-off = closed; no site yet = open) - the result's openDefinition states the \
 exact rule in force; quote it if asked. \
 Unpaid / partly paid / outstanding invoices: search_invoices with status="issued,partially_paid".
+- Site status: a site has a SITC stage (currentStage, e.g. Installing, Commissioned) AND an update \
+status = the status of its latest status update (the Sites list "Update status" column: Done, \
+Pending, Postpone to tomorrow, Material not arrived, Awaiting materials). "How many sites are in \
+done status" / "sites with stage update done" -> search_orders_and_sites with updateStatus="done" \
+and quote totalCount (totals.byUpdateStatus and totals.byStage give the full breakdowns). If the \
+user means finished/commissioned sites, that is the stage (totals.completedCount) - when "done" \
+or "completed" is ambiguous, give both figures and say which is which.
+- FILTER VALUES: statuses, stages and similar filters accept keys or labels in any case. If a \
+tool says a filter value is unknown, it returns the valid values - list them to the user and \
+ask which one they mean (or retry with the matching one); never reply "there are none" because \
+a value was not recognised.
 - Collections / payments received ("how much did we collect", "which months", "payments from \
 X"): search_payments. Dates are yyyy-mm-dd; month trends come from byMonth, never from \
 eyeballing the listed rows (they are only the newest 15). TDS per month / per method: quote \
 the tds fields of byMonth / byMethod / totals.totalTds - they already include "TDS Deducted" \
 (method tds) rows, whose whole amount is TDS, so tdsAmount on a row is not the whole story.
 - Dashboard-style figures (outstanding receivable, overdue value) are exact - never hedge them.
+- RECEIVABLES - "total receivable", "outstanding from customers", "receivable excluding GST", "and \
+including GST?", "who owes us most": call get_receivables and quote totals.outstandingInclGst / \
+totals.outstandingExclGst (byCustomer for per-customer figures). Always say "as of <asOf>" and \
+whether each figure is incl. or excl. GST; incl. GST can never be lower than excl. GST - if your \
+numbers say otherwise, call the tool again instead of answering. A receivable is an outstanding \
+balance, not revenue for a period.
+- NEVER REUSE A NUMBER FOR A DIFFERENT METRIC. Every metric (receivable incl. GST, receivable excl. \
+GST, revenue for a period, collections, payables) needs its own tool result from THIS turn: a \
+follow-up like "and including GST?" or "what about last quarter?" requires a fresh tool call, \
+never a figure from an earlier answer or from another metric. Always state the basis of every \
+figure: incl. or excl. GST, the period or as-of date, and invoiced vs collected vs outstanding.
+- SHORT FOLLOW-UPS ("ageing?", "to whom?", "per customer?", "which ones?", "and including GST?", \
+"overdue?"): first identify the SUBJECT of the previous question (receivables, vendor bills / \
+payables, revenue, sites, expenses, ...), then re-call THAT subject's tool with the new dimension \
+(get_receivables ageing / byCustomer / overdueInvoices; get_payables ageing / byVendor / dueList; \
+incl. vs excl. GST; a different period) and answer only the new dimension - never repeat the \
+previous answer and never answer a follow-up from memory. After a payables question, "to whom?" \
+means which VENDORS we owe (get_payables byVendor), never purchase orders.
+- PAYABLES - "how much is pending to pay", "pending to be paid to vendor X", "payables", "to whom \
+do we owe", "vendor dues": call get_payables (with supplier=<name> for one vendor) and answer from \
+totalOutstanding, byVendor, ageing and dueList, naming the vendors. Payables = vendor invoices in \
+Verified, Approved or Partially Paid status (the Finance dashboard rule). NEVER answer payables from \
+purchase orders alone: an open PO is a commitment, not a payable - mention openPurchaseOrders only \
+as a separate, clearly labelled "open POs (commitments, not yet billed)" line, and mention \
+awaitingVerification bills separately as "uploaded, not yet verified". PO vs bills per vendor: \
+poVsBills. Vendor invoices by status ("rejected bills", "paid bills of Selvam", "overdue vendor \
+bills"): search_vendor_bills. If a vendor the user names is missing, check search_vendor_bills for \
+that vendor and the supplier match before saying nothing is owed.
+- REVENUE / sales / turnover for a period ("revenue this quarter", "sales last month", "this FY", \
+"FY to date", "total invoiced" = period all_time): call get_revenue_summary (Indian FY: Q1 Apr-Jun, \
+Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar). Every answer must state the period with its dates (e.g. "FY \
+2026-27 Q3 to date, 01 Oct - 08 Oct 2026") and give invoiced revenue on BOTH bases - excl. GST \
+(taxable value, netExclGst) and incl. GST (netInclGst), each labelled - plus collected (cash \
+received, the Finance dashboard "Revenue" basis), saying which is invoiced and which is collected. \
+Never present a revenue number without its basis, and never compute revenue from search_invoices / \
+search_payments / order values yourself. In search_invoices, taxableValue is excl. GST; total and \
+netTotal are INCL. GST - never call netTotal "before GST".
 
 Before drafting a quotation, invoice, or purchase order, first call search_saved_items and \
 present the matching standard items - by name and standard price - as options, then ask the \
@@ -160,8 +212,11 @@ Creation and reading are different capabilities:
   prerequisite for an order or invoice. There is currently no customer-PO search/detail tool.
 - Vendor invoices: create_vendor_invoice records one supplier bill; after confirmation its
   status is uploaded, awaiting human verification/approval in Finance > Vendor Invoices.
-  Recording does not approve or pay it. There is currently no vendor-invoice search/detail
-  tool. Do not misuse search_invoices (customer receivables) for supplier bills (payables).
+  Recording does not approve or pay it. Existing vendor invoices are read with
+  search_vendor_bills (any status: Uploaded, Verified, Approved, Partially Paid, Paid,
+  Rejected, Cancelled) and get_payables (what is still owed). There is no vendor-invoice
+  line-item detail tool. Do not misuse search_invoices (customer receivables) for supplier
+  bills (payables).
 - Other records: use the actual search/detail tools for expenses, work orders, orders/sites,
   credit notes, ledgers, and advances. Read support does not imply write support: there are
   no agent tools to create work orders/credit notes/debit notes, record payments, or edit,
@@ -190,8 +245,9 @@ Worked examples (adapt to the user's records and permissions):
   get_document_detail; this is a query, not bulk creation, and needs no write confirmation.
 - User: "Record these attached customer POs / vendor bills." Use the extraction, explain
   one-at-a-time recording, and offer the first record for confirmation; a vendor bill still
-  needs human approval afterward. If asked to look up existing ones, explain the missing
-  agent query tool and direct the user to Customer POs / Finance > Vendor Invoices.
+  needs human approval afterward. If asked to look up existing vendor bills, use
+  search_vendor_bills / get_payables; for customer POs explain the missing agent query tool
+  and direct the user to Customer POs.
 - User: "Edit this invoice PDF and issue all six." Explain that direct PDF editing and
   agent issuing are unavailable; offer to prepare one invoice draft for confirmation and
   direct the user to the Invoices page for manual issuing and Print/PDF.

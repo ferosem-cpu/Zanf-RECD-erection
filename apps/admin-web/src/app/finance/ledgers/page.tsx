@@ -10,7 +10,8 @@ import { formatINR, formatDate } from "@/lib/finance";
 
 interface Party { id: string; name: string; }
 interface LedgerEntry {
-  date: string;
+  /** null only for an undated opening balance on an account with no activity. */
+  date: string | null;
   type: string;
   refNumber: string;
   refId: string | null;
@@ -115,7 +116,7 @@ function LedgersPageInner() {
                   `${statement.partyName}-ledger`,
                   ["Date", "Particulars", "Ref", "Debit", "Credit", "Balance"],
                   statement.entries.map((e) => [
-                    formatDate(e.date),
+                    e.date ? formatDate(e.date) : "",
                     TYPE_LABEL[e.type] ?? e.type,
                     e.refNumber,
                     e.debit,
@@ -203,7 +204,7 @@ function LedgersPageInner() {
                 <tbody className="divide-y divide-gray-100">
                   {statement.entries.map((e, i) => (
                     <tr key={`${e.type}-${e.refId ?? i}`}>
-                      <td className="px-4 py-3 whitespace-nowrap">{formatDate(e.date)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{e.date ? formatDate(e.date) : ""}</td>
                       <td className="px-4 py-3">{TYPE_LABEL[e.type] ?? e.type}</td>
                       <td className="px-4 py-3 text-gray-500">{e.refNumber}</td>
                       <td className="px-4 py-3 text-right">{Number(e.debit) > 0 ? formatINR(e.debit) : ""}</td>

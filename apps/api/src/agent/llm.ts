@@ -5,12 +5,12 @@
  */
 import type { AgentLlmProvider } from "@prisma/client";
 import type { AgentTool, AgentAuthContext } from "./tools/types";
-import { getToolByName } from "./tools/registry";
+import { getToolByName, isWriteTool } from "./tools/registry";
 import type { UnifiedMessage, UnifiedToolSchema, LlmAdapter, SendMessageResult } from "./providers/types";
 import { formatProviderFailures, providersToAttempt, recordProviderFailure, type ProviderFailure } from "./providers/providerHealth";
 import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
 import { AgentDeadline, LLM_CALL_TIMEOUT_MS } from "./timeouts";
-import { annotateListResult } from "./listResult";
+import { executeToolCalls } from "./toolExecution";
 
 const MAX_TOOL_TURNS = 8;
 
@@ -115,28 +115,16 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
       return { reply: response.text, history };
     }
 
-    for (const call of response.toolCalls) {
-      let resultValue: unknown;
-      try {
-        const intercepted = await onToolCall?.(call.name, call.input);
-        if (intercepted?.intercepted) {
-          resultValue = intercepted.result;
-        } else {
-          const tool = getToolByName(call.name);
-          if (!tool) {
-            resultValue = { error: `Unknown tool: ${call.name}` };
-          } else {
-            resultValue = annotateListResult(await tool.handler(call.input, params.auth));
-          }
-        }
-      } catch (err) {
-        resultValue = { error: (err as Error).message };
-      }
-      history = [
-        ...history,
-        { role: "tool", toolCallId: call.id, toolName: call.name, content: JSON.stringify(resultValue) },
-      ];
-    }
+    // Read-only calls in one step run concurrently; any write tool keeps the step sequential.
+    const results = await executeToolCalls({
+      calls: response.toolCalls,
+      auth: params.auth,
+      getTool: getToolByName,
+      isWriteTool,
+      onToolCall,
+      deadline,
+    });
+    history = [...history, ...results];
   }
 
   return {

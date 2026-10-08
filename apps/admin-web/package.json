@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start -p 6011",
     "lint": "next lint",
-    "test": "node --import tsx --test test/orderValue.test.ts test/routeAccess.test.ts test/sessionRetry.test.ts test/supplier.test.ts"
+    "test": "node --import tsx --test test/orderValue.test.ts test/routeAccess.test.ts test/sessionRetry.test.ts test/supplier.test.ts test/vendorInvoiceDelete.test.ts test/threadSwitchGuard.test.ts"
   },
   "dependencies": {
     "@recd/shared": "*",

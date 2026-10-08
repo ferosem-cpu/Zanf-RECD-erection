@@ -11,6 +11,7 @@ import { api, NetworkError } from "@/lib/apiClient";
 const AGENT_REPLY_TIMEOUT_MS = 90_000;
 import { useAuth } from "@/components/AuthContext";
 import { captureFile } from "@/lib/fileCapture";
+import { createThreadSwitchGuard } from "@/lib/threadSwitchGuard";
 
 /**
  * Minimal typing for the Web Speech API's SpeechRecognition - not in TypeScript's default DOM
@@ -173,6 +174,8 @@ export default function AgentChatBubble() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // A late response for a thread the user already left must not paint over the current one.
+  const threadGuard = useRef(createThreadSwitchGuard()).current;
   const isCustomer = user?.role.key === ROLE_KEY.CUSTOMER;
 
   // Feature-detected client-side only (no server-side equivalent - purely a browser API),
@@ -258,10 +261,12 @@ export default function AgentChatBubble() {
   }, []);
 
   const loadConversation = useCallback(async (id: string) => {
+    const ticket = threadGuard.begin();
     const data = await api<{ id: string; messages: StoredMessage[] }>(`/agent/conversations/${id}`);
+    if (!threadGuard.isCurrent(ticket)) return;
     setActiveId(data.id);
     setMessages(data.messages ?? []);
-  }, []);
+  }, [threadGuard]);
 
   async function ensureConversation(): Promise<string> {
     if (activeId) return activeId;
@@ -270,7 +275,9 @@ export default function AgentChatBubble() {
       await loadConversation(list[0].id);
       return list[0].id;
     }
+    const ticket = threadGuard.begin();
     const created = await api<{ id: string }>("/agent/conversations", { method: "POST", body: JSON.stringify({}) });
+    if (!threadGuard.isCurrent(ticket)) return created.id;
     setActiveId(created.id);
     setMessages([]);
     setConversations([{ id: created.id, title: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }]);
@@ -278,7 +285,9 @@ export default function AgentChatBubble() {
   }
 
   async function startNewConversation() {
+    const ticket = threadGuard.begin();
     const created = await api<{ id: string }>("/agent/conversations", { method: "POST", body: JSON.stringify({}) });
+    if (!threadGuard.isCurrent(ticket)) return;
     setActiveId(created.id);
     setMessages([]);
     setShowHistory(false);
@@ -327,6 +336,7 @@ export default function AgentChatBubble() {
     setSending(true);
     try {
       const id = await ensureConversation();
+      const ticket = threadGuard.current();
       const result = await api<{ reply: string; messages: StoredMessage[] }>(`/agent/conversations/${id}/messages`, {
         method: "POST",
         // The server gives up on its own after ~55s and answers with an explanation; this is
@@ -339,7 +349,7 @@ export default function AgentChatBubble() {
             : undefined,
         }),
       });
-      setMessages(result.messages ?? []);
+      if (threadGuard.isCurrent(ticket)) setMessages(result.messages ?? []);
       loadConversations();
     } catch (err) {
       setError(
@@ -382,6 +392,7 @@ export default function AgentChatBubble() {
     if (!activeId || resolvingActionId) return;
     setResolvingActionId(actionId);
     setError(null);
+    const ticket = threadGuard.current();
     try {
       const result = await api<{ messages: StoredMessage[] }>(
         `/agent/conversations/${activeId}/actions/${actionId}/${outcome}`,
@@ -389,7 +400,7 @@ export default function AgentChatBubble() {
           ? { method: "POST", body: JSON.stringify({ lineItems }), timeoutMs: 60000 }
           : { method: "POST", timeoutMs: 60000 },
       );
-      setMessages(result.messages ?? []);
+      if (threadGuard.isCurrent(ticket)) setMessages(result.messages ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

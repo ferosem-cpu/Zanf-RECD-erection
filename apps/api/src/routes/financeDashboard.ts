@@ -6,6 +6,8 @@ import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
 import { settledFromAllocations } from "../services/settlement";
 import { splitPayment } from "../services/paymentSplit";
+import { ageingBucket } from "../services/ageing";
+import { PAYABLE_BILL_STATUSES, billOutstanding } from "../services/payables";
 
 export const financeDashboardRouter = Router();
 financeDashboardRouter.use(authenticate);
@@ -51,14 +53,14 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
   // Cash only: legacy "TDS Deducted" rows are TDS, not money received (same as tdsAmount).
   const receivedThisMonth = paymentsReceived.reduce((s, p) => s.plus(splitPayment(p).cash), zero);
 
+  // Shared payables rule (services/payables.ts): verified + approved + partially_paid bills.
   const bills = await prisma.bill.findMany({
-    where: { status: { in: [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID] } },
+    where: { status: { in: PAYABLE_BILL_STATUSES } },
     include: { payments: { select: { amount: true } } },
   });
   let outstandingPayables = zero;
   for (const b of bills) {
-    const paid = b.payments.reduce((s, p) => s.plus(D(p.amount)), zero);
-    outstandingPayables = outstandingPayables.plus(D(b.total).minus(paid));
+    outstandingPayables = outstandingPayables.plus(D(billOutstanding(b.total, b.payments)));
   }
 
   const expensesThisMonth = await prisma.expense.findMany({ where: { expenseDate: { gte: monthStart } } });
@@ -92,9 +94,7 @@ financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_
     const netTotal = D(inv.total).minus(cnTotal);
     const balance = (netTotal.isNegative() ? new Prisma.Decimal(0) : netTotal).minus(paid);
     if (balance.lte(0)) continue;
-    const anchor = inv.dueDate ?? inv.issueDate;
-    const days = Math.floor((now.getTime() - anchor.getTime()) / 86_400_000);
-    const bucket = days <= 0 ? "current" : days <= 30 ? "days0_30" : days <= 60 ? "days31_60" : days <= 90 ? "days61_90" : "days90Plus";
+    const { bucket } = ageingBucket(inv.dueDate ?? inv.issueDate, now);
 
     let row = byCustomer.get(inv.customerId);
     if (!row) {
@@ -111,18 +111,15 @@ financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_
 financeDashboardRouter.get("/reports/payables", requirePermission(PERMISSION_KEY.VIEW_FINANCE_DASHBOARD), async (_req, res) => {
   const now = new Date();
   const bills = await prisma.bill.findMany({
-    where: { status: { in: [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID] } },
+    where: { status: { in: PAYABLE_BILL_STATUSES } },
     include: { payments: { select: { amount: true } }, supplier: { select: { id: true, name: true } } },
   });
 
   const bySupplier = new Map<string, any>();
   for (const b of bills) {
-    const paid = b.payments.reduce((s, p) => s.plus(D(p.amount)), new Prisma.Decimal(0));
-    const balance = D(b.total).minus(paid);
+    const balance = D(billOutstanding(b.total, b.payments));
     if (balance.lte(0)) continue;
-    const anchor = b.dueDate ?? b.billDate;
-    const days = Math.floor((now.getTime() - anchor.getTime()) / 86_400_000);
-    const bucket = days <= 0 ? "current" : days <= 30 ? "days0_30" : days <= 60 ? "days31_60" : days <= 90 ? "days61_90" : "days90Plus";
+    const { bucket } = ageingBucket(b.dueDate ?? b.billDate, now);
 
     let row = bySupplier.get(b.supplierId);
     if (!row) {
@@ -144,7 +141,11 @@ financeDashboardRouter.get("/reports/gst-summary", requirePermission(PERMISSION_
     where: { docType: "tax_invoice", status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID, INVOICE_STATUS.PAID] }, issueDate: from || to ? { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } : undefined },
   });
   const bills = await prisma.bill.findMany({
-    where: { billDate: from || to ? { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } : undefined },
+    where: {
+      // Rejected/cancelled/deleted bills were never a purchase - no input tax on them.
+      status: { notIn: [BILL_STATUS.REJECTED, BILL_STATUS.CANCELLED, BILL_STATUS.DELETED] },
+      billDate: from || to ? { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } : undefined,
+    },
   });
 
   const rows = new Map<string, any>();

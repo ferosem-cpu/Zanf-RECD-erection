@@ -32,10 +32,20 @@ test("document families distinguish receivables/payables, queries and numbering"
   assert.match(staff, /A PO number exists only after\s+confirmation/);
   assert.match(staff, /PO received FROM a customer, using their\s+supplied PO number/);
   assert.match(staff, /no customer-PO search\/detail tool/);
-  assert.match(staff, /no vendor-invoice search\/detail\s+tool/);
+  // Vendor invoices are readable since search_vendor_bills (2026-10-08); only line-item detail is missing.
+  assert.match(staff, /Existing vendor invoices are read with\s+search_vendor_bills/);
+  assert.match(staff, /no vendor-invoice\s+line-item detail tool/);
   assert.match(staff, /Recording does not approve or pay it/);
   assert.match(staff, /Do not misuse search_invoices/);
   assert.match(staff, /Read support does not imply write support/);
+});
+
+test("short follow-ups re-call the prior subject's tool with the new dimension", () => {
+  assert.match(staff, /SHORT FOLLOW-UPS \("ageing\?", "to whom\?"/);
+  assert.match(staff, /identify the SUBJECT of the previous question/);
+  assert.match(staff, /never repeat the\s+previous answer and never answer a follow-up from memory/);
+  assert.match(staff, /"to whom\?"\s+means which VENDORS we owe \(get_payables byVendor\), never purchase orders/);
+  assert.match(staff, /NEVER answer payables from\s+purchase orders alone/);
 });
 
 test("attachment extraction is usable input, not file manipulation or confirmation", () => {

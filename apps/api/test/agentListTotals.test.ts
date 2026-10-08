@@ -122,6 +122,19 @@ test("invoice totals cover every matching invoice and match the rows (incl. the 
   assert.equal("overdueCount" in out, false);
 });
 
+test("invoice totals carry taxable value (excl. GST) and GST, adding up to the incl.-GST total", () => {
+  const rows = Array.from({ length: 16 }, (_, i) => ({
+    id: `i${i}`, status: "issued", dueDate: null, taxableValue: 10000, gstAmount: 1800, total: 11800,
+    creditNoteTotal: 0, netTotal: 11800, amountPaid: 0, balance: 11800, overdue: false,
+  }));
+  const out = summarizeInvoices(rows, LIST_LIMIT, { overdueOnly: false });
+  assert.equal(out.totals.taxableValue, 160000);
+  assert.equal(out.totals.gstAmount, 28800);
+  assert.equal(out.totals.totalAmount, 188800);
+  assert.equal(out.totals.taxableValue + out.totals.gstAmount, out.totals.totalAmount);
+  assert.notEqual(out.totals.netTotal, out.totals.taxableValue); // netTotal is incl. GST, not before GST
+});
+
 test("'unpaid or partially paid' style filters resolve to issued + partially_paid", () => {
   for (const status of ["unpaid", "Outstanding", "issued, partially paid", "issued,partially-paid"]) {
     assert.deepEqual(resolveInvoiceFilter({ status }).statuses, ["issued", "partially_paid"], status);

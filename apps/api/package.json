@@ -12,7 +12,7 @@
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
-    "test": "node --import tsx --test test/authPolicy.test.ts test/providerHealth.test.ts test/roleDefinitions.test.ts test/complaintScope.test.ts test/purchaseOrderFields.test.ts test/agentTimeouts.test.ts test/agentOverdueInvoices.test.ts test/agentListTotals.test.ts test/agentPaymentsTds.test.ts test/paymentSplit.test.ts test/documentCapabilities.test.ts test/createInvoice.test.ts"
+    "test": "node --import tsx --test test/authPolicy.test.ts test/providerHealth.test.ts test/roleDefinitions.test.ts test/complaintScope.test.ts test/purchaseOrderFields.test.ts test/agentTimeouts.test.ts test/agentOverdueInvoices.test.ts test/agentListTotals.test.ts test/agentPaymentsTds.test.ts test/paymentSplit.test.ts test/documentCapabilities.test.ts test/createInvoice.test.ts test/ledgerOpening.test.ts test/agentSiteStatus.test.ts test/agentPayablesRevenue.test.ts test/agentReceivables.test.ts test/billDelete.test.ts test/driveSearch.test.ts test/agentParallelTools.test.ts test/payables.test.ts test/agentExpenses.test.ts test/gstr3b.test.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

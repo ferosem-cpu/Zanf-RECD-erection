@@ -12,6 +12,7 @@ import { buildCustomerLedger } from "../../services/ledger";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
 import { paymentCashAndTds, normalizePaymentMethod } from "../../services/paymentSplit";
 import { LIST_LIMIT, listMeta, listPage } from "../listResult";
+import { isoDateIST } from "../istDates";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const RESULT_LIMIT = LIST_LIMIT;
@@ -33,19 +34,23 @@ export function sumMoney(values: Array<number | null | undefined>): number {
   return values.reduce<number>((paise, v) => paise + Math.round((v ?? 0) * 100), 0) / 100;
 }
 
-/** Business dates are Indian time (IST = UTC+5:30, no DST). A date-only value saved as UTC
- * midnight and one saved as IST midnight (18:30Z the day before) both land on the right day. */
-const IST_OFFSET_MS = 330 * 60_000;
-
-export function isoDateIST(d: Date): string {
-  return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
-}
+/** Business dates are Indian time (IST) - see ../istDates. */
+export { isoDateIST };
 
 /** Start of a yyyy-mm-dd day in IST, or undefined if the string isn't a valid date. */
 export function istDayStart(ymd: string): Date | undefined {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return undefined;
   const d = new Date(`${ymd}T00:00:00+05:30`);
   return Number.isNaN(d.getTime()) || isoDateIST(d) !== ymd ? undefined : d;
+}
+
+/** Excl.-GST part of an invoice's outstanding balance. The finance pages only show receivables
+ * incl. GST, so the agent's excl.-GST basis is: apportion each invoice's outstanding by that
+ * invoice's own taxable share (subtotal / total; subtotal is already after line discounts).
+ * Mixed GST rates on one invoice are handled because the share uses the invoice's real totals. */
+export function exclGstPortion(outstanding: number, subtotal: number, total: number): number {
+  if (total <= 0) return outstanding;
+  return Math.round(outstanding * (subtotal / total) * 100) / 100;
 }
 
 type StatusGroup = { status: string; _count: { _all: number }; _sum?: { total?: Prisma.Decimal | null } };
@@ -265,6 +270,11 @@ export interface InvoiceSummaryRow {
   netTotal: number | null;
   amountPaid: number | null;
   balance: number | null;
+  /** balance excl. GST - see exclGstPortion. */
+  balanceExclGst?: number | null;
+  /** Invoice subtotal (taxable value, excl. GST) and its GST (cgst + sgst + igst). */
+  taxableValue?: number | null;
+  gstAmount?: number | null;
   overdue: boolean;
 }
 
@@ -288,11 +298,16 @@ export function summarizeInvoices<T extends InvoiceSummaryRow>(rows: T[], listLi
     ...listMeta(listed.length, rows.length),
     totals: {
       count: rows.length,
+      /** Invoice totals INCL. GST. */
       totalAmount: sumMoney(rows.map((r) => r.total)),
+      /** Taxable value EXCL. GST, and the GST on it (totalAmount = taxableValue + gstAmount). */
+      taxableValue: sumMoney(rows.map((r) => r.taxableValue ?? null)),
+      gstAmount: sumMoney(rows.map((r) => r.gstAmount ?? null)),
       creditNoteTotal: sumMoney(rows.map((r) => r.creditNoteTotal)),
       netTotal: sumMoney(rows.map((r) => r.netTotal)),
       amountPaid: sumMoney(rows.map((r) => r.amountPaid)),
       outstandingBalance: sumMoney(receivable.map((r) => r.balance)),
+      outstandingBalanceExclGst: sumMoney(receivable.map((r) => r.balanceExclGst ?? r.balance)),
       overdueCount: overdue.length,
       overdueBalance: sumMoney(overdue.map((r) => r.balance)),
     },
@@ -309,13 +324,16 @@ const searchInvoices: AgentTool = {
   name: "search_invoices",
   description:
     "Search invoices (proforma or tax invoice) by invoice number or customer name. Lists up to " +
-    "15 rows: id, invoiceNumber, docType, customer, status, issueDate, dueDate, total, " +
-    "creditNoteTotal (sum of issued credit notes against it), netTotal, amountPaid, balance " +
-    "(net of credit notes, after allocated payments and pro-rated TDS), and whether it's " +
-    "overdue. ALWAYS also returns totalCount, totals {count, totalAmount, creditNoteTotal, " +
-    "netTotal, amountPaid, outstandingBalance (issued + partially_paid only, same as the finance " +
-    "dashboard), overdueCount, overdueBalance} and byStatus, all computed over EVERY matching " +
-    "invoice - quote these for 'how many'/'how much', never add up rows. 'overdue' is NOT a " +
+    "15 rows: id, invoiceNumber, docType, customer, status, issueDate, dueDate, taxableValue " +
+    "(EXCL. GST), gstAmount, total (INCL. GST), creditNoteTotal (sum of issued credit notes against " +
+    "it), netTotal (total INCL. GST minus credit notes - it is NOT a before-GST figure), amountPaid, " +
+    "balance (incl. GST, net of credit notes, after allocated payments and pro-rated TDS), " +
+    "balanceExclGst, and whether it's overdue. ALWAYS also returns totalCount, totals {count, " +
+    "totalAmount (incl. GST), taxableValue (excl. GST), gstAmount, creditNoteTotal, " +
+    "netTotal, amountPaid, outstandingBalance (incl. GST; issued + partially_paid only, same as the finance " +
+    "dashboard), outstandingBalanceExclGst, overdueCount, overdueBalance} and byStatus, all computed over EVERY matching " +
+    "invoice - quote these for 'how many'/'how much', never add up rows. For 'total receivable' " +
+    "(incl. or excl. GST, per customer) prefer get_receivables. 'overdue' is NOT a " +
     "status - for overdue invoices set overdueOnly=true. For unpaid / partly paid / outstanding " +
     "invoices use status='issued,partially_paid'. Use get_document_detail for line " +
     "items/payments/credit notes.",
@@ -365,8 +383,14 @@ const searchInvoices: AgentTool = {
         id: inv.id,
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
         docType: inv.docType, customer: inv.customer.name, status: inv.status,
-        issueDate: inv.issueDate, dueDate: inv.dueDate, total: num(inv.total),
-        creditNoteTotal: num(cnTotal), netTotal: num(netTotal), amountPaid: num(paid), balance: num(balance), overdue,
+        issueDate: inv.issueDate, dueDate: inv.dueDate,
+        // Stored document fields: subtotal = taxable value after line discounts (excl. GST);
+        // GST = cgst + sgst + igst; total = subtotal + GST.
+        taxableValue: num(inv.subtotal),
+        gstAmount: sumMoney([num(inv.cgstAmount), num(inv.sgstAmount), num(inv.igstAmount)]),
+        total: num(inv.total),
+        creditNoteTotal: num(cnTotal), netTotal: num(netTotal), amountPaid: num(paid), balance: num(balance),
+        balanceExclGst: exclGstPortion(Number(balance), Number(inv.subtotal), Number(inv.total)), overdue,
       };
     });
     return summarizeInvoices(rows, RESULT_LIMIT, { overdueOnly });
@@ -378,7 +402,8 @@ const searchPurchaseOrders: AgentTool = {
   description:
     "Search purchase orders by PO number or supplier name. Returns id, poNumber, supplier, " +
     "status, orderDate, expectedDate, and total. Use get_document_detail for line items. " +
-    "totalCount, totalValue and byStatus cover ALL matching POs, not just the listed rows.",
+    "totalCount, totalValue and byStatus cover ALL matching POs, not just the listed rows. " +
+    "POs are commitments, not payables - for 'how much do we owe / pending to pay' use get_payables.",
   inputSchema: {
     type: "object",
     properties: {
@@ -418,39 +443,66 @@ const searchPurchaseOrders: AgentTool = {
   },
 };
 
+/** Expense totals over EVERY matching expense: count, total and per-category breakdown. */
+export function summarizeExpenses(rows: Array<{ amount: number | null; category: string }>) {
+  const byCategory: Record<string, { count: number; amount: number }> = {};
+  for (const r of rows) {
+    const c = (byCategory[r.category] ??= { count: 0, amount: 0 });
+    c.count += 1;
+    c.amount = sumMoney([c.amount, r.amount]);
+  }
+  return { count: rows.length, totalAmount: sumMoney(rows.map((r) => r.amount)), byCategory };
+}
+
 const searchExpenses: AgentTool = {
   name: "search_expenses",
   description:
     "Search the expense book (non-PO spend: fuel, travel, site consumables, misc) by " +
-    "description or category. Returns id, description, category, amount, date, method, site. " +
-    "totalCount and totalAmount cover ALL matching expenses, not just the listed rows.",
+    "description, category and date range. Returns id, description, category, amount, date, method, site. " +
+    "totals {count, totalAmount, byCategory} are server-computed over ALL matching expenses, not just " +
+    "the listed rows - quote totals.totalAmount, never add up rows or ask the user to. For 'expenses " +
+    "this month' pass from = first of the month and to = today (IST) and state the period in the answer.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "Text to match against the description." },
       categoryKey: { type: "string", description: "Optional category key filter, e.g. 'material', 'transport'." },
+      from: { type: "string", description: "Optional start date YYYY-MM-DD (IST, inclusive)." },
+      to: { type: "string", description: "Optional end date YYYY-MM-DD (IST, inclusive)." },
     },
   },
   handler: async (input, auth) => {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_EXPENSES)) return forbidden("expenses");
     const query = input.query ? String(input.query) : undefined;
     const categoryKey = input.categoryKey ? String(input.categoryKey) : undefined;
+    const from = input.from ? String(input.from).trim() : "";
+    const to = input.to ? String(input.to).trim() : "";
+    const fromDate = from ? istDayStart(from) : undefined;
+    const toDate = to ? istDayStart(to) : undefined;
+    if ((from && !fromDate) || (to && !toDate)) return { error: "from/to must be dates in YYYY-MM-DD format." };
     const where: Prisma.ExpenseWhereInput = {
       ...(query ? { description: { contains: query, mode: "insensitive" } } : {}),
       ...(categoryKey ? { category: { key: categoryKey } } : {}),
+      ...(fromDate || toDate
+        ? { expenseDate: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lt: new Date(toDate.getTime() + 86_400_000) } : {}) } }
+        : {}),
     };
-    const [expenses, agg] = await Promise.all([
+    const [expenses, all] = await Promise.all([
       prisma.expense.findMany({
         where,
         include: { category: { select: { label: true } }, site: { select: { address: true } } },
         orderBy: { expenseDate: "desc" },
         take: RESULT_LIMIT,
       }),
-      prisma.expense.aggregate({ where, _count: { _all: true }, _sum: { amount: true } }),
+      // Slim copy of the FULL filtered set, only for the totals.
+      prisma.expense.findMany({ where, select: { amount: true, category: { select: { label: true } } } }),
     ]);
+    const totals = summarizeExpenses(all.map((e) => ({ amount: num(e.amount), category: e.category.label })));
     return {
-      ...listMeta(expenses.length, agg._count._all),
-      totalAmount: sumMoney([num(agg._sum.amount)]),
+      ...listMeta(expenses.length, totals.count),
+      period: { from: from || "(all dates)", to: to || "(all dates)", timezone: "IST" },
+      totals,
+      totalAmount: totals.totalAmount,
       results: expenses.map((e) => ({
         id: e.id, description: e.description, category: e.category.label, amount: num(e.amount),
         expenseDate: e.expenseDate, method: e.method, site: e.site?.address ?? null,
@@ -498,12 +550,74 @@ export function resolveOpenCutoff(commissioned: StageRef, finalStage: StageRef):
   return { closedFromSeq: null, openDefinition: "No SITC stages are configured, so every order counts as open." };
 }
 
+/** Lower-case, punctuation/underscores to single spaces: "Customer_Signoff" ~ "customer sign-off". */
+export function normalizeLabel(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+type LookupOption = { key: string; label: string };
+
+/** Words people use for a status/stage that is stored under another key. "done" is the
+ * StatusOption key whose label is "Done" (seed.ts); "completed"/"finished" mean the same. */
+export const UPDATE_STATUS_SYNONYMS: Record<string, string> = {
+  completed: "done", complete: "done", finished: "done", "work done": "done",
+  postponed: "postpone_to_tomorrow", postpone: "postpone_to_tomorrow",
+  "material not arrived": "material_not_arrived", "awaiting materials": "awaiting_scaffolding_materials",
+};
+export const STAGE_SYNONYMS: Record<string, string> = {
+  "sign off": "customer_signoff", signoff: "customer_signoff", "signed off": "customer_signoff",
+  delivered: "delivered_unloading", unloading: "delivered_unloading", installation: "installing",
+};
+
+/** Resolves a user/model filter value (key or label, any case, comma-separated list allowed)
+ * to stored keys the way the UI shows them. Unknown values are reported, never dropped. */
+export function resolveLookupFilter(
+  value: unknown,
+  options: LookupOption[],
+  synonyms: Record<string, string> = {},
+): { keys: string[]; unknown: string[] } {
+  const raw = Array.isArray(value) ? value.map(String) : value == null ? [] : String(value).split(",");
+  const keys: string[] = [];
+  const unknown: string[] = [];
+  for (const token of raw.map((t) => t.trim()).filter(Boolean)) {
+    const n = normalizeLabel(token);
+    const hit =
+      options.find((o) => normalizeLabel(o.key) === n || normalizeLabel(o.label) === n) ??
+      (synonyms[n] ? options.find((o) => o.key === synonyms[n]) : undefined) ??
+      // A label prefix such as "material not arrived" for "Material not arrived (RECD unit)".
+      options.find((o) => n.length >= 4 && normalizeLabel(o.label).startsWith(n));
+    if (hit) { if (!keys.includes(hit.key)) keys.push(hit.key); } else unknown.push(token);
+  }
+  return { keys, unknown };
+}
+
+export function validValuesList(options: LookupOption[]): string[] {
+  return options.map((o) => `${o.key} ("${o.label}")`);
+}
+
+/** Latest status update per site from events sorted newest first (first one per site wins). */
+export function latestStatusBySite<T extends { siteId: string }>(eventsNewestFirst: T[]): Map<string, T> {
+  const latest = new Map<string, T>();
+  for (const e of eventsNewestFirst) if (!latest.has(e.siteId)) latest.set(e.siteId, e);
+  return latest;
+}
+
+export const NO_UPDATES_LABEL = "No updates yet";
+
+export const UPDATE_STATUS_DEFINITION =
+  "A site's update status is the status of its MOST RECENT SITC status update - the Sites list's " +
+  "'Update status' column (e.g. Done, Pending, Postpone to tomorrow). It is separate from the SITC stage " +
+  "(currentStage). 'Done' means the last-logged step was completed, not that the whole site is finished; " +
+  "a finished/commissioned site is one at the Commissioned stage or later (totals.completedCount).";
+
 export interface OrderSummaryRow {
   value: number | null;
   quantity: number;
   product: string;
   lineItems: { product: string; quantity: number }[];
   stage: { label: string; sequenceOrder: number } | null;
+  /** Label of the site's latest status update; undefined/null = no site or no updates yet. */
+  updateStatus?: string | null;
 }
 
 /** Counts, value and units over EVERY matching order (not just the listed page). Order.value
@@ -511,8 +625,13 @@ export interface OrderSummaryRow {
 export function summarizeOrders(rows: OrderSummaryRow[], closedFromSeq: number | null) {
   const units = new Map<string, number>();
   const stages = new Map<string, { stage: string; sequenceOrder: number; count: number; values: Array<number | null> }>();
+  const updateStatuses = new Map<string, number>();
   const open: OrderSummaryRow[] = [];
   for (const r of rows) {
+    if (r.stage) {
+      const s = r.updateStatus ?? NO_UPDATES_LABEL;
+      updateStatuses.set(s, (updateStatuses.get(s) ?? 0) + 1);
+    }
     for (const item of [{ product: r.product, quantity: r.quantity }, ...r.lineItems]) {
       units.set(item.product, (units.get(item.product) ?? 0) + item.quantity);
     }
@@ -537,6 +656,10 @@ export function summarizeOrders(rows: OrderSummaryRow[], closedFromSeq: number |
     byStage: [...stages.values()]
       .sort((a, b) => a.sequenceOrder - b.sequenceOrder)
       .map((s) => ({ stage: s.stage, count: s.count, value: sumMoney(s.values) })),
+    /** Sites (orders with a site) per latest update status - see UPDATE_STATUS_DEFINITION. */
+    byUpdateStatus: [...updateStatuses.entries()]
+      .map(([updateStatus, count]) => ({ updateStatus, count }))
+      .sort((a, b) => b.count - a.count || a.updateStatus.localeCompare(b.updateStatus)),
   };
 }
 
@@ -553,10 +676,14 @@ const searchOrdersAndSites: AgentTool = {
     "reaches the Commissioned SITC stage or later), and - if a site exists - its address, end-client company " +
     "name, current SITC stage, assigned engineer, and erection vendor. ALWAYS also returns " +
     "totalCount and totals {count, totalValue, ordersWithoutValue, totalUnits, unitsByProduct, " +
-    "openCount, openValue, completedCount, byStage} computed over EVERY matching order - quote " +
+    "openCount, openValue, completedCount, byStage, byUpdateStatus} computed over EVERY matching order - quote " +
     "these for any 'how many orders/units' or 'total order value' question, never add up the " +
     "listed rows. For open/pending/in-progress orders set openOnly=true (Order has no status " +
-    "field; see openDefinition in the result). Use this for any 'how many/which sites are in " +
+    "field; see openDefinition in the result). Each site also has updateStatus = the status of its " +
+    "latest SITC status update (the Sites list 'Update status' column: Done, Pending, Postpone to " +
+    "tomorrow, ...); for 'how many sites are in done status' / 'sites whose update is Done' set " +
+    "updateStatus='done' (keys or labels, any case). stageKey also takes a stage label. An unknown " +
+    "updateStatus/stageKey returns the valid values - relay them, never answer 'none'. Use this for any 'how many/which sites are in " +
     "<place>' question - there's no separate stock/inventory-by-location feature, so this " +
     "order/site list is the closest thing to it. When called by a customer, this is " +
     "automatically scoped to only " +
@@ -567,13 +694,13 @@ const searchOrdersAndSites: AgentTool = {
     properties: {
       query: { type: "string", description: "Order number, customer name, site company name, or site address/location (partial match)." },
       openOnly: { type: "boolean", description: "True = only open orders: no site yet, or the site has not yet reached the Commissioned SITC stage (commissioned / customer sign-off = closed)." },
-      stageKey: { type: "string", description: "Optional: only orders whose site is currently at this SITC stage key, e.g. dispatched, installing, commissioned, customer_signoff." },
+      stageKey: { type: "string", description: "Optional: only orders whose site is currently at this SITC stage - key or label, any case, comma-separated for several, e.g. dispatched, installing, Commissioned, customer_signoff." },
+      updateStatus: { type: "string", description: "Optional: only sites whose LATEST status update has this status - key or label, any case, comma-separated for several: pending, postpone_to_tomorrow, material_not_arrived, awaiting_scaffolding_materials, done ('completed' = done)." },
     },
   },
   handler: async (input, auth) => {
     const query = input.query ? String(input.query) : undefined;
     const openOnly = input.openOnly === true;
-    const stageKey = input.stageKey ? String(input.stageKey).trim() : undefined;
     const searchClauses: Prisma.OrderWhereInput = query
       ? {
           OR: [
@@ -603,7 +730,7 @@ const searchOrdersAndSites: AgentTool = {
 
     // Stages are DB rows, so the Commissioned cutoff is read by key/label, not hard-coded
     // (sequenceOrder 11 in the seed, just before customer_signoff).
-    const [commissionedStage, finalStage] = await Promise.all([
+    const [commissionedStage, finalStage, allStages, statusOptions] = await Promise.all([
       prisma.stageDefinition.findFirst({
         where: { OR: [{ key: STAGE_KEY.COMMISSIONED }, { label: { equals: "Commissioned", mode: "insensitive" } }] },
         orderBy: { sequenceOrder: "asc" },
@@ -613,11 +740,50 @@ const searchOrdersAndSites: AgentTool = {
         orderBy: { sequenceOrder: "desc" },
         select: { label: true, sequenceOrder: true },
       }),
+      prisma.stageDefinition.findMany({ orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
+      prisma.statusOption.findMany({ where: { domain: "site_stage" }, orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
     ]);
     const { closedFromSeq, openDefinition } = resolveOpenCutoff(commissionedStage, finalStage);
     if (openOnly && closedFromSeq != null) filters.push(orderOpenWhere(closedFromSeq));
-    if (stageKey) filters.push({ site: { is: { currentStage: { key: stageKey } } } });
+
+    if (input.stageKey != null && String(input.stageKey).trim()) {
+      const stages = resolveLookupFilter(input.stageKey, allStages, STAGE_SYNONYMS);
+      if (stages.unknown.length > 0) {
+        return {
+          error: `Unknown SITC stage ${stages.unknown.map((u) => `"${u}"`).join(", ")}. Tell the user the valid stages instead of saying nothing matched.`,
+          validStages: validValuesList(allStages),
+          validUpdateStatuses: validValuesList(statusOptions),
+          hint: "'done'/'completed' is an update status (updateStatus), not a stage.",
+        };
+      }
+      filters.push({ site: { is: { currentStage: { key: { in: stages.keys } } } } });
+    }
+    if (input.updateStatus != null && String(input.updateStatus).trim()) {
+      const statuses = resolveLookupFilter(input.updateStatus, statusOptions, UPDATE_STATUS_SYNONYMS);
+      if (statuses.unknown.length > 0) {
+        return {
+          error: `Unknown update status ${statuses.unknown.map((u) => `"${u}"`).join(", ")}. Tell the user the valid statuses instead of saying nothing matched.`,
+          validUpdateStatuses: validValuesList(statusOptions),
+          validStages: validValuesList(allStages),
+        };
+      }
+      // "Latest update" can't be expressed in a Prisma where, so resolve it to site ids first.
+      const events = await prisma.siteStageEvent.findMany({
+        distinct: ["siteId"],
+        orderBy: [{ siteId: "asc" }, { createdAt: "desc" }],
+        select: { siteId: true, statusOption: { select: { key: true } } },
+      });
+      const siteIds = [...latestStatusBySite(events).values()]
+        .filter((e) => statuses.keys.includes(e.statusOption.key))
+        .map((e) => e.siteId);
+      filters.push({ site: { is: { id: { in: siteIds } } } });
+    }
     const where: Prisma.OrderWhereInput = { AND: filters };
+    const latestUpdate = {
+      orderBy: { createdAt: "desc" as const },
+      take: 1,
+      select: { createdAt: true, statusOption: { select: { label: true } }, stageDefinition: { select: { label: true } } },
+    };
 
     const productLabel = (p: { name: string; model: string }) => `${p.name} (${p.model})`;
     const [orders, allMatching] = await Promise.all([
@@ -627,7 +793,12 @@ const searchOrdersAndSites: AgentTool = {
           customer: { select: { name: true } },
           product: { select: { name: true, model: true } },
           lineItems: { include: { product: { select: { name: true, model: true } } } },
-          site: { include: { currentStage: true, assignedEngineer: { select: { name: true } }, vendor: { select: { name: true } } } },
+          site: {
+            include: {
+              currentStage: true, assignedEngineer: { select: { name: true } }, vendor: { select: { name: true } },
+              stageEvents: latestUpdate,
+            },
+          },
         },
         orderBy: { createdAt: "desc" },
         take: RESULT_LIMIT,
@@ -640,7 +811,12 @@ const searchOrdersAndSites: AgentTool = {
           quantity: true,
           product: { select: { name: true, model: true } },
           lineItems: { select: { quantity: true, product: { select: { name: true, model: true } } } },
-          site: { select: { currentStage: { select: { label: true, sequenceOrder: true } } } },
+          site: {
+            select: {
+              currentStage: { select: { label: true, sequenceOrder: true } },
+              stageEvents: { orderBy: { createdAt: "desc" }, take: 1, select: { statusOption: { select: { label: true } } } },
+            },
+          },
         },
       }),
     ]);
@@ -652,6 +828,7 @@ const searchOrdersAndSites: AgentTool = {
         product: productLabel(o.product),
         lineItems: o.lineItems.map((li) => ({ product: productLabel(li.product), quantity: li.quantity })),
         stage: o.site ? o.site.currentStage : null,
+        updateStatus: o.site?.stageEvents[0]?.statusOption.label ?? null,
       })),
       closedFromSeq,
     );
@@ -659,6 +836,7 @@ const searchOrdersAndSites: AgentTool = {
     return {
       ...listMeta(orders.length, allMatching.length),
       openDefinition,
+      updateStatusDefinition: UPDATE_STATUS_DEFINITION,
       totals,
       orders: orders.map((o) => ({
         id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
@@ -675,6 +853,10 @@ const searchOrdersAndSites: AgentTool = {
               address: o.site.address,
               companyName: o.site.companyName,
               currentStage: o.site.currentStage.label,
+              updateStatus: o.site.stageEvents[0]?.statusOption.label ?? NO_UPDATES_LABEL,
+              lastUpdate: o.site.stageEvents[0]
+                ? { stage: o.site.stageEvents[0].stageDefinition.label, postedAt: isoDateIST(o.site.stageEvents[0].createdAt) }
+                : null,
               assignedEngineer: o.site.assignedEngineer?.name ?? null,
               vendor: o.site.vendor?.name ?? null,
             }
@@ -692,11 +874,14 @@ const searchSiteStatusUpdates: AgentTool = {
     "search_orders_and_sites (use the site's own \"id\" field, not the order's id). Returns " +
     "each entry's stage, status, comment, who posted it, and when, most recent first. Use " +
     "this whenever asked to view/summarise/recall past updates for a site, or to check the " +
-    "current/last-logged stage before calling create_site_status_update.",
+    "current/last-logged stage before calling create_site_status_update. Also returns latestStatus " +
+    "and byStatus/byStage counts over ALL of the site's updates. For counts ACROSS sites (e.g. how " +
+    "many sites are in Done status) use search_orders_and_sites with updateStatus instead.",
   inputSchema: {
     type: "object",
     properties: {
       siteId: { type: "string", description: "Site id, from search_orders_and_sites' site.id field (not the order id)." },
+      status: { type: "string", description: "Optional: only updates with this status - key or label, any case (e.g. done, Pending)." },
     },
     required: ["siteId"],
   },
@@ -723,9 +908,25 @@ const searchSiteStatusUpdates: AgentTool = {
       if (auth.vendorId && site.vendorId !== auth.vendorId) return forbidden("this site's status updates");
     }
 
-    const [events, totalCount] = await Promise.all([
+    let statusKeys: string[] | undefined;
+    if (input.status != null && String(input.status).trim()) {
+      const statusOptions = await prisma.statusOption.findMany({
+        where: { domain: "site_stage" }, orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true },
+      });
+      const resolved = resolveLookupFilter(input.status, statusOptions, UPDATE_STATUS_SYNONYMS);
+      if (resolved.unknown.length > 0) {
+        return {
+          error: `Unknown status ${resolved.unknown.map((u) => `"${u}"`).join(", ")}. Tell the user the valid statuses instead of saying nothing matched.`,
+          validStatuses: validValuesList(statusOptions),
+        };
+      }
+      statusKeys = resolved.keys;
+    }
+    const where: Prisma.SiteStageEventWhereInput = { siteId, ...(statusKeys ? { statusOption: { key: { in: statusKeys } } } : {}) };
+
+    const [events, allForSite] = await Promise.all([
       prisma.siteStageEvent.findMany({
-        where: { siteId },
+        where,
         include: {
           stageDefinition: { select: { label: true } },
           statusOption: { select: { label: true } },
@@ -734,13 +935,24 @@ const searchSiteStatusUpdates: AgentTool = {
         orderBy: { createdAt: "desc" },
         take: RESULT_LIMIT,
       }),
-      prisma.siteStageEvent.count({ where: { siteId } }),
+      // Slim copy of every update on the site, newest first, for the breakdowns.
+      prisma.siteStageEvent.findMany({
+        where: { siteId },
+        orderBy: { createdAt: "desc" },
+        select: { statusOption: { select: { key: true, label: true } }, stageDefinition: { select: { label: true } } },
+      }),
     ]);
+    const matching = statusKeys ? allForSite.filter((e) => statusKeys!.includes(e.statusOption.key)) : allForSite;
+    const countBy = (labels: string[]) =>
+      labels.reduce<Record<string, number>>((acc, l) => ({ ...acc, [l]: (acc[l] ?? 0) + 1 }), {});
 
     return {
-      ...listMeta(events.length, totalCount),
+      ...listMeta(events.length, matching.length),
       site: site.companyName ?? site.address,
       orderNumber: site.order.orderNumber,
+      latestStatus: allForSite[0]?.statusOption.label ?? NO_UPDATES_LABEL,
+      byStatus: countBy(allForSite.map((e) => e.statusOption.label)),
+      byStage: countBy(allForSite.map((e) => e.stageDefinition.label)),
       updates: events.map((e) => ({
         id: e.id,
         stage: e.stageDefinition.label,
@@ -988,7 +1200,7 @@ const getCustomerLedger: AgentTool = {
     const to = input.to ? new Date(String(input.to)) : undefined;
     const statement = await buildCustomerLedger(customerId, from, to);
     // Unambiguous yyyy-mm-dd (IST) dates instead of UTC timestamps the model misreads.
-    return { customer: customer.name, ...statement, entries: statement.entries.map((e) => ({ ...e, date: isoDateIST(e.date) })) };
+    return { customer: customer.name, ...statement, entries: statement.entries.map((e) => ({ ...e, date: e.date ? isoDateIST(e.date) : null })) };
   },
 };
 
