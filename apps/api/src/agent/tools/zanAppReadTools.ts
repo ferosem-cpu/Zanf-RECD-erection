@@ -6,7 +6,7 @@
  * the DB, so Decimal precision loss here is safe.
  */
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, CREDIT_NOTE_STATUS, STAGE_KEY } from "@recd/shared";
+import { PERMISSION_KEY, CREDIT_NOTE_STATUS, STAGE_KEY, PAYMENT_METHOD } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { buildCustomerLedger } from "../../services/ledger";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
@@ -1086,36 +1086,85 @@ export interface PaymentSummaryRow {
   receivedDate: string;
   amount: number | null;
   tdsAmount: number | null;
+  method: string;
   unallocatedAmount: number | null;
 }
 
-/** Totals and per-month totals over EVERY payment passed in; lists the newest `listLimit`. */
+/** Same labels as the admin-web Payments page (apps/admin-web/src/lib/finance.ts PAYMENT_METHOD_LABEL). */
+const PAYMENT_METHOD_LABEL: Record<string, string> = {
+  bank_transfer: "Bank Transfer", upi: "UPI", cheque: "Cheque", cash: "Cash", tds: "TDS Deducted", other: "Other",
+};
+
+/** Stored method key: trimmed + lowercased (the app only ever writes the lowercase PAYMENT_METHOD keys). */
+export function normalizePaymentMethod(method: string | null | undefined): string {
+  return String(method ?? "").trim().toLowerCase();
+}
+
+/** Resolves a method filter typed by the model or user ("TDS Deducted", "Bank transfer", "upi")
+ * to the stored PAYMENT_METHOD key, so "TDS Deducted" finds the legacy method="tds" rows. */
+export function resolvePaymentMethodFilter(input: string): string {
+  const key = normalizePaymentMethod(input).replace(/[\s-]+/g, "_");
+  const byLabel = Object.entries(PAYMENT_METHOD_LABEL).find(([, label]) => label.toLowerCase().replace(/\s+/g, "_") === key);
+  if (byLabel) return byLabel[0];
+  return key === "tds_deducted" ? PAYMENT_METHOD.TDS : key;
+}
+
+/** Splits one payment into cash and TDS. Two shapes exist in the data:
+ * - current: cash in `amount`, TDS withheld in `tdsAmount` (any method);
+ * - legacy method "tds" ("TDS Deducted" on the Payments page): the whole `amount` IS TDS
+ *   (PAYMENT_METHOD.TDS in packages/shared) and tdsAmount is normally 0.
+ * Summing only tdsAmount reported TDS = 0 for months whose TDS sat on legacy rows. */
+export function paymentCashAndTds(row: Pick<PaymentSummaryRow, "amount" | "tdsAmount" | "method">): { cash: number; tds: number } {
+  const amount = row.amount ?? 0;
+  const tdsField = row.tdsAmount ?? 0;
+  return normalizePaymentMethod(row.method) === PAYMENT_METHOD.TDS
+    ? { cash: 0, tds: sumMoney([amount, tdsField]) }
+    : { cash: amount, tds: tdsField };
+}
+
+function paymentGroupTotals(group: PaymentSummaryRow[]) {
+  const split = group.map(paymentCashAndTds);
+  return {
+    count: group.length,
+    amount: sumMoney(group.map((r) => r.amount)),
+    cash: sumMoney(split.map((s) => s.cash)),
+    tds: sumMoney(split.map((s) => s.tds)),
+  };
+}
+
+/** Totals, per-month and per-method totals over EVERY payment passed in; lists the newest `listLimit`.
+ * `amount` matches the Payments page Amount column (legacy TDS-method rows included); `cash`
+ * excludes them; `tds` = tdsAmount + legacy TDS-method amounts; settled = cash + tds. */
 export function summarizePayments<T extends PaymentSummaryRow>(rows: T[], listLimit: number) {
   const sorted = [...rows].sort((a, b) => b.receivedDate.localeCompare(a.receivedDate));
   const months = new Map<string, T[]>();
+  const methods = new Map<string, T[]>();
   for (const r of sorted) {
     const month = r.receivedDate.slice(0, 7);
     months.set(month, [...(months.get(month) ?? []), r]);
+    const method = normalizePaymentMethod(r.method);
+    methods.set(method, [...(methods.get(method) ?? []), r]);
   }
   const listed = sorted.slice(0, listLimit);
+  const all = paymentGroupTotals(rows);
   return {
     ...listMeta(listed.length, rows.length),
     totals: {
-      count: rows.length,
-      totalAmount: sumMoney(rows.map((r) => r.amount)),
-      totalTds: sumMoney(rows.map((r) => r.tdsAmount)),
+      count: all.count,
+      totalAmount: all.amount,
+      cashAmount: all.cash,
+      totalTds: all.tds,
+      totalSettled: sumMoney([all.cash, all.tds]),
       unallocatedAmount: sumMoney(rows.map((r) => r.unallocatedAmount)),
     },
     firstPaymentDate: sorted.length > 0 ? sorted[sorted.length - 1].receivedDate : null,
     lastPaymentDate: sorted.length > 0 ? sorted[0].receivedDate : null,
     byMonth: [...months.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([month, group]) => ({
-        month,
-        count: group.length,
-        amount: sumMoney(group.map((r) => r.amount)),
-        tds: sumMoney(group.map((r) => r.tdsAmount)),
-      })),
+      .map(([month, group]) => ({ month, ...paymentGroupTotals(group) })),
+    byMethod: [...methods.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([method, group]) => ({ method, label: PAYMENT_METHOD_LABEL[method] ?? method, ...paymentGroupTotals(group) })),
     payments: listed,
   };
 }
@@ -1129,11 +1178,14 @@ const searchPayments: AgentTool = {
     "Search payments RECEIVED from customers (collections), optionally by customer name, " +
     "payment reference/UTR or invoice number, a receivedDate range and method. Lists the 15 " +
     "most recent: id, customer, receivedDate (yyyy-mm-dd, the actual payment date), amount " +
-    "(cash received), tdsAmount, method, reference, allocatedTo (invoices it settled) and " +
+    "(as on the Payments page), tdsAmount, method, reference, allocatedTo (invoices it settled) and " +
     "unallocatedAmount (advance). ALWAYS also returns totalCount, totals {count, totalAmount, " +
-    "totalTds, unallocatedAmount}, firstPaymentDate, lastPaymentDate and byMonth (count/amount/" +
-    "tds per yyyy-mm) over EVERY matching payment - use those for any 'how much did we collect', " +
-    "'which months', or trend question; never infer months or totals from the listed rows.",
+    "cashAmount, totalTds, totalSettled, unallocatedAmount}, firstPaymentDate, lastPaymentDate, " +
+    "byMonth (count/amount/cash/tds per yyyy-mm) and byMethod (count/amount/cash/tds per method) " +
+    "over EVERY matching payment - use those for any 'how much did we collect', 'which months', " +
+    "TDS or trend question; never infer months or totals from the listed rows. TDS = tdsAmount " +
+    "plus the whole amount of method 'tds' (\"TDS Deducted\") rows - always quote the tds/totalTds " +
+    "fields, never sum tdsAmount yourself. amount = cash + legacy TDS-method rows.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1141,14 +1193,14 @@ const searchPayments: AgentTool = {
       customerId: { type: "string", description: "Optional customer id, from search_customers." },
       from: { type: "string", description: "Optional first receivedDate to include, YYYY-MM-DD." },
       to: { type: "string", description: "Optional last receivedDate to include, YYYY-MM-DD." },
-      method: { type: "string", description: "Optional filter: bank_transfer | upi | cheque | cash | other" },
+      method: { type: "string", description: "Optional filter: bank_transfer | upi | cheque | cash | tds (\"TDS Deducted\") | other. Omit it for TDS questions - totals/byMonth/byMethod already split TDS out." },
     },
   },
   handler: async (input, auth) => {
     if (auth.customerId || !hasAny(auth, [PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.MANAGE_INVOICES])) return forbidden("payments");
     const query = input.query ? String(input.query).trim() : "";
     const customerId = input.customerId ? String(input.customerId) : undefined;
-    const method = input.method ? String(input.method).trim().toLowerCase() : undefined;
+    const method = input.method ? resolvePaymentMethodFilter(String(input.method)) : undefined;
     const from = input.from ? istDayStart(String(input.from).trim()) : undefined;
     const toStart = input.to ? istDayStart(String(input.to).trim()) : undefined;
     if ((input.from && !from) || (input.to && !toStart)) return { error: "from/to must be dates in YYYY-MM-DD format." };

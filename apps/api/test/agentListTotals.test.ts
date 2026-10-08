@@ -142,8 +142,8 @@ test("payment dates are IST yyyy-mm-dd whether stored as UTC or IST midnight", (
 test("payment totals and month grouping cover every payment (Dec 2025 - Aug 2026), newest listed first", () => {
   const months = ["2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"];
   const rows = months.flatMap((m, i) => [
-    { id: `${m}-a`, receivedDate: `${m}-05`, amount: 50000 + i, tdsAmount: 1000, unallocatedAmount: 0 },
-    { id: `${m}-b`, receivedDate: `${m}-20`, amount: 25000.25, tdsAmount: 0, unallocatedAmount: i === 0 ? 500 : 0 },
+    { id: `${m}-a`, receivedDate: `${m}-05`, amount: 50000 + i, tdsAmount: 1000, method: "bank_transfer", unallocatedAmount: 0 },
+    { id: `${m}-b`, receivedDate: `${m}-20`, amount: 25000.25, tdsAmount: 0, method: "upi", unallocatedAmount: i === 0 ? 500 : 0 },
   ]);
   const out = summarizePayments(rows, LIST_LIMIT);
   assert.equal(out.totalCount, 18);
@@ -154,7 +154,7 @@ test("payment totals and month grouping cover every payment (Dec 2025 - Aug 2026
   assert.equal(out.lastPaymentDate, "2026-08-20");
   assert.deepEqual(out.byMonth.map((m) => m.month), months);
   assert.ok(out.byMonth.every((m) => m.count === 2));
-  assert.deepEqual(out.byMonth[0], { month: "2025-12", count: 2, amount: 75000.25, tds: 1000 });
+  assert.deepEqual(out.byMonth[0], { month: "2025-12", count: 2, amount: 75000.25, cash: 75000.25, tds: 1000 });
   assert.equal(out.totals.totalAmount, sumMoney(rows.map((r) => r.amount)));
   assert.equal(sumMoney(out.byMonth.map((m) => m.amount)), out.totals.totalAmount);
   assert.equal(out.totals.totalTds, 9000);

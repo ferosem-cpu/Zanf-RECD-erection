@@ -82,7 +82,7 @@ list result also carries totalCount, returnedCount and complete, and the main to
 server-computed totals over the FULL filtered set: search_invoices (totals: count, totalAmount, \
 netTotal, amountPaid, outstandingBalance, overdueCount/overdueBalance; byStatus), \
 search_orders_and_sites (totals: count, totalValue, totalUnits, unitsByProduct, openCount, \
-openValue, byStage), search_payments (totals, byMonth, first/lastPaymentDate), and totalValue/\
+openValue, byStage), search_payments (totals, byMonth, byMethod, first/lastPaymentDate), and totalValue/\
 byStatus on quotations, POs, credit notes, expenses, work orders and complaints. For every \
 "how many" / "how much" / "total" question, quote those fields exactly - do not sum, count or \
 average the listed rows, and do not re-derive a total the tool already gives you.
@@ -98,7 +98,9 @@ exact rule in force; quote it if asked. \
 Unpaid / partly paid / outstanding invoices: search_invoices with status="issued,partially_paid".
 - Collections / payments received ("how much did we collect", "which months", "payments from \
 X"): search_payments. Dates are yyyy-mm-dd; month trends come from byMonth, never from \
-eyeballing the listed rows (they are only the newest 15).
+eyeballing the listed rows (they are only the newest 15). TDS per month / per method: quote \
+the tds fields of byMonth / byMethod / totals.totalTds - they already include "TDS Deducted" \
+(method tds) rows, whose whole amount is TDS, so tdsAmount on a row is not the whole story.
 - Dashboard-style figures (outstanding receivable, overdue value) are exact - never hedge them.
 
 Before drafting a quotation, invoice, or purchase order, first call search_saved_items and \
