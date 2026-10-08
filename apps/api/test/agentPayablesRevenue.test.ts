@@ -65,11 +65,13 @@ test("Indian FY quarters: 2026-10-08 is FY 2026-27 Q3 (01 Oct - 31 Dec 2026)", (
 
 test("revenue periods resolve to explicit dates", () => {
   const today = "2026-10-08";
-  assert.deepEqual(resolveRevenuePeriod({}, today), { label: "FY 2026-27 Q3 (current quarter)", from: "2026-10-01", to: "2026-12-31" });
+  assert.deepEqual(resolveRevenuePeriod({}, today), { label: "FY 2026-27 Q3 to date (current quarter)", from: "2026-10-01", to: "2026-10-08" });
   assert.deepEqual(resolveRevenuePeriod({ period: "last quarter" }, today), { label: "FY 2026-27 Q2 (previous quarter)", from: "2026-07-01", to: "2026-09-30" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "this_month" }, today), { label: "2026-10 (current month)", from: "2026-10-01", to: "2026-10-31" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "this_month" }, today), { label: "2026-10 to date (current month)", from: "2026-10-01", to: "2026-10-08" });
   assert.deepEqual(resolveRevenuePeriod({ period: "last_month" }, today), { label: "2026-09 (previous month)", from: "2026-09-01", to: "2026-09-30" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "this_fy" }, today), { label: "FY 2026-27 (current financial year)", from: "2026-04-01", to: "2027-03-31" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "this_fy" }, today), { label: "FY 2026-27 to date (current financial year)", from: "2026-04-01", to: "2026-10-08" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "FY to date" }, today), { label: "FY 2026-27 to date (current financial year)", from: "2026-04-01", to: "2026-10-08" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "all time" }, today), { label: "All time to date (total invoiced)", from: "2000-01-01", to: "2026-10-08" });
   assert.equal(resolveRevenuePeriod({ period: "last_quarter" }, "2026-05-10").hasOwnProperty("error"), false);
   assert.deepEqual(resolveRevenuePeriod({ period: "last_quarter" }, "2026-05-10"), { label: "FY 2025-26 Q4 (previous quarter)", from: "2026-01-01", to: "2026-03-31" });
   assert.deepEqual(resolveRevenuePeriod({ from: "2026-07-01", to: "2026-09-30" }, today), { label: "2026-07-01 to 2026-09-30", from: "2026-07-01", to: "2026-09-30" });

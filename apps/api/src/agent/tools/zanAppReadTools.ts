@@ -276,6 +276,9 @@ export interface InvoiceSummaryRow {
   balance: number | null;
   /** balance excl. GST - see exclGstPortion. */
   balanceExclGst?: number | null;
+  /** Invoice subtotal (taxable value, excl. GST) and its GST (cgst + sgst + igst). */
+  taxableValue?: number | null;
+  gstAmount?: number | null;
   overdue: boolean;
 }
 
@@ -299,7 +302,11 @@ export function summarizeInvoices<T extends InvoiceSummaryRow>(rows: T[], listLi
     ...listMeta(listed.length, rows.length),
     totals: {
       count: rows.length,
+      /** Invoice totals INCL. GST. */
       totalAmount: sumMoney(rows.map((r) => r.total)),
+      /** Taxable value EXCL. GST, and the GST on it (totalAmount = taxableValue + gstAmount). */
+      taxableValue: sumMoney(rows.map((r) => r.taxableValue ?? null)),
+      gstAmount: sumMoney(rows.map((r) => r.gstAmount ?? null)),
       creditNoteTotal: sumMoney(rows.map((r) => r.creditNoteTotal)),
       netTotal: sumMoney(rows.map((r) => r.netTotal)),
       amountPaid: sumMoney(rows.map((r) => r.amountPaid)),
@@ -321,10 +328,12 @@ const searchInvoices: AgentTool = {
   name: "search_invoices",
   description:
     "Search invoices (proforma or tax invoice) by invoice number or customer name. Lists up to " +
-    "15 rows: id, invoiceNumber, docType, customer, status, issueDate, dueDate, total, " +
-    "creditNoteTotal (sum of issued credit notes against it), netTotal, amountPaid, balance " +
-    "(net of credit notes, after allocated payments and pro-rated TDS), and whether it's " +
-    "overdue. ALWAYS also returns totalCount, totals {count, totalAmount, creditNoteTotal, " +
+    "15 rows: id, invoiceNumber, docType, customer, status, issueDate, dueDate, taxableValue " +
+    "(EXCL. GST), gstAmount, total (INCL. GST), creditNoteTotal (sum of issued credit notes against " +
+    "it), netTotal (total INCL. GST minus credit notes - it is NOT a before-GST figure), amountPaid, " +
+    "balance (incl. GST, net of credit notes, after allocated payments and pro-rated TDS), " +
+    "balanceExclGst, and whether it's overdue. ALWAYS also returns totalCount, totals {count, " +
+    "totalAmount (incl. GST), taxableValue (excl. GST), gstAmount, creditNoteTotal, " +
     "netTotal, amountPaid, outstandingBalance (incl. GST; issued + partially_paid only, same as the finance " +
     "dashboard), outstandingBalanceExclGst, overdueCount, overdueBalance} and byStatus, all computed over EVERY matching " +
     "invoice - quote these for 'how many'/'how much', never add up rows. For 'total receivable' " +
@@ -378,7 +387,12 @@ const searchInvoices: AgentTool = {
         id: inv.id,
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
         docType: inv.docType, customer: inv.customer.name, status: inv.status,
-        issueDate: inv.issueDate, dueDate: inv.dueDate, total: num(inv.total),
+        issueDate: inv.issueDate, dueDate: inv.dueDate,
+        // Stored document fields: subtotal = taxable value after line discounts (excl. GST);
+        // GST = cgst + sgst + igst; total = subtotal + GST.
+        taxableValue: num(inv.subtotal),
+        gstAmount: sumMoney([num(inv.cgstAmount), num(inv.sgstAmount), num(inv.igstAmount)]),
+        total: num(inv.total),
         creditNoteTotal: num(cnTotal), netTotal: num(netTotal), amountPaid: num(paid), balance: num(balance),
         balanceExclGst: exclGstPortion(Number(balance), Number(inv.subtotal), Number(inv.total)), overdue,
       };

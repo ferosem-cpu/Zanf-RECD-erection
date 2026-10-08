@@ -553,7 +553,10 @@ export function indianFyQuarter(ymd: string): { fy: string; quarter: 1 | 2 | 3 |
 
 export type RevenuePeriod = { label: string; from: string; to: string };
 
-const shiftDays = (ymd: string, days: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+/** Start of the "all_time" period - earlier than any document in the app. */
+const ALL_TIME_FROM = "2000-01-01";
+
+const shiftDays =(ymd: string, days: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
 
 /** Resolves a named period (IST calendar) or an explicit from/to to inclusive yyyy-mm-dd dates. */
 export function resolveRevenuePeriod(input: { period?: unknown; from?: unknown; to?: unknown }, todayIST: string): RevenuePeriod | { error: string } {
@@ -568,20 +571,19 @@ export function resolveRevenuePeriod(input: { period?: unknown; from?: unknown; 
   const q = indianFyQuarter(todayIST);
   const fyStartYear = Number(q.fy.slice(0, 4));
   const pad = (n: number) => String(n).padStart(2, "0");
+  // Current periods end today ("to date"): nothing later can be invoiced or collected yet.
   switch (period) {
     case "this_quarter":
     case "current_quarter":
-      return { label: `FY ${q.fy} Q${q.quarter} (current quarter)`, from: q.from, to: q.to };
+      return { label: `FY ${q.fy} Q${q.quarter} to date (current quarter)`, from: q.from, to: todayIST };
     case "last_quarter":
     case "previous_quarter": {
       const p = indianFyQuarter(shiftDays(q.from, -1));
       return { label: `FY ${p.fy} Q${p.quarter} (previous quarter)`, from: p.from, to: p.to };
     }
     case "this_month":
-    case "current_month": {
-      const [y, m] = todayIST.split("-").map(Number);
-      return { label: `${todayIST.slice(0, 7)} (current month)`, from: `${y}-${pad(m)}-01`, to: shiftDays(`${m === 12 ? y + 1 : y}-${pad(m === 12 ? 1 : m + 1)}-01`, -1) };
-    }
+    case "current_month":
+      return { label: `${todayIST.slice(0, 7)} to date (current month)`, from: `${todayIST.slice(0, 7)}-01`, to: todayIST };
     case "last_month":
     case "previous_month": {
       const end = shiftDays(`${todayIST.slice(0, 7)}-01`, -1);
@@ -590,12 +592,18 @@ export function resolveRevenuePeriod(input: { period?: unknown; from?: unknown; 
     case "this_fy":
     case "this_year":
     case "current_fy":
-      return { label: `FY ${q.fy} (current financial year)`, from: `${fyStartYear}-04-01`, to: `${fyStartYear + 1}-03-31` };
+    case "fy_to_date":
+    case "ytd":
+      return { label: `FY ${q.fy} to date (current financial year)`, from: `${fyStartYear}-04-01`, to: todayIST };
+    case "all_time":
+    case "total":
+    case "total_invoiced":
+      return { label: "All time to date (total invoiced)", from: ALL_TIME_FROM, to: todayIST };
     case "last_fy":
     case "previous_fy":
       return { label: `FY ${fyStartYear - 1}-${String(fyStartYear).slice(-2)} (previous financial year)`, from: `${fyStartYear - 1}-04-01`, to: `${fyStartYear}-03-31` };
     default:
-      return { error: `Unknown period "${input.period}". Use this_quarter, last_quarter, this_month, last_month, this_fy, last_fy, or from/to dates.` };
+      return { error: `Unknown period "${input.period}". Use this_quarter, last_quarter, this_month, last_month, this_fy, last_fy, all_time, or from/to dates.` };
   }
 }
 
@@ -636,13 +644,15 @@ const getRevenueSummary: AgentTool = {
   description:
     "Revenue / sales / turnover / collections for a period ('revenue this quarter', 'sales last month', " +
     "'turnover this FY'). Periods use the Indian financial year (Apr-Mar; Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, " +
-    "Q4 Jan-Mar) in IST. Returns the exact period dates and two server-computed figures, each with its basis: " +
-    "invoiced (issued tax invoices by invoice date, excl. GST, net of credit notes - plus incl.-GST figures) and " +
-    "collected (cash received, the Finance dashboard 'Revenue' basis). Quote these, never add up invoice/payment rows.",
+    "Q4 Jan-Mar) in IST; current periods run to today ('to date'). Use all_time for 'total invoiced'. Returns the " +
+    "exact period dates and two server-computed figures, each with its basis: invoiced (issued tax invoices by " +
+    "invoice date, net of credit notes: netExclGst = taxable value EXCL. GST, netGst, netInclGst = INCL. GST) and " +
+    "collected (cash received, the Finance dashboard 'Revenue' basis). Answer with BOTH excl. and incl. GST " +
+    "invoiced figures, state the period dates and invoiced vs collected. Quote these, never add up invoice/payment rows.",
   inputSchema: {
     type: "object",
     properties: {
-      period: { type: "string", description: "this_quarter (default) | last_quarter | this_month | last_month | this_fy | last_fy" },
+      period: { type: "string", description: "this_quarter (default) | last_quarter | this_month | last_month | this_fy | last_fy | all_time" },
       from: { type: "string", description: "Optional explicit start date YYYY-MM-DD (use with to; overrides period)." },
       to: { type: "string", description: "Optional explicit end date YYYY-MM-DD, inclusive." },
     },
