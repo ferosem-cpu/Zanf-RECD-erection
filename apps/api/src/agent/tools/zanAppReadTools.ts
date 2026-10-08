@@ -10,9 +10,10 @@ import { PERMISSION_KEY, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { buildCustomerLedger } from "../../services/ledger";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
+import { LIST_LIMIT, listMeta, listPage } from "../listResult";
 import type { AgentTool, AgentAuthContext } from "./types";
 
-const RESULT_LIMIT = 15;
+const RESULT_LIMIT = LIST_LIMIT;
 
 function forbidden(what: string) {
   return { error: `You don't have permission to view ${what}.` };
@@ -24,6 +25,39 @@ function hasAny(auth: AgentAuthContext, keys: string[]): boolean {
 
 function num(d: Prisma.Decimal | null | undefined): number | null {
   return d == null ? null : Number(d);
+}
+
+/** Sums 2dp money values in whole paise so totals can't drift from float addition. */
+export function sumMoney(values: Array<number | null | undefined>): number {
+  return values.reduce<number>((paise, v) => paise + Math.round((v ?? 0) * 100), 0) / 100;
+}
+
+/** Business dates are Indian time (IST = UTC+5:30, no DST). A date-only value saved as UTC
+ * midnight and one saved as IST midnight (18:30Z the day before) both land on the right day. */
+const IST_OFFSET_MS = 330 * 60_000;
+
+export function isoDateIST(d: Date): string {
+  return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** Start of a yyyy-mm-dd day in IST, or undefined if the string isn't a valid date. */
+export function istDayStart(ymd: string): Date | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return undefined;
+  const d = new Date(`${ymd}T00:00:00+05:30`);
+  return Number.isNaN(d.getTime()) || isoDateIST(d) !== ymd ? undefined : d;
+}
+
+type StatusGroup = { status: string; _count: { _all: number }; _sum?: { total?: Prisma.Decimal | null } };
+
+/** Count (and value, where the model has a total) per status over the FULL filtered set. */
+export function statusBreakdown(groups: StatusGroup[]) {
+  const byStatus: Record<string, { count: number; totalValue?: number }> = {};
+  for (const g of [...groups].sort((a, b) => a.status.localeCompare(b.status))) {
+    byStatus[g.status] = g._sum ? { count: g._count._all, totalValue: sumMoney([num(g._sum.total ?? null)]) } : { count: g._count._all };
+  }
+  const totalCount = groups.reduce((s, g) => s + g._count._all, 0);
+  const totalValue = groups.some((g) => g._sum) ? sumMoney(groups.map((g) => num(g._sum?.total ?? null))) : undefined;
+  return { totalCount, ...(totalValue !== undefined ? { totalValue } : {}), byStatus };
 }
 
 const searchCustomers: AgentTool = {
@@ -39,16 +73,23 @@ const searchCustomers: AgentTool = {
     if (!hasAny(auth, [PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.MANAGE_QUOTATIONS, PERMISSION_KEY.MANAGE_INVOICES]))
       return forbidden("customers");
     const query = input.query ? String(input.query) : undefined;
-    const customers = await prisma.customer.findMany({
-      where: query ? { name: { contains: query, mode: "insensitive" } } : undefined,
-      include: { contacts: { select: { name: true, phone: true, email: true } } },
-      orderBy: { name: "asc" },
-      take: RESULT_LIMIT,
-    });
-    return customers.map((c) => ({
-      id: c.id, name: c.name, gstin: c.gstin, state: c.state,
-      contacts: c.contacts,
-    }));
+    const where: Prisma.CustomerWhereInput = query ? { name: { contains: query, mode: "insensitive" } } : {};
+    const [customers, totalCount] = await Promise.all([
+      prisma.customer.findMany({
+        where,
+        include: { contacts: { select: { name: true, phone: true, email: true } } },
+        orderBy: { name: "asc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.customer.count({ where }),
+    ]);
+    return listPage(
+      customers.map((c) => ({
+        id: c.id, name: c.name, gstin: c.gstin, state: c.state,
+        contacts: c.contacts,
+      })),
+      totalCount,
+    );
   },
 };
 
@@ -68,20 +109,27 @@ const searchVendors: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_VENDORS)) return forbidden("vendors");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const vendors = await prisma.vendor.findMany({
-      where: {
-        ...(query ? { name: { contains: query, mode: "insensitive" } } : {}),
-        ...(status ? { status } : {}),
-      },
-      include: { _count: { select: { members: true, sites: true } } },
-      orderBy: [{ status: "asc" }, { name: "asc" }],
-      take: RESULT_LIMIT,
-    });
-    return vendors.map((v) => ({
-      id: v.id, name: v.name, status: v.status, contactName: v.contactName,
-      contactEmail: v.contactEmail, contactPhone: v.contactPhone, address: v.address,
-      memberCount: v._count.members, siteCount: v._count.sites, approvedAt: v.approvedAt,
-    }));
+    const where: Prisma.VendorWhereInput = {
+      ...(query ? { name: { contains: query, mode: "insensitive" } } : {}),
+      ...(status ? { status } : {}),
+    };
+    const [vendors, totalCount] = await Promise.all([
+      prisma.vendor.findMany({
+        where,
+        include: { _count: { select: { members: true, sites: true } } },
+        orderBy: [{ status: "asc" }, { name: "asc" }],
+        take: RESULT_LIMIT,
+      }),
+      prisma.vendor.count({ where }),
+    ]);
+    return listPage(
+      vendors.map((v) => ({
+        id: v.id, name: v.name, status: v.status, contactName: v.contactName,
+        contactEmail: v.contactEmail, contactPhone: v.contactPhone, address: v.address,
+        memberCount: v._count.members, siteCount: v._count.sites, approvedAt: v.approvedAt,
+      })),
+      totalCount,
+    );
   },
 };
 
@@ -104,24 +152,27 @@ const searchSuppliers: AgentTool = {
   handler: async (input, auth) => {
     if (!hasAny(auth, [PERMISSION_KEY.MANAGE_PURCHASE_ORDERS, PERMISSION_KEY.VIEW_LEDGERS])) return forbidden("suppliers");
     const query = input.query ? String(input.query).trim() : "";
-    const suppliers = await prisma.supplier.findMany({
-      where: query
-        ? {
-            OR: [
-              { name: { contains: query, mode: "insensitive" } },
-              { gstin: { contains: query, mode: "insensitive" } },
-              { city: { contains: query, mode: "insensitive" } },
-            ],
-          }
-        : {},
-      orderBy: { name: "asc" },
-      take: RESULT_LIMIT,
-    });
-    return suppliers.map((s) => ({
-      id: s.id, name: s.name, gstin: s.gstin, state: s.state,
-      address: [s.address, s.addressLine2, [s.city, s.pincode].filter(Boolean).join(" - ")].filter(Boolean).join(", ") || null,
-      contactName: s.contactName, contactPhone: s.contactPhone, contactEmail: s.contactEmail, isActive: s.isActive,
-    }));
+    const where: Prisma.SupplierWhereInput = query
+      ? {
+          OR: [
+            { name: { contains: query, mode: "insensitive" } },
+            { gstin: { contains: query, mode: "insensitive" } },
+            { city: { contains: query, mode: "insensitive" } },
+          ],
+        }
+      : {};
+    const [suppliers, totalCount] = await Promise.all([
+      prisma.supplier.findMany({ where, orderBy: { name: "asc" }, take: RESULT_LIMIT }),
+      prisma.supplier.count({ where }),
+    ]);
+    return listPage(
+      suppliers.map((s) => ({
+        id: s.id, name: s.name, gstin: s.gstin, state: s.state,
+        address: [s.address, s.addressLine2, [s.city, s.pincode].filter(Boolean).join(" - ")].filter(Boolean).join(", ") || null,
+        contactName: s.contactName, contactPhone: s.contactPhone, contactEmail: s.contactEmail, isActive: s.isActive,
+      })),
+      totalCount,
+    );
   },
 };
 
@@ -129,7 +180,8 @@ const searchQuotations: AgentTool = {
   name: "search_quotations",
   description:
     "Search quotations by quote number or customer name. Returns id, quoteNumber, customer, " +
-    "status, issueDate, validUntil, and total. Use get_document_detail for line items.",
+    "status, issueDate, validUntil, and total. Use get_document_detail for line items. " +
+    "totalCount, totalValue and byStatus cover ALL matching quotations, not just the listed rows.",
   inputSchema: {
     type: "object",
     properties: {
@@ -141,21 +193,31 @@ const searchQuotations: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_QUOTATIONS)) return forbidden("quotations");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const quotations = await prisma.quotation.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(query
-          ? { OR: [{ quoteNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }] }
-          : {}),
-      },
-      include: { customer: { select: { name: true } } },
-      orderBy: { quoteNumber: "asc" },
-      take: RESULT_LIMIT,
-    });
-    return quotations.map((q) => ({
-      id: q.id, quoteNumber: q.quoteNumber, customer: q.customer.name, status: q.status,
-      issueDate: q.issueDate, validUntil: q.validUntil, total: num(q.total),
-    }));
+    const where: Prisma.QuotationWhereInput = {
+      ...(status ? { status } : {}),
+      ...(query
+        ? { OR: [{ quoteNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }] }
+        : {}),
+    };
+    const [quotations, groups] = await Promise.all([
+      prisma.quotation.findMany({
+        where,
+        include: { customer: { select: { name: true } } },
+        orderBy: { quoteNumber: "asc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.quotation.groupBy({ by: ["status"], where, _count: { _all: true }, _sum: { total: true } }),
+    ]);
+    const summary = statusBreakdown(groups);
+    return {
+      ...listMeta(quotations.length, summary.totalCount),
+      totalValue: summary.totalValue,
+      byStatus: summary.byStatus,
+      results: quotations.map((q) => ({
+        id: q.id, quoteNumber: q.quoteNumber, customer: q.customer.name, status: q.status,
+        issueDate: q.issueDate, validUntil: q.validUntil, total: num(q.total),
+      })),
+    };
   },
 };
 
@@ -164,48 +226,106 @@ const searchQuotations: AgentTool = {
  * cancelled invoices are never overdue; no balance > 0 filter (the dashboard has none). */
 export const OVERDUE_INVOICE_STATUSES = ["issued", "partially_paid"];
 
-/** Models often pass status="overdue"; it is not a stored status, so treat it as the flag. */
-export function resolveInvoiceFilter(input: Record<string, unknown>): { overdueOnly: boolean; status?: string } {
-  const rawStatus = input.status ? String(input.status).trim().toLowerCase() : undefined;
-  const overdueOnly = input.overdueOnly === true || rawStatus === "overdue";
-  const status = rawStatus && rawStatus !== "overdue" ? rawStatus : undefined;
-  return { overdueOnly, status };
+/** Receivable = issued/partially_paid, the statuses the finance dashboard's
+ * outstandingReceivables sums. Drafts and cancelled invoices are not owed; paid ones are settled. */
+export const RECEIVABLE_INVOICE_STATUSES = ["issued", "partially_paid"];
+
+/** Words models use for "not fully paid yet" - none is a stored status. */
+const RECEIVABLE_STATUS_ALIASES = new Set(["unpaid", "outstanding", "open", "receivable", "due", "pending"]);
+
+/** Models often pass status="overdue"; it is not a stored status, so treat it as the flag.
+ * status may also be a comma-separated list ("issued,partially_paid") or an array. */
+export function resolveInvoiceFilter(input: Record<string, unknown>): { overdueOnly: boolean; statuses?: string[] } {
+  const raw = Array.isArray(input.status) ? input.status.map(String) : input.status ? String(input.status).split(",") : [];
+  const tokens = raw.map((s) => s.trim().toLowerCase().replace(/[\s-]+/g, "_")).filter(Boolean);
+  const overdueOnly = input.overdueOnly === true || tokens.includes("overdue");
+  const statuses = [
+    ...new Set(tokens.flatMap((t) => (t === "overdue" ? [] : RECEIVABLE_STATUS_ALIASES.has(t) ? RECEIVABLE_INVOICE_STATUSES : [t]))),
+  ];
+  return { overdueOnly, statuses: statuses.length > 0 ? statuses : undefined };
 }
 
-export function invoiceStatusWhere(filter: { overdueOnly: boolean; status?: string }, now: Date): Prisma.InvoiceWhereInput {
-  if (!filter.overdueOnly) return filter.status ? { status: filter.status } : {};
+export function invoiceStatusWhere(filter: { overdueOnly: boolean; statuses?: string[] }, now: Date): Prisma.InvoiceWhereInput {
+  const { statuses } = filter;
+  if (!filter.overdueOnly) {
+    if (!statuses) return {};
+    return statuses.length === 1 ? { status: statuses[0] } : { status: { in: statuses } };
+  }
   // An explicit status can only narrow the overdue set (status="paid" + overdueOnly = nothing).
-  const statuses = filter.status ? OVERDUE_INVOICE_STATUSES.filter((s) => s === filter.status) : OVERDUE_INVOICE_STATUSES;
-  return { status: { in: statuses }, dueDate: { lt: now } };
+  const overdueStatuses = statuses ? OVERDUE_INVOICE_STATUSES.filter((s) => statuses.includes(s)) : OVERDUE_INVOICE_STATUSES;
+  return { status: { in: overdueStatuses }, dueDate: { lt: now } };
 }
 
-/** Totals over every overdue row passed in; only the first `listLimit` (by due date) are listed. */
-export function summarizeOverdueInvoices<T extends { dueDate: Date | null; balance: number | null }>(rows: T[], listLimit: number) {
-  const sorted = [...rows].sort((a, b) => (a.dueDate?.getTime() ?? 0) - (b.dueDate?.getTime() ?? 0));
+export interface InvoiceSummaryRow {
+  status: string;
+  dueDate: Date | null;
+  total: number | null;
+  creditNoteTotal: number | null;
+  netTotal: number | null;
+  amountPaid: number | null;
+  balance: number | null;
+  overdue: boolean;
+}
+
+/** Totals over EVERY row passed in (the full filtered set); only the first `listLimit` are
+ * listed. Overdue lists are sorted by due date (oldest first); others keep the given order.
+ * outstandingBalance only counts receivable invoices, like the finance dashboard - a draft's
+ * or cancelled invoice's "balance" is not money anyone owes. */
+export function summarizeInvoices<T extends InvoiceSummaryRow>(rows: T[], listLimit: number, opts: { overdueOnly: boolean }) {
+  const ordered = opts.overdueOnly ? [...rows].sort((a, b) => (a.dueDate?.getTime() ?? 0) - (b.dueDate?.getTime() ?? 0)) : rows;
+  const listed = ordered.slice(0, listLimit);
+  const receivable = rows.filter((r) => RECEIVABLE_INVOICE_STATUSES.includes(r.status));
+  const overdue = rows.filter((r) => r.overdue);
+
+  const byStatus: Record<string, { count: number; totalAmount: number; balance: number }> = {};
+  for (const status of [...new Set(rows.map((r) => r.status))].sort()) {
+    const group = rows.filter((r) => r.status === status);
+    byStatus[status] = { count: group.length, totalAmount: sumMoney(group.map((r) => r.total)), balance: sumMoney(group.map((r) => r.balance)) };
+  }
+
   return {
-    overdueCount: sorted.length,
-    totalOverdueBalance: Math.round(sorted.reduce((sum, r) => sum + (r.balance ?? 0), 0) * 100) / 100,
-    listed: Math.min(sorted.length, listLimit),
-    invoices: sorted.slice(0, listLimit),
+    ...listMeta(listed.length, rows.length),
+    totals: {
+      count: rows.length,
+      totalAmount: sumMoney(rows.map((r) => r.total)),
+      creditNoteTotal: sumMoney(rows.map((r) => r.creditNoteTotal)),
+      netTotal: sumMoney(rows.map((r) => r.netTotal)),
+      amountPaid: sumMoney(rows.map((r) => r.amountPaid)),
+      outstandingBalance: sumMoney(receivable.map((r) => r.balance)),
+      overdueCount: overdue.length,
+      overdueBalance: sumMoney(overdue.map((r) => r.balance)),
+    },
+    byStatus,
+    // Kept from the first overdue fix so older prompts/threads still find these fields.
+    ...(opts.overdueOnly
+      ? { overdueCount: rows.length, totalOverdueBalance: sumMoney(rows.map((r) => r.balance)), listed: listed.length }
+      : {}),
+    invoices: listed,
   };
 }
 
 const searchInvoices: AgentTool = {
   name: "search_invoices",
   description:
-    "Search invoices (proforma or tax invoice) by invoice number or customer name. Returns " +
-    "id, invoiceNumber, docType, customer, status, issueDate, dueDate, total, creditNoteTotal " +
-    "(sum of any issued credit notes against it), amountPaid, balance (net of credit notes, " +
-    "after allocated payments and pro-rated TDS), and whether it's overdue. Use " +
-    "get_document_detail for line items/payments/credit notes. 'overdue' is NOT a status - to " +
-    "list or total overdue invoices set overdueOnly=true (never status='overdue'). With " +
-    "overdueOnly the result also carries overdueCount and totalOverdueBalance computed over " +
-    "ALL overdue invoices (the list itself is capped), so use those for 'how many'/'how much'.",
+    "Search invoices (proforma or tax invoice) by invoice number or customer name. Lists up to " +
+    "15 rows: id, invoiceNumber, docType, customer, status, issueDate, dueDate, total, " +
+    "creditNoteTotal (sum of issued credit notes against it), netTotal, amountPaid, balance " +
+    "(net of credit notes, after allocated payments and pro-rated TDS), and whether it's " +
+    "overdue. ALWAYS also returns totalCount, totals {count, totalAmount, creditNoteTotal, " +
+    "netTotal, amountPaid, outstandingBalance (issued + partially_paid only, same as the finance " +
+    "dashboard), overdueCount, overdueBalance} and byStatus, all computed over EVERY matching " +
+    "invoice - quote these for 'how many'/'how much', never add up rows. 'overdue' is NOT a " +
+    "status - for overdue invoices set overdueOnly=true. For unpaid / partly paid / outstanding " +
+    "invoices use status='issued,partially_paid'. Use get_document_detail for line " +
+    "items/payments/credit notes.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "Invoice number or customer name (partial match)." },
-      status: { type: "string", description: "Optional filter: draft | issued | partially_paid | paid | cancelled" },
+      status: {
+        type: "string",
+        description: "Optional filter: draft | issued | partially_paid | paid | cancelled, or several comma-separated (e.g. 'issued,partially_paid' for unpaid/outstanding invoices).",
+      },
       overdueOnly: { type: "boolean", description: "True = only issued/partially_paid invoices past their due date. Use this for anything about overdue invoices." },
     },
   },
@@ -214,9 +334,12 @@ const searchInvoices: AgentTool = {
     const query = input.query ? String(input.query) : undefined;
     const filter = resolveInvoiceFilter(input);
     const { overdueOnly } = filter;
+    const now = new Date();
+    // No take: totals must cover every matching invoice (like the finance dashboard); only
+    // the listed rows are capped, in summarizeInvoices.
     const invoices = await prisma.invoice.findMany({
       where: {
-        ...invoiceStatusWhere(filter, new Date()),
+        ...invoiceStatusWhere(filter, now),
         ...(query
           ? { OR: [{ invoiceNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }] }
           : {}),
@@ -230,26 +353,22 @@ const searchInvoices: AgentTool = {
         creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
       },
       orderBy: overdueOnly ? { dueDate: "asc" } : { invoiceNumber: "asc" },
-      // No cap with overdueOnly: the totals must cover every overdue invoice, like the dashboard.
-      ...(overdueOnly ? {} : { take: RESULT_LIMIT }),
     });
-    const now = Date.now();
     const rows = invoices.map((inv) => {
       const paid = settledFromAllocations(inv.paymentAllocations);
       const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
       const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), cnTotal);
       const balance = netTotal.minus(paid);
-      const overdue = ["issued", "partially_paid"].includes(inv.status) && !!inv.dueDate && inv.dueDate.getTime() < now;
+      const overdue = OVERDUE_INVOICE_STATUSES.includes(inv.status) && !!inv.dueDate && inv.dueDate.getTime() < now.getTime();
       return {
         id: inv.id,
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
         docType: inv.docType, customer: inv.customer.name, status: inv.status,
         issueDate: inv.issueDate, dueDate: inv.dueDate, total: num(inv.total),
-        creditNoteTotal: num(cnTotal), amountPaid: num(paid), balance: num(balance), overdue,
+        creditNoteTotal: num(cnTotal), netTotal: num(netTotal), amountPaid: num(paid), balance: num(balance), overdue,
       };
     });
-    if (!overdueOnly) return rows;
-    return summarizeOverdueInvoices(rows, RESULT_LIMIT);
+    return summarizeInvoices(rows, RESULT_LIMIT, { overdueOnly });
   },
 };
 
@@ -257,7 +376,8 @@ const searchPurchaseOrders: AgentTool = {
   name: "search_purchase_orders",
   description:
     "Search purchase orders by PO number or supplier name. Returns id, poNumber, supplier, " +
-    "status, orderDate, expectedDate, and total. Use get_document_detail for line items.",
+    "status, orderDate, expectedDate, and total. Use get_document_detail for line items. " +
+    "totalCount, totalValue and byStatus cover ALL matching POs, not just the listed rows.",
   inputSchema: {
     type: "object",
     properties: {
@@ -269,21 +389,31 @@ const searchPurchaseOrders: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS)) return forbidden("purchase orders");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const pos = await prisma.purchaseOrder.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(query
-          ? { OR: [{ poNumber: { contains: query, mode: "insensitive" } }, { supplier: { name: { contains: query, mode: "insensitive" } } }] }
-          : {}),
-      },
-      include: { supplier: { select: { name: true } } },
-      orderBy: { poNumber: "asc" },
-      take: RESULT_LIMIT,
-    });
-    return pos.map((po) => ({
-      id: po.id, poNumber: po.poNumber, supplier: po.supplier.name, status: po.status,
-      orderDate: po.orderDate, expectedDate: po.expectedDate, total: num(po.total),
-    }));
+    const where: Prisma.PurchaseOrderWhereInput = {
+      ...(status ? { status } : {}),
+      ...(query
+        ? { OR: [{ poNumber: { contains: query, mode: "insensitive" } }, { supplier: { name: { contains: query, mode: "insensitive" } } }] }
+        : {}),
+    };
+    const [pos, groups] = await Promise.all([
+      prisma.purchaseOrder.findMany({
+        where,
+        include: { supplier: { select: { name: true } } },
+        orderBy: { poNumber: "asc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.purchaseOrder.groupBy({ by: ["status"], where, _count: { _all: true }, _sum: { total: true } }),
+    ]);
+    const summary = statusBreakdown(groups);
+    return {
+      ...listMeta(pos.length, summary.totalCount),
+      totalValue: summary.totalValue,
+      byStatus: summary.byStatus,
+      results: pos.map((po) => ({
+        id: po.id, poNumber: po.poNumber, supplier: po.supplier.name, status: po.status,
+        orderDate: po.orderDate, expectedDate: po.expectedDate, total: num(po.total),
+      })),
+    };
   },
 };
 
@@ -291,7 +421,8 @@ const searchExpenses: AgentTool = {
   name: "search_expenses",
   description:
     "Search the expense book (non-PO spend: fuel, travel, site consumables, misc) by " +
-    "description or category. Returns id, description, category, amount, date, method, site.",
+    "description or category. Returns id, description, category, amount, date, method, site. " +
+    "totalCount and totalAmount cover ALL matching expenses, not just the listed rows.",
   inputSchema: {
     type: "object",
     properties: {
@@ -303,21 +434,86 @@ const searchExpenses: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_EXPENSES)) return forbidden("expenses");
     const query = input.query ? String(input.query) : undefined;
     const categoryKey = input.categoryKey ? String(input.categoryKey) : undefined;
-    const expenses = await prisma.expense.findMany({
-      where: {
-        ...(query ? { description: { contains: query, mode: "insensitive" } } : {}),
-        ...(categoryKey ? { category: { key: categoryKey } } : {}),
-      },
-      include: { category: { select: { label: true } }, site: { select: { address: true } } },
-      orderBy: { expenseDate: "desc" },
-      take: RESULT_LIMIT,
-    });
-    return expenses.map((e) => ({
-      id: e.id, description: e.description, category: e.category.label, amount: num(e.amount),
-      expenseDate: e.expenseDate, method: e.method, site: e.site?.address ?? null,
-    }));
+    const where: Prisma.ExpenseWhereInput = {
+      ...(query ? { description: { contains: query, mode: "insensitive" } } : {}),
+      ...(categoryKey ? { category: { key: categoryKey } } : {}),
+    };
+    const [expenses, agg] = await Promise.all([
+      prisma.expense.findMany({
+        where,
+        include: { category: { select: { label: true } }, site: { select: { address: true } } },
+        orderBy: { expenseDate: "desc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.expense.aggregate({ where, _count: { _all: true }, _sum: { amount: true } }),
+    ]);
+    return {
+      ...listMeta(expenses.length, agg._count._all),
+      totalAmount: sumMoney([num(agg._sum.amount)]),
+      results: expenses.map((e) => ({
+        id: e.id, description: e.description, category: e.category.label, amount: num(e.amount),
+        expenseDate: e.expenseDate, method: e.method, site: e.site?.address ?? null,
+      })),
+    };
   },
 };
+
+/** Order has no status column, and nothing in the app (Orders list, dashboards) labels an
+ * order open/closed - the only lifecycle it has is its site's SITC stage (StageDefinition rows,
+ * ordered by sequenceOrder; the customer portal treats every stage up to the current one as
+ * done). So: an order is open until its site reaches the final stage; no site yet = open. */
+export function isOrderOpen(stageSeq: number | null, finalStageSeq: number | null): boolean {
+  if (stageSeq == null || finalStageSeq == null) return true;
+  return stageSeq < finalStageSeq;
+}
+
+export function orderOpenWhere(finalStageSeq: number): Prisma.OrderWhereInput {
+  return {
+    OR: [{ site: { is: null } }, { site: { is: { currentStage: { sequenceOrder: { lt: finalStageSeq } } } } }],
+  };
+}
+
+export interface OrderSummaryRow {
+  value: number | null;
+  quantity: number;
+  product: string;
+  lineItems: { product: string; quantity: number }[];
+  stage: { label: string; sequenceOrder: number } | null;
+}
+
+/** Counts, value and units over EVERY matching order (not just the listed page). Order.value
+ * is the whole order's value (all its products), so line items add units but never value. */
+export function summarizeOrders(rows: OrderSummaryRow[], finalStageSeq: number | null) {
+  const units = new Map<string, number>();
+  const stages = new Map<string, { stage: string; sequenceOrder: number; count: number; values: Array<number | null> }>();
+  const open: OrderSummaryRow[] = [];
+  for (const r of rows) {
+    for (const item of [{ product: r.product, quantity: r.quantity }, ...r.lineItems]) {
+      units.set(item.product, (units.get(item.product) ?? 0) + item.quantity);
+    }
+    const stage = r.stage?.label ?? "No site yet";
+    const entry = stages.get(stage) ?? { stage, sequenceOrder: r.stage?.sequenceOrder ?? 0, count: 0, values: [] };
+    entry.count += 1;
+    entry.values.push(r.value);
+    stages.set(stage, entry);
+    if (isOrderOpen(r.stage?.sequenceOrder ?? null, finalStageSeq)) open.push(r);
+  }
+  return {
+    count: rows.length,
+    totalValue: sumMoney(rows.map((r) => r.value)),
+    ordersWithoutValue: rows.filter((r) => r.value == null).length,
+    totalUnits: [...units.values()].reduce((s, n) => s + n, 0),
+    unitsByProduct: [...units.entries()]
+      .map(([product, n]) => ({ product, units: n }))
+      .sort((a, b) => b.units - a.units || a.product.localeCompare(b.product)),
+    openCount: open.length,
+    openValue: sumMoney(open.map((r) => r.value)),
+    completedCount: rows.length - open.length,
+    byStage: [...stages.values()]
+      .sort((a, b) => a.sequenceOrder - b.sequenceOrder)
+      .map((s) => ({ stage: s.stage, count: s.count, value: sumMoney(s.values) })),
+  };
+}
 
 const searchOrdersAndSites: AgentTool = {
   name: "search_orders_and_sites",
@@ -325,16 +521,17 @@ const searchOrdersAndSites: AgentTool = {
     "Search sales orders (and their site's SITC progress) by order number, customer name, " +
     "site/end-client company name (e.g. 'BPCL', 'VRL'), site address/location (e.g. " +
     "'Belgaum', 'Bangalore'), or product name/model/rating (e.g. 'RECD-500', '500', " +
-    "'500 KVA') - matches any of these, not just order number or customer. When answering a " +
-    "'how many <rating> RECD are available' question, sum the quantity field plus every " +
-    "additionalLineItems quantity across all matching results yourself - there's no single " +
-    "pre-aggregated total field. " +
-    "Returns id, orderNumber, customer, product, quantity, additionalLineItems (extra products " +
-    "on the same order, if any - an order can carry more than one RECD/product), order value, " +
-    "dispatch dates, and - if a site exists - its address, end-client company name, current " +
-    "SITC stage, assigned engineer, and erection vendor. When answering 'how many RECDs/units " +
-    "at <site>', always add the base quantity to every additionalLineItems quantity - a single " +
-    "site can have multiple RECDs on one order. Use this for any 'how many/which sites are in " +
+    "'500 KVA') - matches any of these, not just order number or customer. Omit query to " +
+    "cover every order. Lists up to 15 orders (newest first): id, orderNumber, customer, " +
+    "product, quantity, additionalLineItems (extra products on the same order - an order can " +
+    "carry more than one RECD/product), order value, dispatch dates, open (true until the site " +
+    "reaches the final SITC stage), and - if a site exists - its address, end-client company " +
+    "name, current SITC stage, assigned engineer, and erection vendor. ALWAYS also returns " +
+    "totalCount and totals {count, totalValue, ordersWithoutValue, totalUnits, unitsByProduct, " +
+    "openCount, openValue, completedCount, byStage} computed over EVERY matching order - quote " +
+    "these for any 'how many orders/units' or 'total order value' question, never add up the " +
+    "listed rows. For open/pending/in-progress orders set openOnly=true (Order has no status " +
+    "field; see openDefinition in the result). Use this for any 'how many/which sites are in " +
     "<place>' question - there's no separate stock/inventory-by-location feature, so this " +
     "order/site list is the closest thing to it. When called by a customer, this is " +
     "automatically scoped to only " +
@@ -342,10 +539,16 @@ const searchOrdersAndSites: AgentTool = {
     "else's, and searching for another company's name simply returns no results.",
   inputSchema: {
     type: "object",
-    properties: { query: { type: "string", description: "Order number, customer name, site company name, or site address/location (partial match)." } },
+    properties: {
+      query: { type: "string", description: "Order number, customer name, site company name, or site address/location (partial match)." },
+      openOnly: { type: "boolean", description: "True = only open orders: no site yet, or the site is not yet at the final SITC stage (customer sign-off)." },
+      stageKey: { type: "string", description: "Optional: only orders whose site is currently at this SITC stage key, e.g. dispatched, installing, commissioned, customer_signoff." },
+    },
   },
   handler: async (input, auth) => {
     const query = input.query ? String(input.query) : undefined;
+    const openOnly = input.openOnly === true;
+    const stageKey = input.stageKey ? String(input.stageKey).trim() : undefined;
     const searchClauses: Prisma.OrderWhereInput = query
       ? {
           OR: [
@@ -363,47 +566,90 @@ const searchOrdersAndSites: AgentTool = {
         }
       : {};
 
-    let where: Prisma.OrderWhereInput;
+    const filters: Prisma.OrderWhereInput[] = [searchClauses];
     if (auth.customerId) {
       // A customer's own id comes from their authenticated session (middleware/auth.ts), never
       // from tool input, so this scoping can't be bypassed by anything the model or user types.
       if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("your sites");
-      where = { AND: [{ customerId: auth.customerId }, searchClauses] };
+      filters.unshift({ customerId: auth.customerId });
     } else {
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
-      where = searchClauses;
     }
 
-    const orders = await prisma.order.findMany({
-      where,
-      include: {
-        customer: { select: { name: true } },
-        product: { select: { name: true, model: true } },
-        lineItems: { include: { product: { select: { name: true, model: true } } } },
-        site: { include: { currentStage: true, assignedEngineer: { select: { name: true } }, vendor: { select: { name: true } } } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: RESULT_LIMIT,
+    // Stages are DB rows, so "final stage" is read, not hard-coded (customer_signoff in the seed).
+    const finalStage = await prisma.stageDefinition.findFirst({
+      orderBy: { sequenceOrder: "desc" },
+      select: { label: true, sequenceOrder: true },
     });
-    return orders.map((o) => ({
-      id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
-      product: `${o.product.name} (${o.product.model})`, quantity: o.quantity,
-      additionalLineItems: o.lineItems.map((li) => ({
-        product: `${li.product.name} (${li.product.model})`, quantity: li.quantity,
+    const finalStageSeq = finalStage?.sequenceOrder ?? null;
+    if (openOnly && finalStageSeq != null) filters.push(orderOpenWhere(finalStageSeq));
+    if (stageKey) filters.push({ site: { is: { currentStage: { key: stageKey } } } });
+    const where: Prisma.OrderWhereInput = { AND: filters };
+
+    const productLabel = (p: { name: string; model: string }) => `${p.name} (${p.model})`;
+    const [orders, allMatching] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        include: {
+          customer: { select: { name: true } },
+          product: { select: { name: true, model: true } },
+          lineItems: { include: { product: { select: { name: true, model: true } } } },
+          site: { include: { currentStage: true, assignedEngineer: { select: { name: true } }, vendor: { select: { name: true } } } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: RESULT_LIMIT,
+      }),
+      // Slim copy of the FULL filtered set, only for the totals.
+      prisma.order.findMany({
+        where,
+        select: {
+          value: true,
+          quantity: true,
+          product: { select: { name: true, model: true } },
+          lineItems: { select: { quantity: true, product: { select: { name: true, model: true } } } },
+          site: { select: { currentStage: { select: { label: true, sequenceOrder: true } } } },
+        },
+      }),
+    ]);
+
+    const totals = summarizeOrders(
+      allMatching.map((o) => ({
+        value: num(o.value),
+        quantity: o.quantity,
+        product: productLabel(o.product),
+        lineItems: o.lineItems.map((li) => ({ product: productLabel(li.product), quantity: li.quantity })),
+        stage: o.site ? o.site.currentStage : null,
       })),
-      value: num(o.value),
-      orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
-      site: o.site
-        ? {
-            id: o.site.id,
-            address: o.site.address,
-            companyName: o.site.companyName,
-            currentStage: o.site.currentStage.label,
-            assignedEngineer: o.site.assignedEngineer?.name ?? null,
-            vendor: o.site.vendor?.name ?? null,
-          }
-        : null,
-    }));
+      finalStageSeq,
+    );
+
+    return {
+      ...listMeta(orders.length, allMatching.length),
+      openDefinition: finalStage
+        ? `Order has no status field. An order is open until its site reaches the final SITC stage ("${finalStage.label}"); an order with no site yet is open.`
+        : "No SITC stages are configured, so every order counts as open.",
+      totals,
+      orders: orders.map((o) => ({
+        id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
+        product: productLabel(o.product), quantity: o.quantity,
+        additionalLineItems: o.lineItems.map((li) => ({
+          product: productLabel(li.product), quantity: li.quantity,
+        })),
+        value: num(o.value),
+        orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
+        open: isOrderOpen(o.site?.currentStage.sequenceOrder ?? null, finalStageSeq),
+        site: o.site
+          ? {
+              id: o.site.id,
+              address: o.site.address,
+              companyName: o.site.companyName,
+              currentStage: o.site.currentStage.label,
+              assignedEngineer: o.site.assignedEngineer?.name ?? null,
+              vendor: o.site.vendor?.name ?? null,
+            }
+          : null,
+      })),
+    };
   },
 };
 
@@ -446,18 +692,22 @@ const searchSiteStatusUpdates: AgentTool = {
       if (auth.vendorId && site.vendorId !== auth.vendorId) return forbidden("this site's status updates");
     }
 
-    const events = await prisma.siteStageEvent.findMany({
-      where: { siteId },
-      include: {
-        stageDefinition: { select: { label: true } },
-        statusOption: { select: { label: true } },
-        createdBy: { select: { name: true } },
-      },
-      orderBy: { createdAt: "desc" },
-      take: RESULT_LIMIT,
-    });
+    const [events, totalCount] = await Promise.all([
+      prisma.siteStageEvent.findMany({
+        where: { siteId },
+        include: {
+          stageDefinition: { select: { label: true } },
+          statusOption: { select: { label: true } },
+          createdBy: { select: { name: true } },
+        },
+        orderBy: { createdAt: "desc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.siteStageEvent.count({ where: { siteId } }),
+    ]);
 
     return {
+      ...listMeta(events.length, totalCount),
       site: site.companyName ?? site.address,
       orderNumber: site.order.orderNumber,
       updates: events.map((e) => ({
@@ -476,7 +726,8 @@ const searchWorkOrders: AgentTool = {
   name: "search_work_orders",
   description:
     "Search internal work orders (field-crew task dispatch) by title or work order number. " +
-    "Returns id, workOrderNumber, title, taskType, status, assignedTo, scheduledDate, site.",
+    "Returns id, workOrderNumber, title, taskType, status, assignedTo, scheduledDate, site. " +
+    "totalCount and byStatus cover ALL matching work orders, not just the listed rows.",
   inputSchema: {
     type: "object",
     properties: {
@@ -488,20 +739,28 @@ const searchWorkOrders: AgentTool = {
     if (!hasAny(auth, [PERMISSION_KEY.MANAGE_WORK_ORDERS, PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS])) return forbidden("work orders");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const where: Record<string, unknown> = auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS) ? {} : { assignedToId: auth.userId };
+    const where: Prisma.WorkOrderWhereInput = auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS) ? {} : { assignedToId: auth.userId };
     if (status) where.status = status;
     if (query) where.OR = [{ title: { contains: query, mode: "insensitive" } }, { workOrderNumber: { contains: query, mode: "insensitive" } }];
-    const workOrders = await prisma.workOrder.findMany({
-      where,
-      include: { site: { include: { order: { include: { customer: { select: { name: true } } } } } }, assignedTo: { select: { name: true } } },
-      orderBy: { createdAt: "desc" },
-      take: RESULT_LIMIT,
-    });
-    return workOrders.map((w) => ({
-      id: w.id, workOrderNumber: w.workOrderNumber, title: w.title, taskType: w.taskType, status: w.status,
-      assignedTo: w.assignedTo?.name ?? null, scheduledDate: w.scheduledDate,
-      customer: w.site.order.customer.name,
-    }));
+    const [workOrders, groups] = await Promise.all([
+      prisma.workOrder.findMany({
+        where,
+        include: { site: { include: { order: { include: { customer: { select: { name: true } } } } } }, assignedTo: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.workOrder.groupBy({ by: ["status"], where, _count: { _all: true } }),
+    ]);
+    const summary = statusBreakdown(groups);
+    return {
+      ...listMeta(workOrders.length, summary.totalCount),
+      byStatus: summary.byStatus,
+      results: workOrders.map((w) => ({
+        id: w.id, workOrderNumber: w.workOrderNumber, title: w.title, taskType: w.taskType, status: w.status,
+        assignedTo: w.assignedTo?.name ?? null, scheduledDate: w.scheduledDate,
+        customer: w.site.order.customer.name,
+      })),
+    };
   },
 };
 
@@ -509,7 +768,8 @@ const searchComplaints: AgentTool = {
   name: "search_complaints",
   description:
     "Search customer complaints by ticket number or customer name. Returns id, ticketNumber, " +
-    "customer, category, severity, status, assignedTo.",
+    "customer, category, severity, status, assignedTo. totalCount and byStatus cover ALL " +
+    "matching complaints, not just the listed rows.",
   inputSchema: {
     type: "object",
     properties: {
@@ -528,22 +788,30 @@ const searchComplaints: AgentTool = {
       return forbidden("complaints");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const where: Record<string, unknown> = {};
+    const where: Prisma.ComplaintWhereInput = {};
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW)) {
       where.assignedToId = auth.userId;
     }
     if (status) where.status = status;
     if (query) where.OR = [{ ticketNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }];
-    const complaints = await prisma.complaint.findMany({
-      where,
-      include: { customer: { select: { name: true } }, assignedTo: { select: { name: true } } },
-      orderBy: { createdAt: "desc" },
-      take: RESULT_LIMIT,
-    });
-    return complaints.map((c) => ({
-      id: c.id, ticketNumber: c.ticketNumber, customer: c.customer.name, category: c.category,
-      severity: c.severity, status: c.status, assignedTo: c.assignedTo?.name ?? null,
-    }));
+    const [complaints, groups] = await Promise.all([
+      prisma.complaint.findMany({
+        where,
+        include: { customer: { select: { name: true } }, assignedTo: { select: { name: true } } },
+        orderBy: { createdAt: "desc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.complaint.groupBy({ by: ["status"], where, _count: { _all: true } }),
+    ]);
+    const summary = statusBreakdown(groups);
+    return {
+      ...listMeta(complaints.length, summary.totalCount),
+      byStatus: summary.byStatus,
+      results: complaints.map((c) => ({
+        id: c.id, ticketNumber: c.ticketNumber, customer: c.customer.name, category: c.category,
+        severity: c.severity, status: c.status, assignedTo: c.assignedTo?.name ?? null,
+      })),
+    };
   },
 };
 
@@ -563,17 +831,20 @@ const searchSavedItems: AgentTool = {
     if (!hasAny(auth, [PERMISSION_KEY.MANAGE_QUOTATIONS, PERMISSION_KEY.MANAGE_INVOICES, PERMISSION_KEY.MANAGE_PURCHASE_ORDERS]))
       return forbidden("saved items");
     const query = input.query ? String(input.query) : undefined;
-    const items = await prisma.savedLineItem.findMany({
-      where: {
-        active: true,
-        ...(query ? { name: { contains: query, mode: "insensitive" } } : {}),
-      },
-      orderBy: { name: "asc" },
-      take: RESULT_LIMIT,
-    });
-    return items.map((i) => ({
-      id: i.id, name: i.name, hsnCode: i.hsnCode, standardPrice: num(i.standardPrice), taxRatePct: num(i.taxRatePct),
-    }));
+    const where: Prisma.SavedLineItemWhereInput = {
+      active: true,
+      ...(query ? { name: { contains: query, mode: "insensitive" } } : {}),
+    };
+    const [items, totalCount] = await Promise.all([
+      prisma.savedLineItem.findMany({ where, orderBy: { name: "asc" }, take: RESULT_LIMIT }),
+      prisma.savedLineItem.count({ where }),
+    ]);
+    return listPage(
+      items.map((i) => ({
+        id: i.id, name: i.name, hsnCode: i.hsnCode, standardPrice: num(i.standardPrice), taxRatePct: num(i.taxRatePct),
+      })),
+      totalCount,
+    );
   },
 };
 
@@ -633,25 +904,28 @@ const searchProducts: AgentTool = {
   handler: async (input, auth) => {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("products");
     const query = input.query ? String(input.query) : undefined;
-    const products = await prisma.product.findMany({
-      where: query
-        ? {
-            OR: [
-              { name: { contains: query, mode: "insensitive" } },
-              { model: { contains: query, mode: "insensitive" } },
-              { ratingSpec: { contains: query, mode: "insensitive" } },
-            ],
-          }
-        : undefined,
-      orderBy: { model: "asc" },
-      take: RESULT_LIMIT,
-    });
-    return products.map((p) => ({
-      id: p.id, name: p.name, model: p.model, ratingSpec: p.ratingSpec,
-      capacityKva: num(p.capacityKva), warrantyMonths: p.warrantyMonths,
-      shape: p.shape, dimensions: p.dimensions, weightKg: num(p.weightKg),
-      silencerType: p.silencerType,
-    }));
+    const where: Prisma.ProductWhereInput = query
+      ? {
+          OR: [
+            { name: { contains: query, mode: "insensitive" } },
+            { model: { contains: query, mode: "insensitive" } },
+            { ratingSpec: { contains: query, mode: "insensitive" } },
+          ],
+        }
+      : {};
+    const [products, totalCount] = await Promise.all([
+      prisma.product.findMany({ where, orderBy: { model: "asc" }, take: RESULT_LIMIT }),
+      prisma.product.count({ where }),
+    ]);
+    return listPage(
+      products.map((p) => ({
+        id: p.id, name: p.name, model: p.model, ratingSpec: p.ratingSpec,
+        capacityKva: num(p.capacityKva), warrantyMonths: p.warrantyMonths,
+        shape: p.shape, dimensions: p.dimensions, weightKg: num(p.weightKg),
+        silencerType: p.silencerType,
+      })),
+      totalCount,
+    );
   },
 };
 
@@ -682,7 +956,8 @@ const getCustomerLedger: AgentTool = {
     const from = input.from ? new Date(String(input.from)) : undefined;
     const to = input.to ? new Date(String(input.to)) : undefined;
     const statement = await buildCustomerLedger(customerId, from, to);
-    return { customer: customer.name, ...statement };
+    // Unambiguous yyyy-mm-dd (IST) dates instead of UTC timestamps the model misreads.
+    return { customer: customer.name, ...statement, entries: statement.entries.map((e) => ({ ...e, date: isoDateIST(e.date) })) };
   },
 };
 
@@ -692,7 +967,8 @@ const searchCreditNotes: AgentTool = {
     "Search GST credit notes (Accounting-Lite Phase B) by note number, invoice number, or " +
     "customer name. Returns id, noteNumber, status, reason, invoice it's against, customer, " +
     "issueDate, and total. Use get_document_detail (docType 'invoice') on the invoice to see " +
-    "all credit notes issued against it alongside its payment history.",
+    "all credit notes issued against it alongside its payment history. totalCount, totalValue " +
+    "and byStatus cover ALL matching credit notes (only issued ones reduce what is owed).",
   inputSchema: {
     type: "object",
     properties: {
@@ -704,29 +980,39 @@ const searchCreditNotes: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_CREDIT_NOTES)) return forbidden("credit notes");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const notes = await prisma.creditNote.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(query
-          ? {
-              OR: [
-                { noteNumber: { contains: query, mode: "insensitive" } },
-                { invoice: { invoiceNumber: { contains: query, mode: "insensitive" } } },
-                { customer: { name: { contains: query, mode: "insensitive" } } },
-              ],
-            }
-          : {}),
-      },
-      include: { customer: { select: { name: true } }, invoice: { select: { id: true, invoiceNumber: true } } },
-      orderBy: { issueDate: "desc" },
-      take: RESULT_LIMIT,
-    });
-    return notes.map((n) => ({
-      id: n.id, noteNumber: n.status === "draft" ? `DRAFT-${n.id}` : n.noteNumber, status: n.status,
-      reason: n.reason, customer: n.customer.name,
-      invoice: { id: n.invoice.id, invoiceNumber: n.invoice.invoiceNumber },
-      issueDate: n.issueDate, total: num(n.total),
-    }));
+    const where: Prisma.CreditNoteWhereInput = {
+      ...(status ? { status } : {}),
+      ...(query
+        ? {
+            OR: [
+              { noteNumber: { contains: query, mode: "insensitive" } },
+              { invoice: { invoiceNumber: { contains: query, mode: "insensitive" } } },
+              { customer: { name: { contains: query, mode: "insensitive" } } },
+            ],
+          }
+        : {}),
+    };
+    const [notes, groups] = await Promise.all([
+      prisma.creditNote.findMany({
+        where,
+        include: { customer: { select: { name: true } }, invoice: { select: { id: true, invoiceNumber: true } } },
+        orderBy: { issueDate: "desc" },
+        take: RESULT_LIMIT,
+      }),
+      prisma.creditNote.groupBy({ by: ["status"], where, _count: { _all: true }, _sum: { total: true } }),
+    ]);
+    const summary = statusBreakdown(groups);
+    return {
+      ...listMeta(notes.length, summary.totalCount),
+      totalValue: summary.totalValue,
+      byStatus: summary.byStatus,
+      results: notes.map((n) => ({
+        id: n.id, noteNumber: n.status === "draft" ? `DRAFT-${n.id}` : n.noteNumber, status: n.status,
+        reason: n.reason, customer: n.customer.name,
+        invoice: { id: n.invoice.id, invoiceNumber: n.invoice.invoiceNumber },
+        issueDate: n.issueDate, total: num(n.total),
+      })),
+    };
   },
 };
 
@@ -757,11 +1043,120 @@ const getCustomerAdvances: AgentTool = {
         const allocated = p.allocations.reduce((s, a) => s.plus(a.amount), new Prisma.Decimal(0));
         const unallocated = new Prisma.Decimal(p.amount).minus(allocated);
         return {
-          id: p.id, amount: num(p.amount), method: p.method, receivedDate: p.receivedDate,
+          id: p.id, amount: num(p.amount), method: p.method, receivedDate: isoDateIST(p.receivedDate),
           reference: p.reference, unallocatedAmount: num(unallocated),
         };
       })
       .filter((p) => p.unallocatedAmount !== null && p.unallocatedAmount > 0.01);
+  },
+};
+
+export interface PaymentSummaryRow {
+  /** yyyy-mm-dd (IST) - see isoDateIST. */
+  receivedDate: string;
+  amount: number | null;
+  tdsAmount: number | null;
+  unallocatedAmount: number | null;
+}
+
+/** Totals and per-month totals over EVERY payment passed in; lists the newest `listLimit`. */
+export function summarizePayments<T extends PaymentSummaryRow>(rows: T[], listLimit: number) {
+  const sorted = [...rows].sort((a, b) => b.receivedDate.localeCompare(a.receivedDate));
+  const months = new Map<string, T[]>();
+  for (const r of sorted) {
+    const month = r.receivedDate.slice(0, 7);
+    months.set(month, [...(months.get(month) ?? []), r]);
+  }
+  const listed = sorted.slice(0, listLimit);
+  return {
+    ...listMeta(listed.length, rows.length),
+    totals: {
+      count: rows.length,
+      totalAmount: sumMoney(rows.map((r) => r.amount)),
+      totalTds: sumMoney(rows.map((r) => r.tdsAmount)),
+      unallocatedAmount: sumMoney(rows.map((r) => r.unallocatedAmount)),
+    },
+    firstPaymentDate: sorted.length > 0 ? sorted[sorted.length - 1].receivedDate : null,
+    lastPaymentDate: sorted.length > 0 ? sorted[0].receivedDate : null,
+    byMonth: [...months.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, group]) => ({
+        month,
+        count: group.length,
+        amount: sumMoney(group.map((r) => r.amount)),
+        tds: sumMoney(group.map((r) => r.tdsAmount)),
+      })),
+    payments: listed,
+  };
+}
+
+/** Collections had no agent tool at all, so "when/how much did we collect" was answered from
+ * whatever partial rows other tools happened to show (2026-10: "all payments fell in Apr, Jun,
+ * Jul" when they run Dec 2025 - Aug 2026). Same permission as GET /payments. */
+const searchPayments: AgentTool = {
+  name: "search_payments",
+  description:
+    "Search payments RECEIVED from customers (collections), optionally by customer name, " +
+    "payment reference/UTR or invoice number, a receivedDate range and method. Lists the 15 " +
+    "most recent: id, customer, receivedDate (yyyy-mm-dd, the actual payment date), amount " +
+    "(cash received), tdsAmount, method, reference, allocatedTo (invoices it settled) and " +
+    "unallocatedAmount (advance). ALWAYS also returns totalCount, totals {count, totalAmount, " +
+    "totalTds, unallocatedAmount}, firstPaymentDate, lastPaymentDate and byMonth (count/amount/" +
+    "tds per yyyy-mm) over EVERY matching payment - use those for any 'how much did we collect', " +
+    "'which months', or trend question; never infer months or totals from the listed rows.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Customer name, payment reference, or invoice number (partial match)." },
+      customerId: { type: "string", description: "Optional customer id, from search_customers." },
+      from: { type: "string", description: "Optional first receivedDate to include, YYYY-MM-DD." },
+      to: { type: "string", description: "Optional last receivedDate to include, YYYY-MM-DD." },
+      method: { type: "string", description: "Optional filter: bank_transfer | upi | cheque | cash | other" },
+    },
+  },
+  handler: async (input, auth) => {
+    if (auth.customerId || !hasAny(auth, [PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.MANAGE_INVOICES])) return forbidden("payments");
+    const query = input.query ? String(input.query).trim() : "";
+    const customerId = input.customerId ? String(input.customerId) : undefined;
+    const method = input.method ? String(input.method).trim().toLowerCase() : undefined;
+    const from = input.from ? istDayStart(String(input.from).trim()) : undefined;
+    const toStart = input.to ? istDayStart(String(input.to).trim()) : undefined;
+    if ((input.from && !from) || (input.to && !toStart)) return { error: "from/to must be dates in YYYY-MM-DD format." };
+    const toExclusive = toStart ? new Date(toStart.getTime() + 86_400_000) : undefined;
+
+    const where: Prisma.PaymentReceivedWhereInput = {
+      ...(customerId ? { customerId } : {}),
+      ...(method ? { method } : {}),
+      ...(from || toExclusive ? { receivedDate: { ...(from ? { gte: from } : {}), ...(toExclusive ? { lt: toExclusive } : {}) } } : {}),
+      ...(query
+        ? {
+            OR: [
+              { customer: { name: { contains: query, mode: "insensitive" } } },
+              { reference: { contains: query, mode: "insensitive" } },
+              { allocations: { some: { invoice: { invoiceNumber: { contains: query, mode: "insensitive" } } } } },
+            ],
+          }
+        : {}),
+    };
+    // No take: totals and byMonth must cover every matching payment; summarizePayments caps the list.
+    const payments = await prisma.paymentReceived.findMany({
+      where,
+      include: {
+        customer: { select: { name: true } },
+        allocations: { select: { amount: true, invoice: { select: { id: true, invoiceNumber: true } } } },
+      },
+      orderBy: { receivedDate: "desc" },
+    });
+    const rows = payments.map((p) => {
+      const allocated = p.allocations.reduce((s, a) => s.plus(a.amount), new Prisma.Decimal(0));
+      return {
+        id: p.id, customer: p.customer.name, receivedDate: isoDateIST(p.receivedDate),
+        amount: num(p.amount), tdsAmount: num(p.tdsAmount), method: p.method, reference: p.reference,
+        allocatedTo: p.allocations.map((a) => ({ invoiceId: a.invoice.id, invoiceNumber: a.invoice.invoiceNumber, amount: num(a.amount) })),
+        unallocatedAmount: num(new Prisma.Decimal(p.amount).minus(allocated)),
+      };
+    });
+    return summarizePayments(rows, RESULT_LIMIT);
   },
 };
 
@@ -783,4 +1178,5 @@ export const zanAppReadTools: AgentTool[] = [
   getCustomerLedger,
   searchCreditNotes,
   getCustomerAdvances,
+  searchPayments,
 ];
