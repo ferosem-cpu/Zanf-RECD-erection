@@ -10,7 +10,8 @@ const ZERO = new Prisma.Decimal(0);
 export type LedgerEntryType = "opening_balance" | "invoice" | "payment" | "tds" | "credit_note" | "bill" | "payment_made";
 
 export interface LedgerEntry {
-  date: Date;
+  /** null only for an undated opening-balance row on an account with no movements. */
+  date: Date | null;
   type: LedgerEntryType;
   refNumber: string;
   refId: string | null;
@@ -38,6 +39,13 @@ export interface RawMovement {
   credit: Prisma.Decimal;
 }
 
+type LedgerEntryInput = Omit<LedgerEntry, "runningBalance">;
+
+/** An undated (opening-balance) row sorts before everything. */
+function sortTime(e: { date: Date | null }): number {
+  return e.date ? e.date.getTime() : Number.NEGATIVE_INFINITY;
+}
+
 /**
  * Pure query composition, no new tables (see docs/ACCOUNTING_LITE_PLAN.md par.5.2). Merges the
  * account's opening balance with every dated movement, computes a running balance across the
@@ -54,15 +62,17 @@ export function buildStatement(
   from?: Date,
   to?: Date,
 ): LedgerStatement {
-  const openingRow: RawMovement = {
-    date: openingBalanceDate ?? new Date(0),
+  // An undated opening balance sorts before everything (so it is always carried into a range);
+  // only for display is it dated at the first movement - never the 1970 epoch.
+  const openingRow: LedgerEntryInput = {
+    date: openingBalanceDate,
     type: "opening_balance",
     refNumber: "Opening balance",
     refId: null,
     debit: openingBalance.gte(0) ? openingBalance : ZERO,
     credit: openingBalance.lt(0) ? openingBalance.negated() : ZERO,
   };
-  const all: RawMovement[] = [openingRow, ...movements].sort((a, b) => a.date.getTime() - b.date.getTime());
+  const all: LedgerEntryInput[] = [openingRow, ...movements].sort((a, b) => sortTime(a) - sortTime(b));
 
   let running = ZERO;
   const withRunning: LedgerEntry[] = all.map((m) => {
@@ -74,7 +84,7 @@ export function buildStatement(
   let rangeOpening = ZERO;
   if (from) {
     for (const e of withRunning) {
-      if (e.date.getTime() < from.getTime()) rangeOpening = e.runningBalance;
+      if (sortTime(e) < from.getTime()) rangeOpening = e.runningBalance;
       else break;
     }
   }
@@ -83,16 +93,19 @@ export function buildStatement(
   // at or before `to`.
   let closingBalance = ZERO;
   for (const e of withRunning) {
-    if (to && e.date.getTime() > to.getTime()) break;
+    if (to && sortTime(e) > to.getTime()) break;
     closingBalance = e.runningBalance;
   }
 
-  const entries = withRunning.filter((e) => {
-    if (e.type === "opening_balance") return !from; // only show the real row when viewing full history
-    if (from && e.date.getTime() < from.getTime()) return false;
-    if (to && e.date.getTime() > to.getTime()) return false;
-    return true;
-  });
+  const firstMovementDate = withRunning.find((e) => e.type !== "opening_balance")?.date ?? null;
+  const entries = withRunning
+    .filter((e) => {
+      if (e.type === "opening_balance") return !from; // only show the real row when viewing full history
+      if (from && sortTime(e) < from.getTime()) return false;
+      if (to && sortTime(e) > to.getTime()) return false;
+      return true;
+    })
+    .map((e) => (e.type === "opening_balance" && !e.date ? { ...e, date: firstMovementDate } : e));
 
   return {
     partyId,

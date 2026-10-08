@@ -988,7 +988,7 @@ const getCustomerLedger: AgentTool = {
     const to = input.to ? new Date(String(input.to)) : undefined;
     const statement = await buildCustomerLedger(customerId, from, to);
     // Unambiguous yyyy-mm-dd (IST) dates instead of UTC timestamps the model misreads.
-    return { customer: customer.name, ...statement, entries: statement.entries.map((e) => ({ ...e, date: isoDateIST(e.date) })) };
+    return { customer: customer.name, ...statement, entries: statement.entries.map((e) => ({ ...e, date: e.date ? isoDateIST(e.date) : null })) };
   },
 };
 
