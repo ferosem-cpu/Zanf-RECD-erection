@@ -199,6 +199,8 @@ Ojas; InterGlobe Aviation appears as a site end-client (`Site.companyName`).
 - Conversations: `AgentConversation`; daily cron deletes threads > 30 days. **Test prompt/tool
   fixes in a new thread** (old history outweighs fixes). The manual tool harness
   (`agentTest.ts`) is mounted only outside production.
+- Manual QA question set (expected tool, admin-web page, pass criteria):
+  [`docs/agent-test-checklist.md`](agent-test-checklist.md).
 
 ## 7. Integrations and environment variables
 
