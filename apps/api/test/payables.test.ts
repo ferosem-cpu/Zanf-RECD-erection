@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { PERMISSION_KEY } from "@recd/shared";
 import { prisma } from "../src/lib/prisma";
 import { PAYABLE_BILL_STATUSES, billOutstanding, summarizePayables, isPayableStatus, type PayableBillRow } from "../src/services/payables";
+import { ageingBucket } from "../src/services/ageing";
 import { poVsBillsByVendor, resolveBillStatusFilter, zanAppFinanceTools } from "../src/agent/tools/zanAppFinanceTools";
 
 const NOW = new Date("2026-10-08T06:00:00Z");
@@ -86,7 +87,9 @@ test("search_vendor_bills: status + tolerant vendor filters reach the query; tot
   assert.equal(res.complete, false);
   assert.deepEqual(res.totals, { count: 17, totalAmount: 20060, taxableAmount: 17000, gstAmount: 3060, paid: 0, outstanding: 20060 });
   assert.equal(res.bills[0].billDate, "2026-09-28"); // IST, not the UTC day before
-  assert.equal(res.bills[0].daysOverdue, 7);
+  // The tool ages against the real clock, so the expected day count does too.
+  assert.equal(res.bills[0].daysOverdue, ageingBucket(new Date("2026-09-30T18:30:00Z"), new Date()).daysPastDue);
+  assert.ok(res.bills[0].daysOverdue >= 8);
 
   await tool.handler({}, auth);
   assert.deepEqual(wheres[1], { status: { not: "deleted" } });
