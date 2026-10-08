@@ -8,6 +8,7 @@ import { PERMISSION_KEY, BILL_STATUS, PO_STATUS, INVOICE_STATUS, INVOICE_DOC_TYP
 import { prisma } from "../../lib/prisma";
 import { splitPayment } from "../../services/paymentSplit";
 import { settledFromAllocations } from "../../services/settlement";
+import { ageingBucket, emptyAgeing, type AgeingBucket } from "../../services/ageing";
 import { LIST_LIMIT } from "../listResult";
 import { exclGstPortion, isoDateIST, istDayStart, sumMoney } from "./zanAppReadTools";
 import type { AgentTool, AgentAuthContext } from "./types";
@@ -87,16 +88,8 @@ export interface PayableBillRow {
   debitNotes: number;
 }
 
-type AgeingBucket = "current" | "days0_30" | "days31_60" | "days61_90" | "days90Plus";
-
-/** Same buckets/anchor as GET /finance/reports/payables: days past due date (or bill date). */
-export function ageingBucket(anchor: Date, now: Date): { bucket: AgeingBucket; daysPastDue: number } {
-  const days = Math.floor((now.getTime() - anchor.getTime()) / DAY_MS);
-  const bucket: AgeingBucket = days <= 0 ? "current" : days <= 30 ? "days0_30" : days <= 60 ? "days31_60" : days <= 90 ? "days61_90" : "days90Plus";
-  return { bucket, daysPastDue: Math.max(days, 0) };
-}
-
-const emptyAgeing = (): Record<AgeingBucket, number> => ({ current: 0, days0_30: 0, days31_60: 0, days61_90: 0, days90Plus: 0 });
+// Same buckets/anchor as the Finance receivables/payables ageing reports (services/ageing.ts).
+export { ageingBucket };
 
 export function summarizePayables(bills: PayableBillRow[], now: Date, listLimit = LIST_LIMIT) {
   const open = bills
@@ -314,6 +307,10 @@ export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, li
   };
   const overdue = computed.filter((r) => r.daysPastDue > 0 && r.dueDate);
   const listed = [...computed].filter((r) => r.outstandingInclGst > 0).sort((a, b) => b.outstandingInclGst - a.outstandingInclGst);
+  // Every overdue invoice with a balance, most overdue first (capped at 50 for the model).
+  const overdueList = overdue
+    .filter((r) => r.outstandingInclGst > 0)
+    .sort((a, b) => b.daysPastDue - a.daysPastDue || b.outstandingInclGst - a.outstandingInclGst);
 
   return {
     totals: {
@@ -327,6 +324,11 @@ export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, li
     },
     byDocType: { tax_invoice: byDocType(INVOICE_DOC_TYPE.TAX_INVOICE), proforma: byDocType(INVOICE_DOC_TYPE.PROFORMA) },
     ageingInclGst: ageing,
+    overdueInvoices: overdueList.slice(0, 50).map((r) => ({
+      id: r.id, invoiceNumber: r.invoiceNumber, customer: r.customer,
+      dueDate: isoDateIST(r.dueDate!), balanceInclGst: r.outstandingInclGst, balanceExclGst: r.outstandingExclGst, daysOverdue: r.daysPastDue,
+    })),
+    overdueListComplete: overdueList.length <= 50,
     byCustomer: [...customers.values()]
       .filter((c) => c.outstandingInclGst !== 0)
       .sort((a, b) => b.outstandingInclGst - a.outstandingInclGst || a.customer.localeCompare(b.customer)),
@@ -346,7 +348,9 @@ const getReceivables: AgentTool = {
     "What CUSTOMERS OWE US now: 'total receivable', 'outstanding', 'receivable excluding GST', 'and including " +
     "GST?', 'who owes us most'. Returns an explicit asOf date, basis, and server-computed totals BOTH incl. GST " +
     "and excl. GST (plus the GST portion), overdue figures, byCustomer (incl./excl. GST per customer), byDocType " +
-    "(tax invoice vs proforma), ageing and the largest open invoices. Call it again for every receivable follow-up " +
+    "(tax invoice vs proforma), ageingInclGst (same buckets as the Finance Receivables ageing report), " +
+    "overdueInvoices (every overdue invoice: number, customer, due date, balance incl./excl. GST, days overdue) " +
+    "and the largest open invoices. Use it for 'ageing?', 'which are overdue?', 'who owes most?'. Call it again for every receivable follow-up " +
     "question - never reuse a number from an earlier answer.",
   inputSchema: {
     type: "object",

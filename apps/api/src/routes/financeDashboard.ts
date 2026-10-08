@@ -6,6 +6,7 @@ import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
 import { settledFromAllocations } from "../services/settlement";
 import { splitPayment } from "../services/paymentSplit";
+import { ageingBucket } from "../services/ageing";
 
 export const financeDashboardRouter = Router();
 financeDashboardRouter.use(authenticate);
@@ -92,9 +93,7 @@ financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_
     const netTotal = D(inv.total).minus(cnTotal);
     const balance = (netTotal.isNegative() ? new Prisma.Decimal(0) : netTotal).minus(paid);
     if (balance.lte(0)) continue;
-    const anchor = inv.dueDate ?? inv.issueDate;
-    const days = Math.floor((now.getTime() - anchor.getTime()) / 86_400_000);
-    const bucket = days <= 0 ? "current" : days <= 30 ? "days0_30" : days <= 60 ? "days31_60" : days <= 90 ? "days61_90" : "days90Plus";
+    const { bucket } = ageingBucket(inv.dueDate ?? inv.issueDate, now);
 
     let row = byCustomer.get(inv.customerId);
     if (!row) {

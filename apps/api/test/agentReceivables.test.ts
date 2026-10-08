@@ -6,6 +6,7 @@ import { prisma } from "../src/lib/prisma";
 import { settledFromAllocations } from "../src/services/settlement";
 import { summarizeReceivables, zanAppFinanceTools, RECEIVABLES_BASIS, type ReceivableInvoiceRow } from "../src/agent/tools/zanAppFinanceTools";
 import { exclGstPortion, summarizeInvoices, sumMoney } from "../src/agent/tools/zanAppReadTools";
+import { ageingBucket } from "../src/services/ageing";
 
 const NOW = new Date("2026-10-08T06:00:00Z");
 const settled = (allocs: Array<[number, number, number]>) =>
@@ -72,6 +73,21 @@ test("sanity: incl. >= excl. for totals and every customer, and incl - excl = th
   ]);
   const ageing = Object.values(out.ageingInclGst).reduce((s, n) => s + n, 0);
   assert.equal(Math.round(ageing * 100), Math.round(out.totals.outstandingInclGst * 100));
+});
+
+test("overdue list names every overdue invoice with due date, balance and days overdue", () => {
+  const out = summarizeReceivables(fixture(), NOW);
+  assert.deepEqual(out.overdueInvoices, [
+    { id: "i1", invoiceNumber: "INV/2026-27/0001", customer: "Acme", dueDate: "2026-08-31", balanceInclGst: 109850, balanceExclGst: 98520.18, daysOverdue: 38 },
+  ]);
+  assert.equal(out.overdueListComplete, true);
+});
+
+test("receivables ageing uses the Finance report's buckets (services/ageing.ts)", () => {
+  const out = summarizeReceivables(fixture(), NOW);
+  // i1 due 31 Aug -> 31-60; i2 due 15 Oct -> current; p1 (no due date, issued 01 Oct) -> 0-30.
+  assert.deepEqual(out.ageingInclGst, { current: 116000, days0_30: 59000, days31_60: 109850, days61_90: 0, days90Plus: 0 });
+  assert.equal(ageingBucket(new Date("2026-08-31T00:00:00Z"), NOW).bucket, "days31_60");
 });
 
 test("exclGstPortion edge cases and search_invoices carries the same excl.-GST total", () => {
