@@ -328,25 +328,22 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 - Work done from the mobile app lands on unmerged `claude/<slug>` branches — check
   `git branch -a` before rebuilding anything.
 
-## 10. Current open items (as of 2026-10-08)
+## 10. Current open items (as of 2026-10-09)
 
-**Branch `fix/ledger-opening-date-and-drive-search` (pushed, NOT merged/deployed)** - see §11
-2026-10-08. Deploy API first (admin-web's "Delete rejected invoice" calls a new route). No
-migration needed. Still in progress on the branch: GST-basis labels in search_invoices + revenue
-"to date"/all-time periods (piece C, uncommitted WIP), follow-up prompt rules (E), IST dates in all
-tool output (F), expenses totals (G), chat-bubble thread-switch race (H), and
-`docs/agent-test-checklist.md`. Progress note: `.claude-task/fix4b-progress.md` (local only).
-After deploy, verify against production: payables KPI now includes Verified bills (Platino),
-Selvam Enterprises' partially paid bill in get_payables, receivables incl./excl. GST vs the Finance
-dashboard, sites with update status Done, Drive search for "proforma invoice" / "PCR".
+**Branch `fix/ledger-opening-date-and-drive-search` - complete, READY FOR MERGE (pushed, NOT
+merged/deployed)** - see §11 2026-10-08/09. Merge `--no-ff` to master only with Ferose's approval;
+deploy API first (admin-web's "Delete rejected invoice" calls a new route), rollback target
+`dpl_BbA1zVGtVyQKXNbWBnfGYNHfkBpN`. No migration needed. After deploy, run
+`docs/agent-test-checklist.md` and verify against production: payables KPI includes Verified bills
+(Platino), Selvam Enterprises' partially paid bill in get_payables, receivables incl./excl. GST vs
+the Finance dashboard, sites with update status Done, Drive search for "proforma invoice" / "PCR",
+supplier ledger balances (now post Verified bills), GSTR-3B outward taxable value on discounted
+invoices. Progress note: `.claude-task/fix4b-progress.md` (local only).
 - **Drive access (Ferose):** the agent only sees files INSIDE `ZanF_DropBox` (any subfolder depth)
   that `zanfpowersystems@gmail.com` can read. Move (not shortcut) the Zan-F invoice / PCR folders
   into ZanF_DropBox, or share them to that account and add them inside it. Shortcuts are not followed.
-- **Supplier ledger vs payables:** payables now count Verified bills; the supplier ledger still
-  posts bills only from Approved. Decide whether the ledger should match.
-- **GSTR-3B finding (not fixed):** `services/gstExport.ts` subtracts `discountAmount` from
-  `subtotal`, but `subtotal` is already after line discounts - outward taxable value is
-  under-stated when invoices carry discounts.
+- **Still on Approved+ (decide if they should follow payables):** GSTR-3B 4A ITC
+  (`gstExport.ts`) and site vendor costs (`routes/sites.ts`) count bills from Approved, not Verified.
 
 **Deploy / decisions for Ferose**
 - **15 prod migrations without a `_prisma_migrations` row** (`20260813122825` …
@@ -406,6 +403,17 @@ dashboard, sites with update status Done, Drive search for "proforma invoice" / 
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
 
+- **2026-10-08/09 — Same branch, continued (not yet merged/deployed; READY FOR MERGE).**
+  `9578755` GST basis: search_invoices taxableValue + gstAmount, revenue "to date" + `all_time`.
+  `1838703` sites: stage/query filters apply before the 15-row cut (regression test). `7bf6da6`
+  prompt: short follow-ups re-call the prior subject's tool. `7224cfd` every Date in tool output in
+  IST. `bb203c4` expenses: IST date range, server total, per-category breakdown. `1191988` payables
+  test no longer clock-dependent. `d0e7ea9` chat bubble: a late thread load can't overwrite "+ New".
+  `5c7eec9` deleting a rejected vendor invoice is **admin-only** (Super Admin, Owner/Admin;
+  approvers can still reject). `7fcc661` supplier ledger posts the same bills as payables (Verified
+  on; Paid kept so its payments net off). `51ec2ff` GSTR-3B outward taxable value = subtotal (was
+  double-discounted). `ead572a` `docs/agent-test-checklist.md`. Tests: API 116, admin-web 26.
+
 - **2026-10-08 — Branch `fix/ledger-opening-date-and-drive-search` (on branch, not yet
   merged/deployed).** `fb64153` ledger opening balance no longer dated 01 Jan 1970 (TDS register
   checked: unaffected). `7ebdf42` sites "done" = latest status update (StatusOption `done`/"Done",
@@ -416,7 +424,7 @@ dashboard, sites with update status Done, Drive search for "proforma invoice" / 
   incl. GST (total − issued CNs − settled incl. TDS, `settlement.ts`) and excl. GST (outstanding ×
   subtotal/total), per customer, ageing from shared `services/ageing.ts`, overdue invoice list.
   `18cc0a5` delete REJECTED vendor invoices: soft delete (status `deleted`, number renamed so it can
-  be re-entered, audit entry kept; refused with payments/debit notes; `approve_vendor_invoice`); GST
+  be re-entered, audit entry kept; refused with payments/debit notes; admin-only since `5c7eec9`); GST
   summary report excludes rejected/cancelled/deleted bills. `27dc264` Drive search covers the whole
   ZanF_DropBox tree (cached folder tree, names or content, phrase or all words, all drives, paging,
   folderPath); root cause was direct-children-only search. `da52fb1` read-only tool calls of one
