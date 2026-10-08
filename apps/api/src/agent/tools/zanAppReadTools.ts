@@ -443,39 +443,66 @@ const searchPurchaseOrders: AgentTool = {
   },
 };
 
+/** Expense totals over EVERY matching expense: count, total and per-category breakdown. */
+export function summarizeExpenses(rows: Array<{ amount: number | null; category: string }>) {
+  const byCategory: Record<string, { count: number; amount: number }> = {};
+  for (const r of rows) {
+    const c = (byCategory[r.category] ??= { count: 0, amount: 0 });
+    c.count += 1;
+    c.amount = sumMoney([c.amount, r.amount]);
+  }
+  return { count: rows.length, totalAmount: sumMoney(rows.map((r) => r.amount)), byCategory };
+}
+
 const searchExpenses: AgentTool = {
   name: "search_expenses",
   description:
     "Search the expense book (non-PO spend: fuel, travel, site consumables, misc) by " +
-    "description or category. Returns id, description, category, amount, date, method, site. " +
-    "totalCount and totalAmount cover ALL matching expenses, not just the listed rows.",
+    "description, category and date range. Returns id, description, category, amount, date, method, site. " +
+    "totals {count, totalAmount, byCategory} are server-computed over ALL matching expenses, not just " +
+    "the listed rows - quote totals.totalAmount, never add up rows or ask the user to. For 'expenses " +
+    "this month' pass from = first of the month and to = today (IST) and state the period in the answer.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "Text to match against the description." },
       categoryKey: { type: "string", description: "Optional category key filter, e.g. 'material', 'transport'." },
+      from: { type: "string", description: "Optional start date YYYY-MM-DD (IST, inclusive)." },
+      to: { type: "string", description: "Optional end date YYYY-MM-DD (IST, inclusive)." },
     },
   },
   handler: async (input, auth) => {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_EXPENSES)) return forbidden("expenses");
     const query = input.query ? String(input.query) : undefined;
     const categoryKey = input.categoryKey ? String(input.categoryKey) : undefined;
+    const from = input.from ? String(input.from).trim() : "";
+    const to = input.to ? String(input.to).trim() : "";
+    const fromDate = from ? istDayStart(from) : undefined;
+    const toDate = to ? istDayStart(to) : undefined;
+    if ((from && !fromDate) || (to && !toDate)) return { error: "from/to must be dates in YYYY-MM-DD format." };
     const where: Prisma.ExpenseWhereInput = {
       ...(query ? { description: { contains: query, mode: "insensitive" } } : {}),
       ...(categoryKey ? { category: { key: categoryKey } } : {}),
+      ...(fromDate || toDate
+        ? { expenseDate: { ...(fromDate ? { gte: fromDate } : {}), ...(toDate ? { lt: new Date(toDate.getTime() + 86_400_000) } : {}) } }
+        : {}),
     };
-    const [expenses, agg] = await Promise.all([
+    const [expenses, all] = await Promise.all([
       prisma.expense.findMany({
         where,
         include: { category: { select: { label: true } }, site: { select: { address: true } } },
         orderBy: { expenseDate: "desc" },
         take: RESULT_LIMIT,
       }),
-      prisma.expense.aggregate({ where, _count: { _all: true }, _sum: { amount: true } }),
+      // Slim copy of the FULL filtered set, only for the totals.
+      prisma.expense.findMany({ where, select: { amount: true, category: { select: { label: true } } } }),
     ]);
+    const totals = summarizeExpenses(all.map((e) => ({ amount: num(e.amount), category: e.category.label })));
     return {
-      ...listMeta(expenses.length, agg._count._all),
-      totalAmount: sumMoney([num(agg._sum.amount)]),
+      ...listMeta(expenses.length, totals.count),
+      period: { from: from || "(all dates)", to: to || "(all dates)", timezone: "IST" },
+      totals,
+      totalAmount: totals.totalAmount,
       results: expenses.map((e) => ({
         id: e.id, description: e.description, category: e.category.label, amount: num(e.amount),
         expenseDate: e.expenseDate, method: e.method, site: e.site?.address ?? null,
