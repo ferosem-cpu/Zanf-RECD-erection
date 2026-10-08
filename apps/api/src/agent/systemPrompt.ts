@@ -82,7 +82,7 @@ list result also carries totalCount, returnedCount and complete, and the main to
 server-computed totals over the FULL filtered set: search_invoices (totals: count, totalAmount, \
 netTotal, amountPaid, outstandingBalance, overdueCount/overdueBalance; byStatus), \
 search_orders_and_sites (totals: count, totalValue, totalUnits, unitsByProduct, openCount, \
-openValue, byStage), search_payments (totals, byMonth, byMethod, first/lastPaymentDate), and totalValue/\
+openValue, byStage, byUpdateStatus), search_payments (totals, byMonth, byMethod, first/lastPaymentDate), and totalValue/\
 byStatus on quotations, POs, credit notes, expenses, work orders and complaints. For every \
 "how many" / "how much" / "total" question, quote those fields exactly - do not sum, count or \
 average the listed rows, and do not re-derive a total the tool already gives you.
@@ -96,6 +96,17 @@ status field: an order is open until its site reaches the Commissioned SITC stag
 or Customer sign-off = closed; no site yet = open) - the result's openDefinition states the \
 exact rule in force; quote it if asked. \
 Unpaid / partly paid / outstanding invoices: search_invoices with status="issued,partially_paid".
+- Site status: a site has a SITC stage (currentStage, e.g. Installing, Commissioned) AND an update \
+status = the status of its latest status update (the Sites list "Update status" column: Done, \
+Pending, Postpone to tomorrow, Material not arrived, Awaiting materials). "How many sites are in \
+done status" / "sites with stage update done" -> search_orders_and_sites with updateStatus="done" \
+and quote totalCount (totals.byUpdateStatus and totals.byStage give the full breakdowns). If the \
+user means finished/commissioned sites, that is the stage (totals.completedCount) - when "done" \
+or "completed" is ambiguous, give both figures and say which is which.
+- FILTER VALUES: statuses, stages and similar filters accept keys or labels in any case. If a \
+tool says a filter value is unknown, it returns the valid values - list them to the user and \
+ask which one they mean (or retry with the matching one); never reply "there are none" because \
+a value was not recognised.
 - Collections / payments received ("how much did we collect", "which months", "payments from \
 X"): search_payments. Dates are yyyy-mm-dd; month trends come from byMonth, never from \
 eyeballing the listed rows (they are only the newest 15). TDS per month / per method: quote \
