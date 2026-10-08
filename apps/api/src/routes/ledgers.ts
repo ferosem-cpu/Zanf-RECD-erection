@@ -6,6 +6,8 @@ import { asString, asOptionalString } from "../lib/params";
 import { buildCustomerLedger, buildSupplierLedger } from "../services/ledger";
 import { buildGstr1, buildGstr3b } from "../services/gstExport";
 import { buildCsv } from "../lib/csv";
+import { PAYMENT_HAS_TDS_WHERE } from "../services/paymentSplit";
+import { buildTdsRegister } from "../services/tdsRegister";
 
 export const ledgersRouter = Router();
 ledgersRouter.use(authenticate);
@@ -48,12 +50,14 @@ ledgersRouter.get("/tds", async (req, res) => {
   const from = new Date(Date.UTC(startYear, 3, 1)); // Apr 1
   const to = new Date(Date.UTC(startYear + 1, 2, 31, 23, 59, 59, 999)); // Mar 31
 
+  // Both TDS shapes: tdsAmount > 0, or a legacy "TDS Deducted" row (whole amount is TDS).
   const payments = await prisma.paymentReceived.findMany({
-    where: { tdsAmount: { gt: 0 }, receivedDate: { gte: from, lte: to } },
+    where: { ...PAYMENT_HAS_TDS_WHERE, receivedDate: { gte: from, lte: to } },
     select: {
       id: true,
       amount: true,
       tdsAmount: true,
+      method: true,
       tdsCertificateRef: true,
       receivedDate: true,
       customer: { select: { id: true, name: true } },
@@ -63,33 +67,9 @@ ledgersRouter.get("/tds", async (req, res) => {
     orderBy: { receivedDate: "asc" },
   });
 
-  const rows = payments.map((p) => ({
-    paymentId: p.id,
-    date: p.receivedDate,
-    customerId: p.customer.id,
-    customerName: p.customer.name,
-    invoiceNumbers: p.invoice
-      ? [p.invoice.invoiceNumber]
-      : p.allocations.map((a) => a.invoice.invoiceNumber),
-    grossAmount: p.amount, // cash received; the invoice(s) settled = grossAmount + tdsAmount
-    tdsAmount: p.tdsAmount,
-    tdsCertificateRef: p.tdsCertificateRef,
-  }));
-
-  const totalsByCustomer = new Map<string, { customerId: string; customerName: string; grossAmount: number; tdsAmount: number }>();
-  for (const r of rows) {
-    const key = r.customerId;
-    const entry = totalsByCustomer.get(key) ?? { customerId: r.customerId, customerName: r.customerName, grossAmount: 0, tdsAmount: 0 };
-    entry.grossAmount += Number(r.grossAmount);
-    entry.tdsAmount += Number(r.tdsAmount);
-    totalsByCustomer.set(key, entry);
-  }
-
   res.json({
     fiscalYear: `${startYear}-${String(startYear + 1).slice(-2)}`,
-    rows,
-    totalsByCustomer: Array.from(totalsByCustomer.values()),
-    grandTotalTds: rows.reduce((s, r) => s + Number(r.tdsAmount), 0),
+    ...buildTdsRegister(payments),
   });
 });
 

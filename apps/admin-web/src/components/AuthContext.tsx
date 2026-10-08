@@ -3,7 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { api, setToken, clearToken } from "@/lib/apiClient";
 import { useRouter } from "next/navigation";
-import { isSessionRejected, retryDelayMs } from "@/lib/sessionRetry";
+import { isSessionRejected, retryDelayMs, sessionWaitsForSettings } from "@/lib/sessionRetry";
 
 export interface UserSession {
   id: string;
@@ -62,6 +62,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // /settings only needs the same bearer token, so request it alongside /auth/me instead of
+    // after it: on a cold API the two used to queue one behind the other. The .catch keeps an
+    // unused/failed request from surfacing as an unhandled rejection; the result is only applied
+    // below once /auth/me has accepted the session.
+    const settingsRequest = api<{ themeKey: string; logoDataUrl: string | null; customColors: any }>("/settings")
+      .then((settings) => ({ settings }), (error: unknown) => ({ error }));
+
     let data: UserSession;
     try {
       data = await api<UserSession>("/auth/me");
@@ -102,8 +109,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setUser(data);
 
+    const { getStoredThemeKey } = require("@/lib/settingsStore");
+    const waitForSettings = sessionWaitsForSettings(getStoredThemeKey());
+    // A browser that already has a saved theme leaves the loading screen now; the fresh
+    // settings (theme, colours, logo) are applied in the background when they arrive.
+    if (!waitForSettings) setLoading(false);
+
     try {
-      const settings = await api<{ themeKey: string; logoDataUrl: string | null; customColors: any }>("/settings");
+      const result = await settingsRequest;
+      if ("error" in result) throw result.error;
+      const { settings } = result;
       if (typeof window !== "undefined") {
         const { saveThemeKey, saveLogo, clearLogo, saveCustomColors, clearCustomColors } = require("@/lib/settingsStore");
         if (settings.themeKey) {
@@ -124,8 +139,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error("Failed to load settings in AuthContext", err);
     } finally {
-      // As before: only leave the loading screen once the theme settings have been applied.
-      setLoading(false);
+      // First visit on this browser (no saved theme): as before, only leave the loading screen
+      // once the theme settings have been applied.
+      if (waitForSettings) setLoading(false);
     }
   }, [cancelRetry]);
 

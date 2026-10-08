@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
+import { isLegacyTdsPayment, splitPayment } from "./paymentSplit";
 
 const D = (n: number | string | Prisma.Decimal): Prisma.Decimal =>
   n instanceof Prisma.Decimal ? n : new Prisma.Decimal(String(n));
@@ -28,7 +29,7 @@ export interface LedgerStatement {
   closingBalance: Prisma.Decimal;
 }
 
-interface RawMovement {
+export interface RawMovement {
   date: Date;
   type: LedgerEntryType;
   refNumber: string;
@@ -44,7 +45,7 @@ interface RawMovement {
  * the entries down to [from, to] for display. Debit = party owes us more; credit = they owe
  * less (or we owe them, once the balance goes negative).
  */
-function buildStatement(
+export function buildStatement(
   partyId: string,
   partyName: string,
   openingBalance: Prisma.Decimal,
@@ -102,6 +103,43 @@ function buildStatement(
   };
 }
 
+export interface LedgerPayment {
+  id: string;
+  amount: Prisma.Decimal | string | number;
+  tdsAmount: Prisma.Decimal | string | number;
+  method: string;
+  receivedDate: Date;
+  invoice: { invoiceNumber: string } | null;
+  allocations: { invoice: { invoiceNumber: string } }[];
+}
+
+/** Best-effort human label for a payment's ref column: the legacy single invoice, the
+ * allocated invoice(s), or a generic label for an unallocated advance. */
+function paymentRefLabel(p: LedgerPayment): string {
+  if (p.invoice) return p.invoice.invoiceNumber;
+  if (p.allocations.length === 1) return p.allocations[0].invoice.invoiceNumber;
+  if (p.allocations.length > 1) return p.allocations.map((a) => a.invoice.invoiceNumber).join(", ");
+  return "Advance";
+}
+
+/** Credit movements for received payments, split by paymentSplit: a "payment" line for the
+ * cash and a "tds" line for the TDS. A legacy "TDS Deducted" row is all TDS, so it appears
+ * once, as a tds line - never also as cash. Total credit per payment = amount + tdsAmount. */
+export function customerPaymentMovements(payments: LedgerPayment[]): RawMovement[] {
+  return payments.flatMap((p) => {
+    const { cash, tds } = splitPayment(p);
+    const label = paymentRefLabel(p);
+    const out: RawMovement[] = [];
+    if (!isLegacyTdsPayment(p)) {
+      out.push({ date: p.receivedDate, type: "payment", refNumber: label, refId: p.id, debit: ZERO, credit: cash });
+    }
+    if (tds.gt(ZERO)) {
+      out.push({ date: p.receivedDate, type: "tds", refNumber: `TDS - ${label}`, refId: p.id, debit: ZERO, credit: tds });
+    }
+    return out;
+  });
+}
+
 /** Issued docs only (never drafts/cancelled) - an unissued or cancelled invoice isn't a real debt. */
 const INVOICE_LEDGER_STATUSES = [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID, INVOICE_STATUS.PAID];
 /** Bills not yet approved aren't a confirmed liability; rejected/cancelled ones never were. */
@@ -118,13 +156,14 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
     select: { id: true, invoiceNumber: true, issueDate: true, total: true },
   });
   // Direct customerId query - invoiceId/invoice is now optional (payment may be an unallocated
-  // advance, or split across several invoices via PaymentAllocation; see ACCOUNTING_LITE_PLAN §5.2).
+  // advance, or split across several invoices via PaymentAllocation; see ACCOUNTING_LITE_PLAN Â§5.2).
   const payments = await prisma.paymentReceived.findMany({
     where: { customerId },
     select: {
       id: true,
       amount: true,
       tdsAmount: true,
+      method: true,
       receivedDate: true,
       invoice: { select: { invoiceNumber: true } },
       allocations: { select: { invoice: { select: { invoiceNumber: true } } } },
@@ -137,15 +176,6 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
     select: { id: true, noteNumber: true, issueDate: true, total: true },
   });
 
-  /** Best-effort human label for a payment's ref column: the legacy single invoice, the
-   * allocated invoice(s), or a generic label for an unallocated advance. */
-  const paymentRefLabel = (p: (typeof payments)[number]): string => {
-    if (p.invoice) return p.invoice.invoiceNumber;
-    if (p.allocations.length === 1) return p.allocations[0].invoice.invoiceNumber;
-    if (p.allocations.length > 1) return p.allocations.map((a) => a.invoice.invoiceNumber).join(", ");
-    return "Advance";
-  };
-
   const movements: RawMovement[] = [
     ...invoices.map((inv): RawMovement => ({
       date: inv.issueDate,
@@ -155,24 +185,7 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
       debit: D(inv.total),
       credit: ZERO,
     })),
-    ...payments.map((p): RawMovement => ({
-      date: p.receivedDate,
-      type: "payment",
-      refNumber: paymentRefLabel(p),
-      refId: p.id,
-      debit: ZERO,
-      credit: D(p.amount),
-    })),
-    ...payments
-      .filter((p) => D(p.tdsAmount).gt(ZERO))
-      .map((p): RawMovement => ({
-        date: p.receivedDate,
-        type: "tds",
-        refNumber: `TDS - ${paymentRefLabel(p)}`,
-        refId: p.id,
-        debit: ZERO,
-        credit: D(p.tdsAmount),
-      })),
+    ...customerPaymentMovements(payments),
     ...creditNotes.map((cn): RawMovement => ({
       date: cn.issueDate,
       type: "credit_note",

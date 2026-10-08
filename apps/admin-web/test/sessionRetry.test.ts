@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isSessionRejected, retryDelayMs, RETRY_MAX_MS } from "../src/lib/sessionRetry";
+import { isSessionRejected, retryDelayMs, RETRY_MAX_MS, sessionWaitsForSettings } from "../src/lib/sessionRetry";
 import { ApiError } from "../src/lib/apiClient";
 
 test("only a real 401 counts as a rejected session", () => {
@@ -23,6 +23,13 @@ test("ApiError keeps the old message format and exposes the status", () => {
   assert.ok(e instanceof Error);
   assert.equal(e.message, "Request failed: 404");
   assert.equal(e.status, 404);
+});
+
+test("only a browser with no saved theme waits for /settings before leaving the loading screen", () => {
+  assert.equal(sessionWaitsForSettings(null), true); // first visit: theme not known yet
+  assert.equal(sessionWaitsForSettings(""), true);
+  assert.equal(sessionWaitsForSettings("slate"), false); // reload: saved theme already painted
+  assert.equal(sessionWaitsForSettings("custom"), false);
 });
 
 test("retry backoff doubles from 1s and caps at 30s", () => {

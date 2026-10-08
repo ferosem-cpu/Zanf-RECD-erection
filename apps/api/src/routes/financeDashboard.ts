@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
 import { settledFromAllocations } from "../services/settlement";
+import { splitPayment } from "../services/paymentSplit";
 
 export const financeDashboardRouter = Router();
 financeDashboardRouter.use(authenticate);
@@ -47,7 +48,8 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
   }
 
   const paymentsReceived = await prisma.paymentReceived.findMany({ where: { receivedDate: { gte: monthStart } } });
-  const receivedThisMonth = paymentsReceived.reduce((s, p) => s.plus(D(p.amount)), zero);
+  // Cash only: legacy "TDS Deducted" rows are TDS, not money received (same as tdsAmount).
+  const receivedThisMonth = paymentsReceived.reduce((s, p) => s.plus(splitPayment(p).cash), zero);
 
   const bills = await prisma.bill.findMany({
     where: { status: { in: [BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID] } },
@@ -181,7 +183,7 @@ financeDashboardRouter.get("/reports/monthly-revenue", requirePermission(PERMISS
   const payments = await prisma.paymentReceived.findMany({ where: { receivedDate: { gte: startMonth } } });
   for (const p of payments) {
     const m = `${p.receivedDate.getFullYear()}-${String(p.receivedDate.getMonth() + 1).padStart(2, "0")}`;
-    paymentsByMonth.set(m, (paymentsByMonth.get(m) ?? new Prisma.Decimal(0)).plus(D(p.amount)));
+    paymentsByMonth.set(m, (paymentsByMonth.get(m) ?? new Prisma.Decimal(0)).plus(splitPayment(p).cash));
   }
   const expenses = await prisma.expense.findMany({ where: { expenseDate: { gte: startMonth } } });
   for (const e of expenses) {

@@ -1,5 +1,15 @@
-import { google } from "googleapis";
+import type { google as GoogleApis } from "googleapis";
 import { Readable } from "node:stream";
+
+// googleapis is loaded on first use, not at module load: it is ~1.1 s of the ~1.6 s it takes
+// to import the whole API (scripts/measureColdStart.js), and this module sits on the startup
+// import chain (agent tools, sites, backup), so every cold start paid for it even though only
+// Drive search/folders/backup uploads need it. A literal require() keeps @vercel/nft tracing it.
+let googleApis: typeof GoogleApis | undefined;
+function google(): typeof GoogleApis {
+  googleApis ??= (require("googleapis") as typeof import("googleapis")).google;
+  return googleApis;
+}
 
 // Separate from lib/googleAuth.ts (which verifies end-user Google Sign-In ID tokens via
 // GOOGLE_CLIENT_ID). This client authenticates as the dedicated company Drive account
@@ -19,7 +29,7 @@ function requireEnv(name: string): string {
   return value;
 }
 
-let oauth2Client: InstanceType<typeof google.auth.OAuth2> | undefined;
+let oauth2Client: InstanceType<typeof GoogleApis.auth.OAuth2> | undefined;
 
 function getOAuth2Client() {
   if (oauth2Client) return oauth2Client;
@@ -28,7 +38,7 @@ function getOAuth2Client() {
   const clientSecret = requireEnv("GOOGLE_DRIVE_CLIENT_SECRET");
   const refreshToken = requireEnv("GOOGLE_DRIVE_REFRESH_TOKEN");
 
-  const client = new google.auth.OAuth2(clientId, clientSecret);
+  const client = new (google().auth.OAuth2)(clientId, clientSecret);
   client.setCredentials({ refresh_token: refreshToken });
   oauth2Client = client;
   return client;
@@ -40,7 +50,7 @@ export function getDriveFolderId(): string {
 }
 
 export function getDriveClient() {
-  return google.drive({ version: "v3", auth: getOAuth2Client() });
+  return google().drive({ version: "v3", auth: getOAuth2Client() });
 }
 
 /**
