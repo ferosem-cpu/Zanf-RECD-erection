@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
+import { isoDateIST } from "./zanAppReadTools";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const DOC_TYPES = [
@@ -89,7 +90,7 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
         payments: inv.paymentAllocations.map((a) => ({
           id: a.payment.id, amount: a.amount, tdsAmount: a.payment.tdsAmount,
           tdsCertificateRef: a.payment.tdsCertificateRef, method: a.payment.method,
-          reference: a.payment.reference, receivedDate: a.payment.receivedDate,
+          reference: a.payment.reference, receivedDate: isoDateIST(a.payment.receivedDate),
           otherInvoices: a.payment.allocations
             .filter((other) => other.invoiceId !== inv.id)
             .map((other) => ({ id: other.invoice.id, invoiceNumber: other.invoice.invoiceNumber, amount: other.amount })),
