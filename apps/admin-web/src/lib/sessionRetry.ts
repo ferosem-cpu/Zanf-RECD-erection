@@ -9,6 +9,15 @@ export function isSessionRejected(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { status?: unknown }).status === 401;
 }
 
+/** Whether the "Loading session..." screen must also wait for GET /settings (theme, colours,
+ * logo) after /auth/me succeeds. Only on a browser that has never stored a theme: everywhere
+ * else ThemeInitializer has already painted the saved theme from localStorage and Nav reads the
+ * saved logo, so the fresh settings are applied in the background when they arrive instead of
+ * holding the whole app behind a second (logo-sized) request. */
+export function sessionWaitsForSettings(savedThemeKey: string | null): boolean {
+  return !savedThemeKey;
+}
+
 export const RETRY_BASE_MS = 1000;
 export const RETRY_MAX_MS = 30000;
 

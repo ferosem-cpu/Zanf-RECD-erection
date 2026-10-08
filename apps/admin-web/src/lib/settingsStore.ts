@@ -15,6 +15,12 @@ export function getSavedThemeKey(): string {
   return window.localStorage.getItem(KEYS.THEME) ?? "slate";
 }
 
+/** The stored theme key, or null if this browser has never saved one (no "slate" default). */
+export function getStoredThemeKey(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(KEYS.THEME);
+}
+
 export function saveThemeKey(key: string) {
   window.localStorage.setItem(KEYS.THEME, key);
 }
