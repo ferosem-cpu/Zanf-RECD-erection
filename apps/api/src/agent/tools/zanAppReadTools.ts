@@ -378,7 +378,8 @@ const searchPurchaseOrders: AgentTool = {
   description:
     "Search purchase orders by PO number or supplier name. Returns id, poNumber, supplier, " +
     "status, orderDate, expectedDate, and total. Use get_document_detail for line items. " +
-    "totalCount, totalValue and byStatus cover ALL matching POs, not just the listed rows.",
+    "totalCount, totalValue and byStatus cover ALL matching POs, not just the listed rows. " +
+    "POs are commitments, not payables - for 'how much do we owe / pending to pay' use get_payables.",
   inputSchema: {
     type: "object",
     properties: {
