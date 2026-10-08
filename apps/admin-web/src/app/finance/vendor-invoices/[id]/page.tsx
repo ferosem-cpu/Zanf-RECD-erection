@@ -34,7 +34,7 @@ interface BillDetail {
 export default function VendorInvoiceDetailPage() {
   const router = useRouter();
   const { id } = useParams<{ id: string }>();
-  const { hasPermission } = useAuth();
+  const { user, hasPermission } = useAuth();
   const canApprove = hasPermission("approve_vendor_invoice");
   const canRecordPayment = hasPermission("record_payments");
 
@@ -220,7 +220,7 @@ export default function VendorInvoiceDetailPage() {
           {canApprove && ["uploaded", "verified", "approved"].includes(bill.status) && bill.payments.length === 0 && (
             <button className="text-xs text-red-500" disabled={!!action} onClick={() => doAction("cancel")}>Cancel this vendor invoice</button>
           )}
-          {canDeleteRejectedBill(bill, canApprove) && (
+          {canDeleteRejectedBill(bill, user?.role.key) && (
             <button className="rounded-lg border border-red-300 text-red-600 px-4 py-2 text-sm" disabled={!!action} onClick={() => setDeleteOpen(true)}>
               Delete rejected invoice
             </button>

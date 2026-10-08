@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { BILL_STATUS, billDeleteSchema } from "@recd/shared";
 import { archivedBillNumber, duplicateBillNumberMessage, rejectedBillDeleteBlocker } from "../src/services/billDelete";
 
@@ -32,4 +34,12 @@ test("a delete reason is required", () => {
   assert.equal(billDeleteSchema.safeParse({ reason: "  " }).success, false);
   assert.equal(billDeleteSchema.safeParse({}).success, false);
   assert.equal(billDeleteSchema.safeParse({ reason: "typo in invoice number" }).success, true);
+});
+
+test("deleting a rejected vendor invoice is admin-only (Super Admin, Owner/Admin), not approvers", () => {
+  const source = readFileSync(join(__dirname, "../src/routes/bills.ts"), "utf8");
+  const route = source.split("\n").find((l) => l.includes('billsRouter.post("/:id/delete"'))!;
+  assert.match(route, /requireRole\(ROLE_KEY\.SUPER_ADMIN, ROLE_KEY\.OWNER_ADMIN\)/);
+  // approve_vendor_invoice holders (finance, management) can reject but not delete.
+  assert.doesNotMatch(route, /requirePermission/);
 });

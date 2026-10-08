@@ -37,10 +37,12 @@ export const BILL_STATUS_LABEL: Record<string, string> = {
   deleted: "Deleted",
 };
 
-/** "Delete rejected invoice" is offered only to approvers, only on a rejected bill with no
- * payments - the API (POST /bills/:id/delete) re-checks this and also refuses debit notes. */
-export function canDeleteRejectedBill(bill: { status: string; payments: unknown[] }, canApprove: boolean): boolean {
-  return canApprove && bill.status === "rejected" && bill.payments.length === 0;
+/** "Delete rejected invoice" is offered only to admins (Super Admin, Owner/Admin), only on a
+ * rejected bill with no payments - the API (POST /bills/:id/delete) re-checks this and also
+ * refuses debit notes. */
+export function canDeleteRejectedBill(bill: { status: string; payments: unknown[] }, roleKey: string | undefined): boolean {
+  const isAdmin = roleKey === "super_admin" || roleKey === "owner_admin";
+  return isAdmin && bill.status === "rejected" && bill.payments.length === 0;
 }
 
 export const CREDIT_NOTE_STATUS_LABEL: Record<string, string> = {

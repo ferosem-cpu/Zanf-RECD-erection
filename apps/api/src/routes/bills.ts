@@ -8,6 +8,7 @@ import { Router } from "express";
 import { Prisma } from "@prisma/client";
 import {
   PERMISSION_KEY,
+  ROLE_KEY,
   BILL_STATUS,
   BILL_AUDIT_ACTION,
   billCreateSchema,
@@ -20,7 +21,7 @@ import {
   advanceApplicationCreateSchema,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
-import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
+import { authenticate, requirePermission, requireRole, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { extractBillFromFile, findSupplierCandidates, ExtractionUnavailableError } from "../agent/billExtraction";
@@ -390,8 +391,8 @@ billsRouter.post("/:id/reject", requirePermission(APPROVE), async (req: Authenti
 });
 
 // Delete a REJECTED vendor invoice (soft: archived, number freed, audit kept) - see
-// services/billDelete.ts. Same permission as reject.
-billsRouter.post("/:id/delete", requirePermission(APPROVE), async (req: AuthenticatedRequest, res) => {
+// services/billDelete.ts. Admins only (Super Admin, Owner/Admin) - approvers can reject but not delete.
+billsRouter.post("/:id/delete", requireRole(ROLE_KEY.SUPER_ADMIN, ROLE_KEY.OWNER_ADMIN), async (req: AuthenticatedRequest, res) => {
   const id = asString(req.params.id);
   const parsed = billDeleteSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "A reason (at least 3 characters) is required to delete a vendor invoice" });
