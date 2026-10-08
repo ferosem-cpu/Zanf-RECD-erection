@@ -10,6 +10,7 @@ import { PERMISSION_KEY, CREDIT_NOTE_STATUS, STAGE_KEY, PAYMENT_METHOD } from "@
 import { prisma } from "../../lib/prisma";
 import { buildCustomerLedger } from "../../services/ledger";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
+import { paymentCashAndTds, normalizePaymentMethod } from "../../services/paymentSplit";
 import { LIST_LIMIT, listMeta, listPage } from "../listResult";
 import type { AgentTool, AgentAuthContext } from "./types";
 
@@ -1095,11 +1096,6 @@ const PAYMENT_METHOD_LABEL: Record<string, string> = {
   bank_transfer: "Bank Transfer", upi: "UPI", cheque: "Cheque", cash: "Cash", tds: "TDS Deducted", other: "Other",
 };
 
-/** Stored method key: trimmed + lowercased (the app only ever writes the lowercase PAYMENT_METHOD keys). */
-export function normalizePaymentMethod(method: string | null | undefined): string {
-  return String(method ?? "").trim().toLowerCase();
-}
-
 /** Resolves a method filter typed by the model or user ("TDS Deducted", "Bank transfer", "upi")
  * to the stored PAYMENT_METHOD key, so "TDS Deducted" finds the legacy method="tds" rows. */
 export function resolvePaymentMethodFilter(input: string): string {
@@ -1109,18 +1105,9 @@ export function resolvePaymentMethodFilter(input: string): string {
   return key === "tds_deducted" ? PAYMENT_METHOD.TDS : key;
 }
 
-/** Splits one payment into cash and TDS. Two shapes exist in the data:
- * - current: cash in `amount`, TDS withheld in `tdsAmount` (any method);
- * - legacy method "tds" ("TDS Deducted" on the Payments page): the whole `amount` IS TDS
- *   (PAYMENT_METHOD.TDS in packages/shared) and tdsAmount is normally 0.
- * Summing only tdsAmount reported TDS = 0 for months whose TDS sat on legacy rows. */
-export function paymentCashAndTds(row: Pick<PaymentSummaryRow, "amount" | "tdsAmount" | "method">): { cash: number; tds: number } {
-  const amount = row.amount ?? 0;
-  const tdsField = row.tdsAmount ?? 0;
-  return normalizePaymentMethod(row.method) === PAYMENT_METHOD.TDS
-    ? { cash: 0, tds: sumMoney([amount, tdsField]) }
-    : { cash: amount, tds: tdsField };
-}
+// Cash/TDS split (legacy "TDS Deducted" rows are all TDS) lives in services/paymentSplit.ts,
+// shared with the TDS register, customer ledger and finance dashboard; re-exported for tests.
+export { paymentCashAndTds, normalizePaymentMethod };
 
 function paymentGroupTotals(group: PaymentSummaryRow[]) {
   const split = group.map(paymentCashAndTds);

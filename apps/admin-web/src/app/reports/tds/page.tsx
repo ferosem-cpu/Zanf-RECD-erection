@@ -16,6 +16,8 @@ interface TdsRow {
   grossAmount: string;
   tdsAmount: string;
   tdsCertificateRef?: string | null;
+  /** Legacy "TDS Deducted" payment: the whole amount is TDS, so gross received is 0. */
+  legacyTdsEntry?: boolean;
 }
 interface CustomerTotal { customerId: string; customerName: string; grossAmount: number; tdsAmount: number; }
 interface TdsResponse {
@@ -118,7 +120,10 @@ export default function TdsReportPage() {
                       <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.date)}</td>
                       <td className="px-4 py-3">{r.customerName}</td>
                       <td className="px-4 py-3 text-gray-500 font-mono text-xs">{r.invoiceNumbers.join(", ") || "—"}</td>
-                      <td className="px-4 py-3 text-right">{formatINR(r.grossAmount)}</td>
+                      <td className="px-4 py-3 text-right">
+                        {formatINR(r.grossAmount)}
+                        {r.legacyTdsEntry && <span className="block text-xs text-gray-400">TDS Deducted entry</span>}
+                      </td>
                       <td className="px-4 py-3 text-right font-semibold">{formatINR(r.tdsAmount)}</td>
                       <td className="px-4 py-3 text-gray-500">{r.tdsCertificateRef ?? "—"}</td>
                     </tr>
