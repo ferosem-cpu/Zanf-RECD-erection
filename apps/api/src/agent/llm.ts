@@ -10,6 +10,7 @@ import type { UnifiedMessage, UnifiedToolSchema, LlmAdapter, SendMessageResult }
 import { formatProviderFailures, providersToAttempt, recordProviderFailure, type ProviderFailure } from "./providers/providerHealth";
 import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
 import { AgentDeadline, LLM_CALL_TIMEOUT_MS } from "./timeouts";
+import { annotateListResult } from "./listResult";
 
 const MAX_TOOL_TURNS = 8;
 
@@ -125,7 +126,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
           if (!tool) {
             resultValue = { error: `Unknown tool: ${call.name}` };
           } else {
-            resultValue = await tool.handler(call.input, params.auth);
+            resultValue = annotateListResult(await tool.handler(call.input, params.auth));
           }
         }
       } catch (err) {
