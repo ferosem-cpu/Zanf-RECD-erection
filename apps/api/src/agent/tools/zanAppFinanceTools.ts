@@ -198,7 +198,7 @@ const getPayables: AgentTool = {
         where: { ...bySupplier, status: { in: OPEN_PO_STATUSES } },
         select: {
           id: true, poNumber: true, status: true, orderDate: true, total: true, supplier: { select: { name: true } },
-          bills: { where: { status: { notIn: [BILL_STATUS.REJECTED, BILL_STATUS.CANCELLED] } }, select: { total: true } },
+          bills: { where: { status: { notIn: [BILL_STATUS.REJECTED, BILL_STATUS.CANCELLED, BILL_STATUS.DELETED] } }, select: { total: true } },
         },
         orderBy: { orderDate: "asc" },
       }),

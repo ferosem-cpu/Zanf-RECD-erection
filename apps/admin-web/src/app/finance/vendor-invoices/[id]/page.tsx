@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
-import { formatINR, formatDate, BILL_STATUS_LABEL, PAYMENT_METHOD_LABEL, statusPillClass } from "@/lib/finance";
+import { formatINR, formatDate, BILL_STATUS_LABEL, PAYMENT_METHOD_LABEL, statusPillClass, canDeleteRejectedBill } from "@/lib/finance";
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; taxRatePct: string; lineTotal: string; }
 interface Allocation {
@@ -45,6 +45,8 @@ export default function VendorInvoiceDetailPage() {
 
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
   const [payOpen, setPayOpen] = useState(false);
   const [pay, setPay] = useState({ amount: "", method: "bank_transfer", reference: "", paidDate: new Date().toISOString().slice(0, 10), notes: "" });
 
@@ -73,6 +75,13 @@ export default function VendorInvoiceDetailPage() {
     await doAction("reject", { reason: rejectReason });
     setRejectOpen(false);
     setRejectReason("");
+  }
+
+  async function submitDelete(e: React.FormEvent) {
+    e.preventDefault();
+    await doAction("delete", { reason: deleteReason });
+    setDeleteOpen(false);
+    setDeleteReason("");
   }
 
   async function submitPayment(e: React.FormEvent) {
@@ -111,6 +120,11 @@ export default function VendorInvoiceDetailPage() {
       {msg && <div className="rounded-lg bg-blue-50 px-4 py-2 text-sm text-blue-700">{msg}</div>}
       {bill.status === "rejected" && bill.rejectedReason && (
         <div className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-700">Rejected: {bill.rejectedReason}</div>
+      )}
+      {bill.status === "deleted" && (
+        <div className="rounded-lg bg-gray-100 px-4 py-2 text-sm text-gray-700">
+          This rejected vendor invoice was deleted. It is kept here only for the audit trail; its original number can be entered again.
+        </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -206,6 +220,11 @@ export default function VendorInvoiceDetailPage() {
           {canApprove && ["uploaded", "verified", "approved"].includes(bill.status) && bill.payments.length === 0 && (
             <button className="text-xs text-red-500" disabled={!!action} onClick={() => doAction("cancel")}>Cancel this vendor invoice</button>
           )}
+          {canDeleteRejectedBill(bill, canApprove) && (
+            <button className="rounded-lg border border-red-300 text-red-600 px-4 py-2 text-sm" disabled={!!action} onClick={() => setDeleteOpen(true)}>
+              Delete rejected invoice
+            </button>
+          )}
           {canRecordPayment && (bill.status === "approved" || bill.status === "partially_paid") && (
             <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" onClick={() => setPayOpen(true)}>Record payment</button>
           )}
@@ -234,6 +253,25 @@ export default function VendorInvoiceDetailPage() {
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setRejectOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Cancel</button>
                 <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">Reject</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteOpen && (
+        <div className="modal-backdrop" onClick={() => setDeleteOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-2">Delete rejected vendor invoice {bill.billNumber}?</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              It disappears from the vendor invoice list and the number {bill.billNumber} can be entered again for {bill.supplier.name}.
+              The scan and audit trail are kept, and this is recorded in the audit trail with your name and reason. This cannot be undone.
+            </p>
+            <form onSubmit={submitDelete} className="space-y-4">
+              <textarea required minLength={3} className="field w-full" rows={3} placeholder="Reason (e.g. wrong invoice number entered)" value={deleteReason} onChange={(e) => setDeleteReason(e.target.value)} />
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={() => setDeleteOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Keep it</button>
+                <button type="submit" disabled={!!action || deleteReason.trim().length < 3} className="rounded-lg bg-red-600 text-white px-4 py-2 text-sm">Delete</button>
               </div>
             </form>
           </div>

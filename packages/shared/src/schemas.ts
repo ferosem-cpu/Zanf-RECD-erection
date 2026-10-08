@@ -572,6 +572,11 @@ export const billRejectSchema = z.object({
   reason: z.string().min(1).max(1000),
 });
 
+/** POST /bills/:id/delete - only for a rejected vendor invoice; the reason goes to the audit log. */
+export const billDeleteSchema = z.object({
+  reason: z.string().trim().min(3).max(1000),
+});
+
 /** POST /bills/extract request: the raw uploaded file, base64-encoded. */
 export const billExtractRequestSchema = z.object({
   fileDataUrl: z.string().min(1),

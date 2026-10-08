@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import {
   PERMISSION_KEY,
   PO_STATUS,
+  BILL_STATUS,
   PAYMENT_METHOD,
   FINANCE_DOC_TYPE,
   supplierCreateSchema,
@@ -256,7 +257,7 @@ purchaseOrdersRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_PURCHAS
       order: { select: { id: true, orderNumber: true } },
       site: { select: { id: true } },
       lineItems: { orderBy: { sortOrder: "asc" } },
-      bills: { select: { id: true, billNumber: true, status: true, total: true } },
+      bills: { where: { status: { not: BILL_STATUS.DELETED } }, select: { id: true, billNumber: true, status: true, total: true } },
     },
   });
   if (!po) return res.status(404).json({ error: "Purchase order not found" });

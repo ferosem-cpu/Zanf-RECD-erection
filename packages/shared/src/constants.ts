@@ -316,6 +316,9 @@ export const BILL_STATUS = {
   PARTIALLY_PAID: "partially_paid",
   PAID: "paid",
   CANCELLED: "cancelled",
+  /** A REJECTED bill removed by an approver (POST /bills/:id/delete): kept for the audit trail
+   * but hidden from lists, with its billNumber renamed so the original number can be re-used. */
+  DELETED: "deleted",
 } as const;
 export type BillStatus = (typeof BILL_STATUS)[keyof typeof BILL_STATUS];
 
@@ -338,6 +341,7 @@ export const BILL_AUDIT_ACTION = {
   PAYMENT_RECORDED: "payment_recorded",
   CANCELLED: "cancelled",
   ALLOCATION_CHANGED: "allocation_changed",
+  DELETED: "deleted",
 } as const;
 export type BillAuditAction = (typeof BILL_AUDIT_ACTION)[keyof typeof BILL_AUDIT_ACTION];
 

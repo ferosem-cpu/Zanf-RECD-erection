@@ -144,7 +144,11 @@ financeDashboardRouter.get("/reports/gst-summary", requirePermission(PERMISSION_
     where: { docType: "tax_invoice", status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID, INVOICE_STATUS.PAID] }, issueDate: from || to ? { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } : undefined },
   });
   const bills = await prisma.bill.findMany({
-    where: { billDate: from || to ? { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } : undefined },
+    where: {
+      // Rejected/cancelled/deleted bills were never a purchase - no input tax on them.
+      status: { notIn: [BILL_STATUS.REJECTED, BILL_STATUS.CANCELLED, BILL_STATUS.DELETED] },
+      billDate: from || to ? { gte: from ? new Date(from) : undefined, lte: to ? new Date(to) : undefined } : undefined,
+    },
   });
 
   const rows = new Map<string, any>();

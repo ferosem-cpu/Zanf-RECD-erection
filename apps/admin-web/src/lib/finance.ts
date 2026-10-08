@@ -34,7 +34,14 @@ export const BILL_STATUS_LABEL: Record<string, string> = {
   partially_paid: "Partially Paid",
   paid: "Paid",
   cancelled: "Cancelled",
+  deleted: "Deleted",
 };
+
+/** "Delete rejected invoice" is offered only to approvers, only on a rejected bill with no
+ * payments - the API (POST /bills/:id/delete) re-checks this and also refuses debit notes. */
+export function canDeleteRejectedBill(bill: { status: string; payments: unknown[] }, canApprove: boolean): boolean {
+  return canApprove && bill.status === "rejected" && bill.payments.length === 0;
+}
 
 export const CREDIT_NOTE_STATUS_LABEL: Record<string, string> = {
   draft: "Draft",
@@ -69,7 +76,7 @@ export const PAYMENT_METHOD_LABEL: Record<string, string> = {
 export function statusPillClass(status: string): string {
   const paid = ["paid", "received", "accepted", "converted", "closed", "approved", "verified", "invoiced"];
   const warn = ["partially_paid", "partially_received", "issued", "sent", "uploaded", "open"];
-  const err = ["cancelled", "rejected", "expired", "draft", "unpaid"];
+  const err = ["cancelled", "rejected", "expired", "draft", "unpaid", "deleted"];
   if (paid.includes(status)) return "status-pill status-pill-success";
   if (warn.includes(status)) return "status-pill status-pill-warning";
   if (err.includes(status)) return "status-pill status-pill-error";

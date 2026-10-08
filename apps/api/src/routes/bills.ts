@@ -13,6 +13,7 @@ import {
   billCreateSchema,
   billUpdateSchema,
   billRejectSchema,
+  billDeleteSchema,
   billExtractRequestSchema,
   paymentMadeCreateSchema,
   paymentMadeGeneralCreateSchema,
@@ -23,6 +24,7 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { extractBillFromFile, findSupplierCandidates, ExtractionUnavailableError } from "../agent/billExtraction";
+import { archivedBillNumber, duplicateBillNumberMessage, rejectedBillDeleteBlocker } from "../services/billDelete";
 
 export const billsRouter = Router();
 billsRouter.use(authenticate);
@@ -111,7 +113,8 @@ function deriveBillStatus(total: Prisma.Decimal, paid: Prisma.Decimal): string {
 
 // --- List / create ----------------------------------------------------------
 billsRouter.get("/", requirePermission(...CAPTURE), async (req, res) => {
-  const where: Record<string, unknown> = {};
+  // Deleted (archived rejected) bills only show when asked for explicitly.
+  const where: Record<string, unknown> = { status: { not: BILL_STATUS.DELETED } };
   if (typeof req.query.status === "string") where.status = req.query.status;
   if (typeof req.query.supplierId === "string") where.supplierId = req.query.supplierId;
   if (typeof req.query.siteId === "string") where.allocations = { some: { siteId: req.query.siteId } };
@@ -151,7 +154,7 @@ billsRouter.post("/", requirePermission(...CAPTURE), async (req: AuthenticatedRe
     where: { supplierId_billNumber: { supplierId: data.supplierId, billNumber: data.billNumber } },
   });
   if (existingSameNumber) {
-    return res.status(400).json({ error: "A bill with this number already exists for this supplier" });
+    return res.status(400).json({ error: duplicateBillNumberMessage(existingSameNumber.status) });
   }
 
   const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
@@ -381,6 +384,45 @@ billsRouter.post("/:id/reject", requirePermission(APPROVE), async (req: Authenti
   const bill = await prisma.$transaction(async (tx) => {
     const updated = await tx.bill.update({ where: { id }, data: { status: BILL_STATUS.REJECTED, rejectedReason: parsed.data.reason } });
     await tx.billAuditLog.create({ data: { billId: id, actorId: req.auth!.userId, action: BILL_AUDIT_ACTION.REJECTED, summary: `Rejected: ${parsed.data.reason}` } });
+    return updated;
+  });
+  res.json(bill);
+});
+
+// Delete a REJECTED vendor invoice (soft: archived, number freed, audit kept) - see
+// services/billDelete.ts. Same permission as reject.
+billsRouter.post("/:id/delete", requirePermission(APPROVE), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  const parsed = billDeleteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "A reason (at least 3 characters) is required to delete a vendor invoice" });
+
+  const existing = await prisma.bill.findUnique({
+    where: { id },
+    include: { _count: { select: { payments: true, debitNotes: true } } },
+  });
+  if (!existing) return res.status(404).json({ error: "Bill not found" });
+  const blocker = rejectedBillDeleteBlocker({
+    status: existing.status,
+    billNumber: existing.billNumber,
+    paymentCount: existing._count.payments,
+    debitNoteCount: existing._count.debitNotes,
+  });
+  if (blocker) return res.status(400).json({ error: blocker });
+
+  const now = new Date();
+  const bill = await prisma.$transaction(async (tx) => {
+    const updated = await tx.bill.update({
+      where: { id },
+      data: { status: BILL_STATUS.DELETED, billNumber: archivedBillNumber(existing.billNumber, id, now) },
+    });
+    await tx.billAuditLog.create({
+      data: {
+        billId: id,
+        actorId: req.auth!.userId,
+        action: BILL_AUDIT_ACTION.DELETED,
+        summary: `Deleted rejected vendor invoice ${existing.billNumber} (number freed for re-entry). Reason: ${parsed.data.reason}`,
+      },
+    });
     return updated;
   });
   res.json(bill);
