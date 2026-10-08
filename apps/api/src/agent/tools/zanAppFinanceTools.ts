@@ -14,7 +14,7 @@ import {
   summarizePayables as summarizePayablesShared, type PayableBillRow,
 } from "../../services/payables";
 import { LIST_LIMIT, listMeta } from "../listResult";
-import { exclGstPortion, isoDateIST, istDayStart, sumMoney, normalizeLabel, resolveLookupFilter, validValuesList } from "./zanAppReadTools";
+import { OPEN_PO_STATUSES, exclGstPortion, isoDateIST, istDayStart, sumMoney, normalizeLabel, resolveLookupFilter, validValuesList } from "./zanAppReadTools";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const DAY_MS = 86_400_000;
@@ -68,8 +68,8 @@ export function supplierNameMatches(query: string, name: string): boolean {
 // dashboard so the agent and the Outstanding payables KPI can never disagree.
 export { PAYABLE_BILL_STATUSES, AWAITING_VERIFICATION_BILL_STATUSES, ageingBucket };
 export type { PayableBillRow };
-/** Open POs = issued and not yet fully received/closed - commitments, not payables. */
-export const OPEN_PO_STATUSES: string[] = [PO_STATUS.ISSUED, PO_STATUS.PARTIALLY_RECEIVED];
+// Open POs (issued + partially received) are defined next to search_purchase_orders.
+export { OPEN_PO_STATUSES };
 /** POs that count as placed orders for the PO-vs-bills comparison (drafts/cancelled don't). */
 const PLACED_PO_STATUSES: string[] = [PO_STATUS.ISSUED, PO_STATUS.PARTIALLY_RECEIVED, PO_STATUS.RECEIVED, PO_STATUS.CLOSED];
 

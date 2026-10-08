@@ -6,7 +6,7 @@
  * the DB, so Decimal precision loss here is safe.
  */
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, CREDIT_NOTE_STATUS, STAGE_KEY, PAYMENT_METHOD } from "@recd/shared";
+import { PERMISSION_KEY, CREDIT_NOTE_STATUS, STAGE_KEY, PAYMENT_METHOD, PO_STATUS } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
 import { buildCustomerLedger } from "../../services/ledger";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
@@ -397,26 +397,51 @@ const searchInvoices: AgentTool = {
   },
 };
 
+/** Open POs = issued and not yet fully received/closed - commitments, not payables. */
+export const OPEN_PO_STATUSES: string[] = [PO_STATUS.ISSUED, PO_STATUS.PARTIALLY_RECEIVED];
+
+/** Resolves a PO status filter: "open" (any case/spacing) = OPEN_PO_STATUSES, otherwise a
+ * stored status ("Partially received" -> partially_received). Unknown values return the valid list. */
+export function resolvePoStatusFilter(value: unknown): { statuses: string[] } | { error: string; validStatuses: string[] } {
+  const statuses = new Set<string>();
+  for (const token of String(value ?? "").split(",").map(normalizeLabel).filter(Boolean)) {
+    if (token === "open") OPEN_PO_STATUSES.forEach((s) => statuses.add(s));
+    else {
+      const hit = Object.values(PO_STATUS).find((s) => normalizeLabel(s) === token);
+      if (!hit) {
+        return {
+          error: `Unknown purchase order status "${value}".`,
+          validStatuses: ["open (= issued + partially_received)", ...Object.values(PO_STATUS)],
+        };
+      }
+      statuses.add(hit);
+    }
+  }
+  return { statuses: [...statuses] };
+}
+
 const searchPurchaseOrders: AgentTool = {
   name: "search_purchase_orders",
   description:
     "Search purchase orders by PO number or supplier name. Returns id, poNumber, supplier, " +
     "status, orderDate, expectedDate, and total. Use get_document_detail for line items. " +
     "totalCount, totalValue and byStatus cover ALL matching POs, not just the listed rows. " +
+    "For 'open POs' pass status=open = issued + partially_received (closed, cancelled, received and draft are NOT open). " +
     "POs are commitments, not payables - for 'how much do we owe / pending to pay' use get_payables.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "PO number or supplier name (partial match)." },
-      status: { type: "string", description: "Optional filter: draft | issued | partially_received | received | cancelled | closed" },
+      status: { type: "string", description: "Optional filter: open (= issued + partially_received) | draft | issued | partially_received | received | cancelled | closed" },
     },
   },
   handler: async (input, auth) => {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_PURCHASE_ORDERS)) return forbidden("purchase orders");
     const query = input.query ? String(input.query) : undefined;
-    const status = input.status ? String(input.status) : undefined;
+    const statusFilter = resolvePoStatusFilter(input.status);
+    if ("error" in statusFilter) return statusFilter;
     const where: Prisma.PurchaseOrderWhereInput = {
-      ...(status ? { status } : {}),
+      ...(statusFilter.statuses.length ? { status: { in: statusFilter.statuses } } : {}),
       ...(query
         ? { OR: [{ poNumber: { contains: query, mode: "insensitive" } }, { supplier: { name: { contains: query, mode: "insensitive" } } }] }
         : {}),

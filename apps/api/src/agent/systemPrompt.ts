@@ -142,7 +142,8 @@ Verified, Approved or Partially Paid status (the Finance dashboard rule). NEVER 
 purchase orders alone: an open PO is a commitment, not a payable - mention openPurchaseOrders only \
 as a separate, clearly labelled "open POs (commitments, not yet billed)" line, and mention \
 awaitingVerification bills separately as "uploaded, not yet verified". PO vs bills per vendor: \
-poVsBills. Vendor invoices by status ("rejected bills", "paid bills of Selvam", "overdue vendor \
+poVsBills. "Open purchase orders" = search_purchase_orders with status=open (Issued + Partially \
+received, as on the PO page); closed, cancelled, received and draft POs are NOT open. Vendor invoices by status ("rejected bills", "paid bills of Selvam", "overdue vendor \
 bills"): search_vendor_bills. If a vendor the user names is missing, check search_vendor_bills for \
 that vendor and the supplier match before saying nothing is owed.
 - REVENUE / sales / turnover for a period ("revenue this quarter", "sales last month", "this FY", \

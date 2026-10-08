@@ -190,3 +190,48 @@ test("status breakdowns from groupBy give exact count and value", () => {
   const countsOnly = statusBreakdown([{ status: "open", _count: { _all: 4 } }]);
   assert.deepEqual(countsOnly, { totalCount: 4, byStatus: { open: { count: 4 } } });
 });
+
+test("search_purchase_orders: status 'open' = issued + partially received; unknown statuses list the valid ones", async (t) => {
+  const { zanAppReadTools, resolvePoStatusFilter, OPEN_PO_STATUSES } = await import("../src/agent/tools/zanAppReadTools");
+  const { prisma } = await import("../src/lib/prisma");
+  const { PERMISSION_KEY } = await import("@recd/shared");
+  const tool = zanAppReadTools.find((x) => x.name === "search_purchase_orders")!;
+  const auth = { userId: "p", roleKey: "purchase", permissions: new Set<string>([PERMISSION_KEY.MANAGE_PURCHASE_ORDERS]) };
+  const pos = [
+    { id: "1", poNumber: "PO/2026-27/0001", status: "issued", total: "1000.00" },
+    { id: "2", poNumber: "PO/2026-27/0002", status: "closed", total: "2000.00" },
+    { id: "3", poNumber: "PO/2026-27/0003", status: "partially_received", total: "3000.00" },
+    { id: "4", poNumber: "PO/2026-27/0004", status: "draft", total: "4000.00" },
+  ].map((p) => ({ ...p, supplier: { name: "Selvam Enterprises" }, orderDate: new Date("2026-10-01T00:00:00Z"), expectedDate: null }));
+  const matches = (where: any) => pos.filter((p) => !where.status || where.status.in.includes(p.status));
+  const original = Object.getOwnPropertyDescriptor(prisma, "purchaseOrder");
+  Object.defineProperty(prisma, "purchaseOrder", {
+    configurable: true,
+    value: {
+      findMany: async (args: any) => matches(args.where),
+      groupBy: async (args: any) => {
+        const by = new Map<string, any[]>();
+        for (const p of matches(args.where)) by.set(p.status, [...(by.get(p.status) ?? []), p]);
+        return [...by].map(([status, rows]) => ({ status, _count: { _all: rows.length }, _sum: { total: sumMoney(rows.map((r) => Number(r.total))) } }));
+      },
+    },
+  });
+  t.after(() => {
+    if (original) Object.defineProperty(prisma, "purchaseOrder", original);
+    else Reflect.deleteProperty(prisma, "purchaseOrder");
+  });
+
+  assert.deepEqual(OPEN_PO_STATUSES, ["issued", "partially_received"]);
+  for (const status of ["open", "Open", " OPEN ", "open, issued"]) {
+    const res: any = await tool.handler({ status }, auth);
+    assert.deepEqual(res.results.map((r: any) => r.poNumber), ["PO/2026-27/0001", "PO/2026-27/0003"], status);
+  }
+  assert.deepEqual(resolvePoStatusFilter("Partially received"), { statuses: ["partially_received"] });
+  assert.deepEqual(resolvePoStatusFilter(undefined), { statuses: [] });
+  const closed: any = await tool.handler({ status: "closed" }, auth);
+  assert.deepEqual(closed.results.map((r: any) => r.poNumber), ["PO/2026-27/0002"]);
+  const unknown: any = await tool.handler({ status: "pending" }, auth);
+  assert.match(unknown.error, /Unknown purchase order status/);
+  assert.ok(unknown.validStatuses.includes("closed"));
+  assert.ok(unknown.validStatuses.some((s: string) => s.startsWith("open")));
+});
