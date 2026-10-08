@@ -380,6 +380,36 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
 
+- **2026-10-01 — Capability-aware agent document responses (API deployed).**
+  `apps/api/src/agent/systemPrompt.ts` now explains supported document proposals versus
+  reads/queries, attachment extraction versus direct PDF/file manipulation, permission
+  denials versus missing tools, and confirmation/numbering/approval boundaries. Bulk
+  invoice/PI requests (worked example: six site PIs) explicitly retain creation support,
+  explain that only one can be prepared at a time, and offer the first item. The same
+  guidance covers quotations, supplier POs, customer POs, vendor invoices and other record
+  proposals; multiple line items and multi-record queries remain supported. Customer-PO
+  and vendor-bill agent query tools are currently absent, despite their app pages existing.
+  No bulk creation feature, Finance redesign, schema, permission or confirmation changes.
+  `create_invoice`, confirmed-action execution and invoice routes are unchanged.
+  Validation: `npm test` **60 passed** (22 admin-web + 38 API), including five new prompt
+  contract cases and a mocked `create_invoice` regression exercising proforma/tax proposals,
+  permission/conversation checks, required HSN, invalid inputs, default GST/discount, totals,
+  and pending-only writes with no real invoice number. Shared build, API TypeScript
+  `--noEmit`, and `git diff --check` passed. Initial sandbox runs failed at Windows user
+  lookup/Prisma engine download; rerunning outside the sandbox resolved those environment
+  errors. API commit `2359092` deployed through Vercel CLI 62.1.0: local production build,
+  shared-package patch for both function outputs, staged upload, then promotion to
+  `zan-app-api.vercel.app`. Deployment **`dpl_ChCpEPy97fmwazu1FvYjqtCx6YVs`**
+  (`zan-app-anjqgu1qd-ferose-salahudeen-s-projects.vercel.app`) verified READY; staged health
+  200, agent providers without bearer token 401, deliberately invalid login 401; production
+  alias resolved to the new deployment and health returned 200. Error-log scan returned no
+  errors. Previous production deployment for rollback: `dpl_4ENejjotNTcTVuG5hgiGatuuU3c8`
+  (`zan-app-pl37ulnky-ferose-salahudeen-s-projects.vercel.app`). No frontend deploy or DB
+  migration needed. Tests use no production DB or LLM. Prompt tests verify provider instructions,
+  not generated replies: smoke-test in a **new agent conversation**
+  with the configured provider (six PIs, six-PI query, attached bill/customer PO, PDF editing,
+  missing permission). Do not confirm test cards against real records.
+
 - **2026-09-27 — PR #6 merged (`2ec234e`) and deployed: session resilience + guard alignment.**
   Network errors / 5xx no longer log users out (only a 401 does; retry with backoff + banner);
   route guard and sidebar share `admin-web/src/lib/routeAccess.ts` (per-page `/finance/*` and
