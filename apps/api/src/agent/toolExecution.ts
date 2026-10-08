@@ -10,6 +10,7 @@
 import type { AgentTool, AgentAuthContext } from "./tools/types";
 import type { AgentDeadline } from "./timeouts";
 import { annotateListResult } from "./listResult";
+import { datesToIST } from "./istDates";
 
 export interface ToolCallLike {
   id: string;
@@ -83,7 +84,8 @@ async function runOne(call: ToolCallLike, p: ExecuteToolCallsParams): Promise<To
   } catch (err) {
     resultValue = { error: (err as Error).message };
   }
-  return { role: "tool", toolCallId: call.id, toolName: call.name, content: JSON.stringify(resultValue) };
+  // Dates go to the model in IST (as admin-web shows them), never as UTC ISO strings.
+  return { role: "tool", toolCallId: call.id, toolName: call.name, content: JSON.stringify(datesToIST(resultValue)) };
 }
 
 export async function executeToolCalls(p: ExecuteToolCallsParams): Promise<ToolResultMessage[]> {

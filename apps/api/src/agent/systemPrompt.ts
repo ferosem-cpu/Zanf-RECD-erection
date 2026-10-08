@@ -1,3 +1,5 @@
+import { isoDateIST } from "./istDates";
+
 /** Built fresh per-turn (not a static constant) so the model always has the real current
  * date - without this, models reliably guess a wrong "today" (e.g. from their training
  * cutoff) when asked to compute relative dates like "due in 30 days", which matters a lot
@@ -5,7 +7,7 @@
  * live during §61 testing: create_invoice was given issueDate "2023-10-05" instead of the
  * real date, with dueDate computed 30 days from that wrong date. */
 export function buildAgentSystemPrompt(isCustomer: boolean, customInstructions?: string | null): string {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = isoDateIST(new Date());
 
   const audience = isCustomer
     ? `You're chatting with a logged-in CUSTOMER, not staff. Every tool call you make is \

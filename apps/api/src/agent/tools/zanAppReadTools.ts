@@ -12,6 +12,7 @@ import { buildCustomerLedger } from "../../services/ledger";
 import { settledFromAllocations, netInvoiceTotal } from "../../services/settlement";
 import { paymentCashAndTds, normalizePaymentMethod } from "../../services/paymentSplit";
 import { LIST_LIMIT, listMeta, listPage } from "../listResult";
+import { isoDateIST } from "../istDates";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const RESULT_LIMIT = LIST_LIMIT;
@@ -33,13 +34,8 @@ export function sumMoney(values: Array<number | null | undefined>): number {
   return values.reduce<number>((paise, v) => paise + Math.round((v ?? 0) * 100), 0) / 100;
 }
 
-/** Business dates are Indian time (IST = UTC+5:30, no DST). A date-only value saved as UTC
- * midnight and one saved as IST midnight (18:30Z the day before) both land on the right day. */
-const IST_OFFSET_MS = 330 * 60_000;
-
-export function isoDateIST(d: Date): string {
-  return new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
-}
+/** Business dates are Indian time (IST) - see ../istDates. */
+export { isoDateIST };
 
 /** Start of a yyyy-mm-dd day in IST, or undefined if the string isn't a valid date. */
 export function istDayStart(ymd: string): Date | undefined {

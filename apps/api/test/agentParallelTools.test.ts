@@ -98,3 +98,25 @@ test("an intercepted call returns the replacement result without running the too
   assert.deepEqual(JSON.parse(results[0].content), { replaced: true });
   assert.ok(!h.log.includes("start search_a"));
 });
+
+test("dates in tool results reach the model in IST: 2026-09-27T18:30:00Z is 2026-09-28", async () => {
+  const { Prisma } = await import("@prisma/client");
+  const tool: AgentTool = {
+    name: "po_dates", description: "", inputSchema: { type: "object", properties: {} },
+    handler: async () => ({
+      poDate: new Date("2026-09-27T18:30:00Z"), // saved as IST midnight
+      dueDate: new Date("2026-09-28T00:00:00Z"), // saved as UTC midnight (date-only column)
+      rows: [{ createdAt: new Date("2026-09-27T20:15:00Z"), amount: new Prisma.Decimal("10.50") }],
+      note: "2026-09-27",
+    }),
+  };
+  const [res] = await executeToolCalls({
+    calls: [{ id: "c1", name: "po_dates", input: {} }], auth, getTool: () => tool, isWriteTool: () => false,
+  });
+  const out = JSON.parse(res.content);
+  assert.equal(out.poDate, "2026-09-28");
+  assert.equal(out.dueDate, "2026-09-28");
+  assert.equal(out.rows[0].createdAt, "2026-09-28 01:45 IST");
+  assert.equal(out.rows[0].amount, "10.5"); // Decimal untouched (its own toJSON)
+  assert.equal(out.note, "2026-09-27");
+});

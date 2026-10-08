@@ -13,6 +13,7 @@ import { poTaxStates } from "../../lib/purchaseOrderTax";
 import { assertOwnSite } from "../../routes/complaints";
 import { computeBillTotals } from "../../routes/bills";
 import { computeCustomerPoTotals } from "../../routes/customer-purchase-orders";
+import { isoDateIST } from "../istDates";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
@@ -55,7 +56,7 @@ const createExpenseTool: AgentTool = {
     const categoryKey = String(input.categoryKey ?? "").trim();
     const method = String(input.method ?? "");
     const siteId = input.siteId ? String(input.siteId) : null;
-    const expenseDateStr = input.expenseDate ? String(input.expenseDate) : new Date().toISOString().slice(0, 10);
+    const expenseDateStr = input.expenseDate ? String(input.expenseDate) : isoDateIST(new Date());
 
     if (!description) return { error: "description is required." };
     if (!Number.isFinite(amount) || amount <= 0) return { error: "amount must be a positive number." };
@@ -192,7 +193,7 @@ const createPurchaseOrderTool: AgentTool = {
     const supplierName = text(input.supplierName);
     const newSupplierRaw = input.newSupplier && typeof input.newSupplier === "object" ? (input.newSupplier as Record<string, unknown>) : null;
     const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as PoLineItemInput[]) : [];
-    const orderDateStr = text(input.orderDate) ?? new Date().toISOString().slice(0, 10);
+    const orderDateStr = text(input.orderDate) ?? isoDateIST(new Date());
     const expectedDateStr = text(input.expectedDate);
     const vendorQuoteRef = text(input.vendorQuoteRef);
     const vendorQuoteDate = text(input.vendorQuoteDate);
@@ -561,7 +562,7 @@ const createInvoiceTool: AgentTool = {
     const orderId = input.orderId ? String(input.orderId) : null;
     const quotationId = input.quotationId ? String(input.quotationId) : null;
     const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as InvoiceLineItemInput[]) : [];
-    const issueDateStr = input.issueDate ? String(input.issueDate) : new Date().toISOString().slice(0, 10);
+    const issueDateStr = input.issueDate ? String(input.issueDate) : isoDateIST(new Date());
     const dueDateStr = input.dueDate ? String(input.dueDate) : null;
     const notes = input.notes ? String(input.notes) : null;
     const terms = input.terms ? String(input.terms) : null;
@@ -961,7 +962,7 @@ const createVendorInvoiceTool: AgentTool = {
     const supplierName = input.supplierName ? String(input.supplierName) : null;
     const purchaseOrderId = input.purchaseOrderId ? String(input.purchaseOrderId) : null;
     const billNumber = String(input.billNumber ?? "").trim();
-    const billDateStr = input.billDate ? String(input.billDate) : new Date().toISOString().slice(0, 10);
+    const billDateStr = input.billDate ? String(input.billDate) : isoDateIST(new Date());
     const dueDateStr = input.dueDate ? String(input.dueDate) : null;
     const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as BillLineItemInput[]) : [];
     const notes = input.notes ? String(input.notes) : null;
@@ -1120,7 +1121,7 @@ const createCustomerPoTool: AgentTool = {
     const orderId = input.orderId ? String(input.orderId) : null;
     const invoiceId = input.invoiceId ? String(input.invoiceId) : null;
     const poNumber = String(input.poNumber ?? "").trim();
-    const poDateStr = input.poDate ? String(input.poDate) : new Date().toISOString().slice(0, 10);
+    const poDateStr = input.poDate ? String(input.poDate) : isoDateIST(new Date());
     const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as CustomerPoLineItemInput[]) : [];
     const notes = input.notes ? String(input.notes) : null;
 
