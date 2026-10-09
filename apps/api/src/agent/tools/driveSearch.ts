@@ -55,6 +55,23 @@ const MAX_PAGES_PER_QUERY = 5;
 const MAX_FOLDERS = 2000;
 export const FOLDER_TREE_TTL_MS = 10 * 60_000;
 
+/** App backups (zanapp-backup-*.json from the backup job) and other JSON/data dumps share the
+ * folder but are not documents - they hold whole-database exports, so the agent never searches,
+ * lists or reads them. Server-side clause first, then isHiddenDriveFile as a defensive filter. */
+export const HIDDEN_FILES_CLAUSE = "mimeType != 'application/json' and not name contains 'zanapp-backup'";
+export function isHiddenDriveFile(name: string | null | undefined, mimeType: string | null | undefined): boolean {
+  const n = (name ?? "").toLowerCase();
+  if ((mimeType ?? "").toLowerCase().includes("json")) return true;
+  return (
+    n.endsWith(".json") ||
+    n.includes("zanapp-backup") ||
+    /\.(bak|backup|dump|sql)(\.(gz|zip))?$/.test(n) ||
+    /(^|[-_ .])backup[-_ .]?\d{4}/.test(n)
+  );
+}
+export const HIDDEN_FILE_MESSAGE =
+  "That file is an app backup / data file (JSON or backup), which the agent does not read. Only documents can be opened.";
+
 /** Google-native docs/sheets need to be exported to a plain format rather than downloaded raw. */
 const GOOGLE_EXPORT_MIME: Record<string, string> = {
   "application/vnd.google-apps.document": "text/plain",
@@ -207,12 +224,12 @@ export async function searchDriveDocuments(
   const tree = await getFolderTree(drive, rootId);
   const text = buildTextClause(query);
   const batches = await Promise.all(
-    chunk([...tree.folders.keys()], PARENT_CHUNK).map((ids) => listAll(drive, `trashed = false and ${parentsClause(ids)} and ${text}`)),
+    chunk([...tree.folders.keys()], PARENT_CHUNK).map((ids) => listAll(drive, `trashed = false and ${HIDDEN_FILES_CLAUSE} and ${parentsClause(ids)} and ${text}`)),
   );
   const seen = new Set<string>();
   const results: DriveSearchResult[] = [];
   for (const f of batches.flat()) {
-    if (!f.id || seen.has(f.id) || !parentInTree(tree, f.parents)) continue;
+    if (!f.id || seen.has(f.id) || !parentInTree(tree, f.parents) || isHiddenDriveFile(f.name, f.mimeType)) continue;
     seen.add(f.id);
     results.push(toResult(tree, f));
   }
@@ -235,12 +252,12 @@ export async function listDriveDocuments(maxResults = 50, deps: { drive?: DriveL
   const tree = await getFolderTree(drive, rootId);
   const batches = await Promise.all(
     chunk([...tree.folders.keys()], PARENT_CHUNK).map((ids) =>
-      listAll(drive, `trashed = false and mimeType != '${FOLDER_MIME}' and ${parentsClause(ids)}`, { orderBy: "modifiedTime desc" }, 1),
+      listAll(drive, `trashed = false and mimeType != '${FOLDER_MIME}' and ${HIDDEN_FILES_CLAUSE} and ${parentsClause(ids)}`, { orderBy: "modifiedTime desc" }, 1),
     ),
   );
   return batches
     .flat()
-    .filter((f) => f.id && parentInTree(tree, f.parents))
+    .filter((f) => f.id && parentInTree(tree, f.parents) && !isHiddenDriveFile(f.name, f.mimeType))
     .map((f) => toResult(tree, f))
     .sort((a, b) => String(b.modifiedTime ?? "").localeCompare(String(a.modifiedTime ?? "")))
     .slice(0, maxResults);
@@ -274,6 +291,7 @@ export async function getFileMetadataWithinFolder(
   const meta = (await drive.files.get({ fileId, fields: "id, name, mimeType, parents, trashed, webViewLink", supportsAllDrives: true })).data as DriveFile;
   if (meta.trashed) throw new ExtractionError("The requested Drive file is in trash");
   if (!meta.name || !meta.mimeType) throw new ExtractionError("The requested Drive file has incomplete metadata");
+  if (isHiddenDriveFile(meta.name, meta.mimeType)) throw new ExtractionError(HIDDEN_FILE_MESSAGE);
 
   let tree = await getFolderTree(drive, rootId);
   let parent = parentInTree(tree, meta.parents);

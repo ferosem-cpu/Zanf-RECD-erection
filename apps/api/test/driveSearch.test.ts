@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildTextClause, searchTokens, searchDriveDocuments, listDriveDocuments, getFileMetadataWithinFolder, resetFolderTreeCache,
-  getFolderTree, FOLDER_TREE_TTL_MS, type DriveLike, type DriveFile,
+  getFolderTree, FOLDER_TREE_TTL_MS, HIDDEN_FILES_CLAUSE, HIDDEN_FILE_MESSAGE, isHiddenDriveFile, type DriveLike, type DriveFile,
 } from "../src/agent/tools/driveSearch";
 import { driveTools } from "../src/agent/tools/driveTool";
 
@@ -21,18 +21,19 @@ function fakeDrive(files: FakeFile[], opts: { ignoreParents?: boolean } = {}) {
         const expr = q
           .replace(/(name|fullText) contains '((?:[^'\\]|\\.)*)'/g, (_m, field, v) => `${field === "name" ? "N" : "F"}(${JSON.stringify(v.replace(/\\(.)/g, "$1").toLowerCase())})`)
           .replace(/'((?:[^'\\]|\\.)*)' in parents/g, (_m, id) => `P(${JSON.stringify(id)})`)
-          .replace(/mimeType = '[^']+'/g, "M()")
-          .replace(/mimeType != '[^']+'/g, "!M()")
+          .replace(/mimeType = '([^']+)'/g, (_m, v) => `M(${JSON.stringify(v)})`)
+          .replace(/mimeType != '([^']+)'/g, (_m, v) => `!M(${JSON.stringify(v)})`)
           .replace(/trashed = false/g, "T()")
           .replace(/\band\b/g, "&&")
-          .replace(/\bor\b/g, "||");
+          .replace(/\bor\b/g, "||")
+          .replace(/\bnot\b/g, "!");
         const evaluate = new Function("N", "F", "P", "M", "T", `return (${expr});`);
         const matches = files.filter((f) =>
           evaluate(
             (v: string) => (f.name ?? "").toLowerCase().includes(v),
             (v: string) => `${f.name ?? ""} ${f.content ?? ""}`.toLowerCase().includes(v),
             (id: string) => opts.ignoreParents || (f.parents ?? []).includes(id),
-            () => f.mimeType === FOLDER,
+            (v: string) => f.mimeType === v,
             () => !f.trashed,
           ),
         );
@@ -149,4 +150,38 @@ test("empty result explains scope; customers are refused every Drive tool", asyn
   for (const tool of driveTools) {
     assert.match((await tool.handler({ query: "PCR", fileId: "f3" }, customer) as any).error, /permission/);
   }
+});
+
+test("backups and JSON files are hidden from search_documents, list_documents and get_document_content", async () => {
+  const files: FakeFile[] = [
+    ...library(),
+    { id: "bk1", name: "zanapp-backup-2026-10-08.json", mimeType: "application/json", parents: [ROOT], content: "PCR proforma", modifiedTime: "2026-10-08T00:00:00Z" },
+    { id: "bk2", name: "zanapp-backup-2026-10-09.json.gz", mimeType: "application/gzip", parents: ["inv26"], content: "PCR", modifiedTime: "2026-10-09T00:00:00Z" },
+    { id: "js1", name: "PCR export.json", mimeType: "text/plain", parents: ["bpcl"], modifiedTime: "2026-10-07T00:00:00Z" },
+    { id: "js2", name: "PCR data", mimeType: "application/json", parents: ["bpcl"], modifiedTime: "2026-10-06T00:00:00Z" },
+    { id: "db1", name: "PCR_backup_20261001.sql", mimeType: "application/octet-stream", parents: ["bpcl"], modifiedTime: "2026-10-05T00:00:00Z" },
+  ];
+  const { drive, calls } = fakeDrive(files);
+  const hidden = ["bk1", "bk2", "js1", "js2", "db1"];
+
+  const search = await searchDriveDocuments("PCR", 25, { drive, rootId: ROOT });
+  assert.deepEqual(search.results.map((r) => r.fileId), ["f3"]);
+  assert.ok(calls.some((q) => q.includes(HIDDEN_FILES_CLAUSE) && q.includes("fullText contains")), "server-side filter in the search query");
+
+  const listed = await listDriveDocuments(50, { drive, rootId: ROOT });
+  assert.ok(listed.length > 0);
+  assert.ok(listed.every((r) => !hidden.includes(r.fileId)));
+  assert.ok(calls.some((q) => q.includes(HIDDEN_FILES_CLAUSE) && q.includes("mimeType != 'application/vnd.google-apps.folder'")));
+
+  // Defensive post-filter: even if Drive ignored the clause, nothing hidden comes back.
+  resetFolderTreeCache();
+  const leaky: DriveLike = { files: { ...drive.files, list: async (p) => ({ data: { files: (await drive.files.list({ ...p, q: String(p.q).replace(` and ${HIDDEN_FILES_CLAUSE}`, "") })).data.files } }) } };
+  assert.deepEqual((await searchDriveDocuments("PCR", 25, { drive: leaky, rootId: ROOT })).results.map((r) => r.fileId), ["f3"]);
+  assert.ok((await listDriveDocuments(50, { drive: leaky, rootId: ROOT })).every((r) => !hidden.includes(r.fileId)));
+
+  for (const id of hidden) {
+    await assert.rejects(getFileMetadataWithinFolder(drive, id, ROOT), (e: Error) => e.message === HIDDEN_FILE_MESSAGE, id);
+  }
+  assert.equal(isHiddenDriveFile("Backup DG set quotation.pdf", "application/pdf"), false); // a document about backup DG sets stays visible
+  assert.equal(isHiddenDriveFile("PCR Report - Hosakote.pdf", "application/pdf"), false);
 });
