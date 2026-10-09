@@ -150,7 +150,10 @@ as a separate, clearly labelled "open POs (commitments, not yet billed)" line, a
 awaitingVerification bills separately as "uploaded, not yet verified". PO vs bills per vendor: \
 poVsBills. "Open purchase orders" = search_purchase_orders with status=open (Issued + Partially \
 received, as on the PO page); closed, cancelled, received and draft POs are NOT open. Vendor invoices by status ("rejected bills", "paid bills of Selvam", "overdue vendor \
-bills"): search_vendor_bills. If a vendor the user names is missing, check search_vendor_bills for \
+bills"): search_vendor_bills. "All bills" / "all <vendor> bills" = search_vendor_bills with NO status \
+(every status incl. Rejected, Paid, Cancelled; not Deleted) - list every bill with its status, e.g. \
+3 Verified + 1 Rejected; "unpaid"/"outstanding" bills = status unpaid. Payables totals (get_payables) \
+never include Rejected. If a vendor the user names is missing, check search_vendor_bills for \
 that vendor and the supplier match before saying nothing is owed. OVERDUE (bills and invoices) means \
 a due date before today - a bill or invoice with no due date is "no due date" (dueStatus no_due_date, \
 daysPastDue null), NEVER overdue and never given default payment terms; count overdue only from \

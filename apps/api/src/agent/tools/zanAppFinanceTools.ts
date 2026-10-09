@@ -286,12 +286,15 @@ export const BILL_STATUS_OPTIONS = [
   { key: BILL_STATUS.DELETED, label: "Deleted" },
 ];
 const UNPAID_WORDS = new Set(["unpaid", "outstanding", "open", "due", "pending", "payable", "payables", "not paid"]);
+/** "All bills" = no status filter: every status (Rejected, Paid, Cancelled included) except Deleted. */
+const ALL_WORDS = new Set(["all", "any", "every", "everything", "all statuses", "any status"]);
 
-/** Status filter: keys or labels in any case, comma lists, and "unpaid"/"outstanding" = the
- * payable statuses. Unknown values are reported with the valid list. */
+/** Status filter: keys or labels in any case, comma lists, "all"/"any" = no filter (every status
+ * except deleted) and "unpaid"/"outstanding" = the payable statuses. Unknown values are reported
+ * with the valid list. */
 export function resolveBillStatusFilter(value: unknown): { statuses?: string[]; unknown: string[] } {
   const raw = Array.isArray(value) ? value.map(String) : value == null ? [] : String(value).split(",");
-  const tokens = raw.map((t) => t.trim()).filter(Boolean);
+  const tokens = raw.map((t) => t.trim()).filter((t) => t && !ALL_WORDS.has(normalizeLabel(t)));
   const statuses: string[] = [];
   const rest: string[] = [];
   for (const t of tokens) {
@@ -309,7 +312,9 @@ const searchVendorBills: AgentTool = {
     "Search VENDOR INVOICES / supplier bills (what suppliers billed us - Finance > Vendor Invoices). Filters: " +
     "supplier (tolerant: case, punctuation, 'Ent.' = 'Enterprises', partial), status (Uploaded, Verified, Approved, " +
     "Partially Paid, Paid, Rejected, Cancelled, Deleted - keys or labels, any case, comma list; 'unpaid' = verified + " +
-    "approved + partially paid), billNumber, overdueOnly. Returns totalCount and totals {count, totalAmount, " +
+    "approved + partially paid), billNumber, overdueOnly. 'All bills' of a vendor = NO status (or 'all'): every " +
+    "status incl. Rejected, Paid and Cancelled (not Deleted) - list them all with each bill's status; never use " +
+    "get_payables for 'all bills' (it is only what is still owed). Returns totalCount and totals {count, totalAmount, " +
     "taxableAmount, gstAmount, paid, outstanding} and byStatus over EVERY matching bill, plus up to 15 bills (overdue " +
     "first when overdueOnly, else newest): billNumber, supplier, status, billDate, dueDate, subtotal, taxAmount, total, " +
     "paid, balance, dueStatus (overdue / not_due / no_due_date), daysOverdue, rejectedReason. Overdue needs a due date " +
@@ -387,7 +392,7 @@ const searchVendorBills: AgentTool = {
     return {
       ...listMeta(Math.min(listed.length, LIST_LIMIT), rows.length),
       ...(matchedSuppliers ? { matchedSuppliers } : {}),
-      statusFilter: statuses ?? "all except deleted",
+      statusFilter: statuses ?? "all statuses except deleted (incl. rejected, paid, cancelled) - show every bill with its status",
       totals: {
         count: rows.length,
         totalAmount: sumMoney(rows.map((r) => r.total)),
