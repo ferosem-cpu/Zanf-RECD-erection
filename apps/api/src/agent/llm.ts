@@ -11,7 +11,7 @@ import { formatProviderFailures, providersToAttempt, recordProviderFailure, type
 import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
 import { AgentDeadline, LLM_CALL_TIMEOUT_MS } from "./timeouts";
 import { executeToolCalls } from "./toolExecution";
-import { sendCleaned } from "./assistantText";
+import { sendCleaned, sanitizeHistory } from "./assistantText";
 
 const MAX_TOOL_TURNS = 8;
 
@@ -92,7 +92,8 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
   }
   const adapters = new Map<string, LlmAdapter>();
 
-  let history = [...params.history];
+  // Old assistant turns are replayed sanitised (a stored "<EOS_TOKEN>" reply must not re-prime the model).
+  let history = sanitizeHistory<UnifiedMessage>(params.history);
   const deadline = params.deadline ?? new AgentDeadline();
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {

@@ -43,3 +43,23 @@ test("a second token-only reply throws (so sendWithFallback tries the next provi
   await assert.rejects(sendCleaned(late.send, () => false), /empty reply/); // out of time: no retry
   assert.equal(late.calls(), 1);
 });
+
+test("stored threads are sanitised on load/replay/save: old <EOS_TOKEN> replies never reach the UI or the model", async () => {
+  const { sanitizeHistory, sanitizeAssistantText, EMPTY_REPLY_PLACEHOLDER } = await import("../src/agent/assistantText");
+  const stored = [
+    { role: "user", content: "how many overdue?" },
+    { role: "assistant", content: "<EOS_TOKEN>" },
+    { role: "assistant", content: "3 invoices are overdue.<EOS_TOKEN>" },
+    { role: "assistant", content: "<|endoftext|>", toolCalls: [{ id: "t1", name: "search_invoices", input: {} }] },
+    { role: "tool", toolCallId: "t1", toolName: "search_invoices", content: "{\"note\":\"<EOS_TOKEN> stays in raw tool JSON\"}" },
+  ];
+  const out = sanitizeHistory<any>(stored);
+  assert.deepEqual(out.map((m) => m.content), [
+    "how many overdue?", EMPTY_REPLY_PLACEHOLDER, "3 invoices are overdue.", "", stored[4].content,
+  ]);
+  assert.equal(out[3].toolCalls.length, 1);
+  assert.equal(stored[1].content, "<EOS_TOKEN>", "the stored row itself is not rewritten");
+  assert.equal(out[0], stored[0], "untouched messages keep their identity");
+  assert.deepEqual(sanitizeHistory(null), []);
+  assert.equal(sanitizeAssistantText("Hello </s>"), "Hello");
+});

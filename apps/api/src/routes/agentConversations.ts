@@ -25,6 +25,7 @@ import { send as sendNotification } from "../services/notifications/notification
 import { extractGenericDocument } from "../agent/documentExtraction";
 import { ExtractionUnavailableError } from "../agent/billExtraction";
 import type { UnifiedMessage } from "../agent/providers/types";
+import { sanitizeHistory } from "../agent/assistantText";
 
 export const agentConversationsRouter = Router();
 
@@ -54,7 +55,7 @@ agentConversationsRouter.get("/conversations/:id", authenticate, requireAgentAcc
   if (!row || row.userId !== req.auth!.userId) {
     return res.status(404).json({ error: "Conversation not found" });
   }
-  res.json({ id: row.id, title: row.title, messages: row.messages, createdAt: row.createdAt, updatedAt: row.updatedAt });
+  res.json({ id: row.id, title: row.title, messages: sanitizeHistory(row.messages), createdAt: row.createdAt, updatedAt: row.updatedAt });
 });
 
 agentConversationsRouter.delete("/conversations/:id", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
@@ -137,7 +138,8 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
     ? await composeMessageWithAttachment(message ?? "", attachment, deadline)
     : (message as string);
 
-  const priorHistory = (row.messages as unknown as UnifiedMessage[]) ?? [];
+  // Sanitised on load: threads saved before the special-token fix must not re-prime the model.
+  const priorHistory = sanitizeHistory<UnifiedMessage>(row.messages);
   const newHistory: UnifiedMessage[] = [...priorHistory, { role: "user", content: effectiveMessage }];
 
   try {
@@ -153,12 +155,12 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
     const updated = await prisma.agentConversation.update({
       where: { id: row.id },
       data: {
-        messages: result.history as unknown as object,
+        messages: sanitizeHistory<UnifiedMessage>(result.history) as unknown as object,
         title: row.title ?? deriveTitle(message?.trim() || (attachment ? `Attached: ${attachment.fileName}` : "New conversation")),
       },
     });
 
-    res.json({ reply: result.reply, id: updated.id, title: updated.title, messages: updated.messages });
+    res.json({ reply: result.reply, id: updated.id, title: updated.title, messages: sanitizeHistory(updated.messages) });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
@@ -567,14 +569,14 @@ async function handleResolveAction(
       data: { status: outcome, resultId, resolvedAt: new Date() },
     });
 
-    const priorHistory = (conversation.messages as unknown as UnifiedMessage[]) ?? [];
+    const priorHistory = sanitizeHistory<UnifiedMessage>(conversation.messages);
     const newHistory = resolveActionInHistory(priorHistory, action.id, { status: outcome, resultId });
     const updated = await prisma.agentConversation.update({
       where: { id: conversation.id },
       data: { messages: newHistory as unknown as object },
     });
 
-    res.json({ status: outcome, resultId, messages: updated.messages });
+    res.json({ status: outcome, resultId, messages: sanitizeHistory(updated.messages) });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }

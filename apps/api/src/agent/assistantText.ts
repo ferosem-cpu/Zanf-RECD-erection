@@ -17,6 +17,30 @@ export function isJunkReply(text: string): boolean {
   return !/[\p{L}\p{N}]/u.test(stripSpecialTokens(text));
 }
 
+/** Shown instead of an assistant message that was nothing but special tokens. */
+export const EMPTY_REPLY_PLACEHOLDER = "(no reply)";
+
+/** Display/replay-safe assistant text: special tokens stripped; token-only text becomes the
+ * placeholder (or "" when the message carries tool calls, whose text is optional). */
+export function sanitizeAssistantText(text: string, hasToolCalls = false): string {
+  const clean = stripSpecialTokens(text ?? "");
+  return isJunkReply(clean) ? (hasToolCalls ? "" : EMPTY_REPLY_PLACEHOLDER) : clean;
+}
+
+/** Applies sanitizeAssistantText to every assistant message of a stored thread. Used when a
+ * thread is saved, returned to the UI and replayed to the LLM, so threads saved before the
+ * fix-5 sanitiser (e.g. an old "<EOS_TOKEN>" reply) never show or re-prime it. Stored rows are
+ * not migrated; this runs on every read. Non-arrays come back as an empty thread. */
+export function sanitizeHistory<T extends { role: string; content?: unknown }>(messages: unknown): T[] {
+  if (!Array.isArray(messages)) return [];
+  return (messages as T[]).map((m) => {
+    if (m?.role !== "assistant" || typeof m.content !== "string") return m;
+    const toolCalls = (m as { toolCalls?: unknown[] }).toolCalls;
+    const content = sanitizeAssistantText(m.content, Array.isArray(toolCalls) && toolCalls.length > 0);
+    return content === m.content ? m : { ...m, content };
+  });
+}
+
 /** Cleans a provider result. Returns null for a final reply (no tool calls) that is empty or
  * only token junk, so the caller retries / falls back instead of showing it. */
 export function cleanAssistantResult(result: SendMessageResult): SendMessageResult | null {
