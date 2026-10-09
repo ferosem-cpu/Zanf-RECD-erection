@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildTextClause, searchTokens, searchDriveDocuments, listDriveDocuments, getFileMetadataWithinFolder, resetFolderTreeCache,
   getFolderTree, FOLDER_TREE_TTL_MS, HIDDEN_FILES_CLAUSE, HIDDEN_FILE_MESSAGE, isHiddenDriveFile, type DriveLike, type DriveFile,
+  buildLooseNameClause, stripExtension, findFileIdByName, getDriveDocumentByRef,
 } from "../src/agent/tools/driveSearch";
 import { driveTools } from "../src/agent/tools/driveTool";
 
@@ -91,8 +92,9 @@ test("finds files in nested subfolders (not just direct children) with folder pa
   assert.equal(pcr.searchedFolders, 5);
 
   const pi = await searchDriveDocuments("proforma invoice", 25, { drive, rootId: ROOT });
-  assert.deepEqual(pi.results.map((r) => r.fileId).sort(), ["f1", "f2"]);
-  assert.equal(pi.results[0].fileId, "f1"); // every word in the name ranks first
+  // Strict matches (every word in name or content) first, then names with SOME of the words:
+  // f4 "Old quotation proforma" and the "Zan-F Invoices" folder.
+  assert.deepEqual(pi.results.map((r) => r.fileId), ["f1", "f2", "f4", "inv"]);
   assert.equal(pi.results.find((r) => r.fileId === "f2")!.folderPath, "ZanF_DropBox / Zan-F Invoices / 2026-27");
 });
 
@@ -159,13 +161,14 @@ test("backups and JSON files are hidden from search_documents, list_documents an
     { id: "bk2", name: "zanapp-backup-2026-10-09.json.gz", mimeType: "application/gzip", parents: ["inv26"], content: "PCR", modifiedTime: "2026-10-09T00:00:00Z" },
     { id: "js1", name: "PCR export.json", mimeType: "text/plain", parents: ["bpcl"], modifiedTime: "2026-10-07T00:00:00Z" },
     { id: "js2", name: "PCR data", mimeType: "application/json", parents: ["bpcl"], modifiedTime: "2026-10-06T00:00:00Z" },
-    { id: "db1", name: "PCR_backup_20261001.sql", mimeType: "application/octet-stream", parents: ["bpcl"], modifiedTime: "2026-10-05T00:00:00Z" },
+    // Narrow rule: a normal document with "backup" in its name is NOT hidden.
+    { id: "db1", name: "PCR_backup_20261001.pdf", mimeType: "application/pdf", parents: ["bpcl"], modifiedTime: "2026-10-05T00:00:00Z" },
   ];
   const { drive, calls } = fakeDrive(files);
-  const hidden = ["bk1", "bk2", "js1", "js2", "db1"];
+  const hidden = ["bk1", "bk2", "js1", "js2"];
 
   const search = await searchDriveDocuments("PCR", 25, { drive, rootId: ROOT });
-  assert.deepEqual(search.results.map((r) => r.fileId), ["f3"]);
+  assert.deepEqual(search.results.map((r) => r.fileId), ["db1", "f3"]);
   assert.ok(calls.some((q) => q.includes(HIDDEN_FILES_CLAUSE) && q.includes("fullText contains")), "server-side filter in the search query");
 
   const listed = await listDriveDocuments(50, { drive, rootId: ROOT });
@@ -176,7 +179,7 @@ test("backups and JSON files are hidden from search_documents, list_documents an
   // Defensive post-filter: even if Drive ignored the clause, nothing hidden comes back.
   resetFolderTreeCache();
   const leaky: DriveLike = { files: { ...drive.files, list: async (p) => ({ data: { files: (await drive.files.list({ ...p, q: String(p.q).replace(` and ${HIDDEN_FILES_CLAUSE}`, "") })).data.files } }) } };
-  assert.deepEqual((await searchDriveDocuments("PCR", 25, { drive: leaky, rootId: ROOT })).results.map((r) => r.fileId), ["f3"]);
+  assert.deepEqual((await searchDriveDocuments("PCR", 25, { drive: leaky, rootId: ROOT })).results.map((r) => r.fileId), ["db1", "f3"]);
   assert.ok((await listDriveDocuments(50, { drive: leaky, rootId: ROOT })).every((r) => !hidden.includes(r.fileId)));
 
   for (const id of hidden) {
@@ -184,4 +187,64 @@ test("backups and JSON files are hidden from search_documents, list_documents an
   }
   assert.equal(isHiddenDriveFile("Backup DG set quotation.pdf", "application/pdf"), false); // a document about backup DG sets stays visible
   assert.equal(isHiddenDriveFile("PCR Report - Hosakote.pdf", "application/pdf"), false);
+  assert.equal(isHiddenDriveFile("Site backup plan 2026.pdf", "application/pdf"), false);
+  assert.equal(isHiddenDriveFile("PCR_backup_20261001.sql", "application/octet-stream"), false);
+  assert.equal(isHiddenDriveFile("zanapp-backup-2026-10-09.json.gz", "application/gzip"), true);
+  assert.equal(isHiddenDriveFile("Export.JSON", "text/plain"), true);
+  assert.ok(!HIDDEN_FILES_CLAUSE.includes("name contains"), "no server-side name exclusion");
+});
+
+const AGSAR = "AgsarPaint_Quote_TTCRN v1.2.pdf";
+
+test("full file name with spaces, dots, underscores and quotes: name + tokens, escaped", () => {
+  assert.equal(stripExtension(AGSAR), "AgsarPaint_Quote_TTCRN v1.2");
+  assert.deepEqual(searchTokens(AGSAR), ["agsarpaint", "quote", "ttcrn", "v1"]);
+  const clause = buildTextClause(AGSAR);
+  assert.ok(clause.includes(`name contains '${AGSAR}'`));
+  assert.ok(clause.includes("name contains 'AgsarPaint_Quote_TTCRN v1.2'"));
+  assert.ok(clause.includes("(name contains 'agsarpaint' and name contains 'quote' and name contains 'ttcrn' and name contains 'v1')"));
+  assert.ok(buildTextClause("O'Neil\\quote.pdf").includes("name contains 'O\\'Neil\\\\quote'"));
+  assert.equal(buildLooseNameClause("PCR"), null);
+  assert.equal(buildLooseNameClause("AgsarPaint warranty"), "(name contains 'agsarpaint' or name contains 'warranty')");
+});
+
+test("AgsarPaint_Quote_TTCRN v1.2.pdf at the top level: found by full name, its words, or with topic words added", async () => {
+  const files: FakeFile[] = [
+    ...library(),
+    { id: "agsar", name: AGSAR, mimeType: "application/pdf", parents: [ROOT], modifiedTime: "2026-10-01T00:00:00Z" },
+    { id: "q2", name: "Quote_Other.pdf", mimeType: "application/pdf", parents: [ROOT], modifiedTime: "2026-10-02T00:00:00Z" },
+  ];
+  const { drive } = fakeDrive(files);
+  for (const q of [AGSAR, "AgsarPaint_Quote_TTCRN v1.2", "AgsarPaint Quote TTCRN", "agsarpaint", "AgsarPaint warranty", "AgsarPaint quote warranty terms"]) {
+    const res = await searchDriveDocuments(q, 25, { drive, rootId: ROOT });
+    assert.equal(res.results[0]?.fileId, "agsar", q);
+    assert.equal(res.results[0].folderPath, "ZanF_DropBox", q);
+  }
+  const loose = await searchDriveDocuments("AgsarPaint warranty", 25, { drive, rootId: ROOT });
+  assert.match(loose.note ?? "", /SOME of the words/);
+});
+
+test("get_document_content accepts a fileId or the exact file name; hidden names never resolve", async () => {
+  const files: FakeFile[] = [
+    ...library(),
+    { id: "agsarPaintFileId123", name: AGSAR, mimeType: "text/plain", parents: [ROOT], modifiedTime: "2026-10-01T00:00:00Z" },
+    { id: "bk1", name: "zanapp-backup-2026-10-08.json", mimeType: "application/json", parents: [ROOT] },
+  ];
+  const base = fakeDrive(files).drive;
+  const drive: DriveLike = {
+    files: {
+      ...base.files,
+      get: async (params, options) => (params.alt === "media" ? { data: new TextEncoder().encode("Warranty: 12 months").buffer } : base.files.get(params, options)),
+    },
+  };
+  assert.equal(await findFileIdByName(AGSAR, { drive, rootId: ROOT }), "agsarPaintFileId123");
+  assert.equal(await findFileIdByName("agsarpaint_quote_ttcrn v1.2", { drive, rootId: ROOT }), "agsarPaintFileId123");
+  const byName = await getDriveDocumentByRef(AGSAR, { drive, rootId: ROOT });
+  assert.equal(byName.name, AGSAR);
+  assert.match(byName.text, /Warranty: 12 months/);
+  assert.equal((await getDriveDocumentByRef("agsarPaintFileId123", { drive, rootId: ROOT })).name, AGSAR);
+  // Id-shaped but unknown to Drive (404): retried as a name, not an exact match here.
+  await assert.rejects(getDriveDocumentByRef("AgsarPaint_Quote_TTCRN", { drive, rootId: ROOT }), /No document named "AgsarPaint_Quote_TTCRN"/);
+  await assert.rejects(findFileIdByName("zanapp-backup-2026-10-08.json", { drive, rootId: ROOT }), (e: Error) => e.message === HIDDEN_FILE_MESSAGE);
+  await assert.rejects(findFileIdByName("nothing here.pdf", { drive, rootId: ROOT }), /No document named "nothing here.pdf"/);
 });

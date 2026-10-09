@@ -55,19 +55,16 @@ const MAX_PAGES_PER_QUERY = 5;
 const MAX_FOLDERS = 2000;
 export const FOLDER_TREE_TTL_MS = 10 * 60_000;
 
-/** App backups (zanapp-backup-*.json from the backup job) and other JSON/data dumps share the
- * folder but are not documents - they hold whole-database exports, so the agent never searches,
- * lists or reads them. Server-side clause first, then isHiddenDriveFile as a defensive filter. */
-export const HIDDEN_FILES_CLAUSE = "mimeType != 'application/json' and not name contains 'zanapp-backup'";
+/** App backups (zanapp-backup-*.json from the backup job) and JSON files share the folder but are
+ * not documents - they hold whole-database exports, so the agent never searches, lists or reads
+ * them. Deliberately NARROW: only names starting with "zanapp-backup-" and JSON files; a normal
+ * document with "backup" in its name stays visible. Drive's `name contains` is a word-prefix
+ * match, so the name rule is applied client-side only (isHiddenDriveFile on every result); the
+ * server-side clause just drops JSON by MIME type. */
+export const HIDDEN_FILES_CLAUSE = "mimeType != 'application/json'";
 export function isHiddenDriveFile(name: string | null | undefined, mimeType: string | null | undefined): boolean {
-  const n = (name ?? "").toLowerCase();
-  if ((mimeType ?? "").toLowerCase().includes("json")) return true;
-  return (
-    n.endsWith(".json") ||
-    n.includes("zanapp-backup") ||
-    /\.(bak|backup|dump|sql)(\.(gz|zip))?$/.test(n) ||
-    /(^|[-_ .])backup[-_ .]?\d{4}/.test(n)
-  );
+  const n = (name ?? "").trim().toLowerCase();
+  return (mimeType ?? "").toLowerCase() === "application/json" || n.endsWith(".json") || n.startsWith("zanapp-backup-");
 }
 export const HIDDEN_FILE_MESSAGE =
   "That file is an app backup / data file (JSON or backup), which the agent does not read. Only documents can be opened.";
@@ -82,23 +79,44 @@ export function escapeDriveQuery(s: string): string {
   return s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-/** Search words: punctuation-separated tokens, lower-cased, 2+ chars ("PCR" kept). */
-export function searchTokens(query: string): string[] {
-  return [...new Set(query.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2))];
+const EXTENSION_RE = /\.(pdf|docx?|xlsx?|csv|txt|pptx?|jpe?g|png)$/i;
+
+/** "AgsarPaint_Quote_TTCRN v1.2.pdf" -> "AgsarPaint_Quote_TTCRN v1.2". */
+export function stripExtension(name: string): string {
+  return name.trim().replace(EXTENSION_RE, "");
 }
 
-/** Matches the phrase OR every word, in the file name OR the indexed content - so "proforma
- * invoice" also finds "Proforma_Invoice_ELCOT.pdf" and "PI - proforma ... invoice" text, and
- * "PCR" finds "PCR Report.pdf" by name even when the content isn't indexed. */
+/** Search words: the query minus a file extension, split on spaces, underscores, dots, hyphens
+ * and other punctuation, lower-cased, 2+ chars ("PCR" kept). */
+export function searchTokens(query: string): string[] {
+  return [...new Set(stripExtension(query).toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2))];
+}
+
+/** Strict pass: the full name (as typed and without its extension) OR the phrase in content OR
+ * every word, in the file name OR the indexed content - so "proforma invoice" also finds
+ * "Proforma_Invoice_ELCOT.pdf" and "PI - proforma ... invoice" text, and "PCR" finds
+ * "PCR Report.pdf" by name even when the content isn't indexed. */
 export function buildTextClause(query: string): string {
-  const phrase = escapeDriveQuery(query.trim());
+  const phrase = query.trim();
+  const names = [...new Set([phrase, stripExtension(phrase)].filter(Boolean))];
   const tokens = searchTokens(query).map(escapeDriveQuery);
-  const clauses = [`name contains '${phrase}'`, `fullText contains '${phrase}'`];
+  const clauses = [...names.map((n) => `name contains '${escapeDriveQuery(n)}'`), `fullText contains '${escapeDriveQuery(phrase)}'`];
   if (tokens.length > 1) {
     clauses.push(`(${tokens.map((t) => `name contains '${t}'`).join(" and ")})`);
     clauses.push(`(${tokens.map((t) => `fullText contains '${t}'`).join(" and ")})`);
   }
   return `(${clauses.join(" or ")})`;
+}
+
+/** Loose pass, merged after the strict one: ANY word (3+ chars) of a multi-word query in the
+ * file name. Drive matches names by word prefix and doesn't split "AgsarPaint_Quote_TTCRN" on
+ * underscores, so a question like "AgsarPaint warranty" or "AgsarPaint Quote TTCRN" fails the
+ * strict every-word pass but still finds the file by "agsarpaint". Null for one-word queries. */
+export function buildLooseNameClause(query: string): string | null {
+  const tokens = searchTokens(query);
+  const words = tokens.filter((t) => t.length >= 3);
+  if (tokens.length < 2 || words.length === 0) return null;
+  return `(${words.map((t) => `name contains '${escapeDriveQuery(t)}'`).join(" or ")})`;
 }
 
 export function parentsClause(folderIds: string[]): string {
@@ -206,11 +224,24 @@ function toResult(tree: FolderTree, f: DriveFile): DriveSearchResult {
   };
 }
 
-/** Name matches on every word rank first, then everything else; newest first within each group. */
+const newestFirst = (a: DriveSearchResult, b: DriveSearchResult) => String(b.modifiedTime ?? "").localeCompare(String(a.modifiedTime ?? ""));
+
+/** Exact name (with or without extension) first, then name matches on every word, then
+ * everything else; newest first within each group. */
 export function rankResults(results: DriveSearchResult[], query: string): DriveSearchResult[] {
   const tokens = searchTokens(query);
-  const nameHit = (r: DriveSearchResult) => tokens.length > 0 && tokens.every((t) => r.name.toLowerCase().includes(t));
-  return [...results].sort((a, b) => Number(nameHit(b)) - Number(nameHit(a)) || String(b.modifiedTime ?? "").localeCompare(String(a.modifiedTime ?? "")));
+  const full = stripExtension(query).toLowerCase();
+  const score = (r: DriveSearchResult) =>
+    (full && stripExtension(r.name).toLowerCase() === full ? 2 : 0) +
+    (tokens.length > 0 && tokens.every((t) => r.name.toLowerCase().includes(t)) ? 1 : 0);
+  return [...results].sort((a, b) => score(b) - score(a) || newestFirst(a, b));
+}
+
+/** Loose-pass results: most query words in the name first, then newest. */
+export function rankLooseResults(results: DriveSearchResult[], query: string): DriveSearchResult[] {
+  const tokens = searchTokens(query);
+  const hits = (r: DriveSearchResult) => tokens.filter((t) => r.name.toLowerCase().includes(t)).length;
+  return [...results].sort((a, b) => hits(b) - hits(a) || newestFirst(a, b));
 }
 
 export async function searchDriveDocuments(
@@ -222,18 +253,25 @@ export async function searchDriveDocuments(
   const rootId = deps.rootId ?? getDriveFolderId();
   if (!query.trim()) return { query, searchedFolders: 0, totalMatches: 0, results: [], note: "Give a search term." };
   const tree = await getFolderTree(drive, rootId);
-  const text = buildTextClause(query);
-  const batches = await Promise.all(
-    chunk([...tree.folders.keys()], PARENT_CHUNK).map((ids) => listAll(drive, `trashed = false and ${HIDDEN_FILES_CLAUSE} and ${parentsClause(ids)} and ${text}`)),
-  );
+  const run = (clause: string) =>
+    Promise.all(
+      chunk([...tree.folders.keys()], PARENT_CHUNK).map((ids) => listAll(drive, `trashed = false and ${HIDDEN_FILES_CLAUSE} and ${parentsClause(ids)} and ${clause}`)),
+    ).then((batches) => batches.flat());
+  const loose = buildLooseNameClause(query);
+  const [strictFiles, looseFiles] = await Promise.all([run(buildTextClause(query)), loose ? run(loose) : Promise.resolve([])]);
   const seen = new Set<string>();
-  const results: DriveSearchResult[] = [];
-  for (const f of batches.flat()) {
-    if (!f.id || seen.has(f.id) || !parentInTree(tree, f.parents) || isHiddenDriveFile(f.name, f.mimeType)) continue;
-    seen.add(f.id);
-    results.push(toResult(tree, f));
-  }
-  const ranked = rankResults(results, query);
+  const collect = (files: DriveFile[]) => {
+    const out: DriveSearchResult[] = [];
+    for (const f of files) {
+      if (!f.id || seen.has(f.id) || !parentInTree(tree, f.parents) || isHiddenDriveFile(f.name, f.mimeType)) continue;
+      seen.add(f.id);
+      out.push(toResult(tree, f));
+    }
+    return out;
+  };
+  const strict = rankResults(collect(strictFiles), query);
+  const partial = rankLooseResults(collect(looseFiles), query);
+  const ranked = [...strict, ...partial];
   return {
     query,
     searchedFolders: tree.folders.size,
@@ -241,7 +279,9 @@ export async function searchDriveDocuments(
     results: ranked.slice(0, maxResults),
     ...(ranked.length === 0
       ? { note: `No file or folder under the shared folder (${tree.folders.size} folders searched, names and indexed content) matches. Documents stored outside that folder tree are not visible to the agent.` }
-      : {}),
+      : strict.length === 0
+        ? { note: "No file matches the whole name/every word; these names contain SOME of the words - check the name before using one." }
+        : {}),
   };
 }
 
@@ -278,6 +318,51 @@ export async function getDriveDocumentContent(
   const buffer = exportMime ? await downloadExport(drive, fileId, exportMime) : await downloadRaw(drive, fileId);
   const text = await extractText(buffer, exportMime ?? meta.mimeType);
   return { name: meta.name, mimeType: meta.mimeType, folderPath: meta.folderPath, webViewLink: meta.webViewLink, text };
+}
+
+/** Drive file ids are 10+ chars of letters, digits, "-" and "_" (no spaces or dots). */
+const DRIVE_ID_RE = /^[A-Za-z0-9_-]{10,}$/;
+
+function isNotFound(err: unknown): boolean {
+  const e = err as { code?: unknown; status?: unknown; message?: unknown } | null;
+  return String(e?.code) === "404" || String(e?.status) === "404" || /not found/i.test(String(e?.message ?? ""));
+}
+
+/** Newest file under the folder tree whose name is exactly `name` (case-insensitive, extension
+ * optional). Hidden files are never resolved. */
+export async function findFileIdByName(name: string, deps: { drive?: DriveLike; rootId?: string } = {}): Promise<string> {
+  const drive = deps.drive ?? (getDriveClient() as unknown as DriveLike);
+  const rootId = deps.rootId ?? getDriveFolderId();
+  const wanted = name.trim();
+  if (isHiddenDriveFile(wanted, null)) throw new ExtractionError(HIDDEN_FILE_MESSAGE);
+  const tree = await getFolderTree(drive, rootId);
+  const batches = await Promise.all(
+    chunk([...tree.folders.keys()], PARENT_CHUNK).map((ids) =>
+      listAll(drive, `trashed = false and mimeType != '${FOLDER_MIME}' and ${HIDDEN_FILES_CLAUSE} and ${parentsClause(ids)} and name contains '${escapeDriveQuery(stripExtension(wanted))}'`),
+    ),
+  );
+  const same = (n: string) => n.toLowerCase() === wanted.toLowerCase() || stripExtension(n).toLowerCase() === stripExtension(wanted).toLowerCase();
+  const match = batches
+    .flat()
+    .filter((f) => f.id && f.name && same(f.name) && parentInTree(tree, f.parents) && !isHiddenDriveFile(f.name, f.mimeType))
+    .sort((a, b) => String(b.modifiedTime ?? "").localeCompare(String(a.modifiedTime ?? "")))[0];
+  if (!match) throw new ExtractionError(`No document named "${wanted}" in the shared folder - use search_documents to find its fileId.`);
+  return match.id!;
+}
+
+/** get_document_content input: a Drive fileId OR the file's exact name. An id-shaped value that
+ * Drive doesn't know (e.g. "AgsarPaint_Quote_TTCRN") is retried as a name. */
+export async function getDriveDocumentByRef(ref: string, deps: { drive?: DriveLike; rootId?: string } = {}) {
+  const r = ref.trim();
+  if (!r) throw new ExtractionError("Give the fileId from search_documents/list_documents, or the file's exact name.");
+  if (DRIVE_ID_RE.test(r)) {
+    try {
+      return await getDriveDocumentContent(r, deps);
+    } catch (err) {
+      if (err instanceof ExtractionError || !isNotFound(err)) throw err;
+    }
+  }
+  return getDriveDocumentContent(await findFileIdByName(r, deps), deps);
 }
 
 /** Resolve metadata only after proving the file's parent is a folder inside the configured
