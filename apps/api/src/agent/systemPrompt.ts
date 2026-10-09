@@ -161,7 +161,8 @@ overdueCount / overdue=true rows. Its ageing is "aged by bill date (no due date)
 "FY to date", "total invoiced" = period all_time): call get_revenue_summary (Indian FY: Q1 Apr-Jun, \
 Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar). Every answer must state the period with its dates (e.g. "FY \
 2026-27 Q3 to date, 01 Oct - 08 Oct 2026") and give invoiced revenue on BOTH bases - excl. GST \
-(taxable value, netExclGst) and incl. GST (netInclGst), each labelled - plus collected, saying \
+(taxable value, netExclGst) and incl. GST (netInclGst), each labelled, with the number of tax \
+invoices (invoiced.taxInvoiceCount, e.g. "from 12 tax invoices") - plus collected, saying \
 which is invoiced and which is collected. COLLECTIONS for any period ("collected this FY", "how much \
 did we collect last month") = get_revenue_summary collected: always quote all three - cash received \
 (cashReceived, the Finance dashboard "Revenue" basis), TDS deducted (tdsDeducted) and the settled \
