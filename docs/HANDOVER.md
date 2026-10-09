@@ -330,11 +330,18 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 10. Current open items (as of 2026-10-09)
 
-**Branch `fix/agent-retest-6` (2026-10-09)** - fixes the remaining items of the retest of
-`dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa` (35/36 pass), see §11. After deploy, re-run
-`docs/agent-test-checklist.md` rows 41-44 (overdue needs a due date; whole-set order counts; Drive
-PDF text; no `<EOS_TOKEN>` in old threads, "+ New" clears at once) against production. Rollback
-target `dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa`. No migration needed.
+**Branch `fix/agent-retest-7` (2026-10-09)** - fixes the retest of `dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`
+(27 pass / 1 partial / 1 fail), see §11. After deploy, re-run `docs/agent-test-checklist.md` rows
+45-48 (all bills incl. Rejected; backups hidden; Drive PDF text; no thinking aloud) against
+production. Rollback target `dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`. No migration needed.
+- **Drive PDF text needs no Drive write:** Drive has no read-only API that returns a PDF's text
+  (`files.export` only covers Google Docs/Sheets; OCR needs a copy-and-convert), so PDFs are
+  downloaded and parsed in-process. Scanned/image-only PDFs still can't be read (no OCR).
+- **`@napi-rs/canvas`** has only its Windows binary installed; never rely on it in the API (pdf.js
+  falls back to the `ensureDomMatrix()` stub in `lib/docExtract.ts`).
+
+**Branch `fix/agent-retest-6` (2026-10-09)** - merged and deployed
+(`dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`); its PDF fix was incomplete (see fix 7).
 - **Behaviour change:** customer invoices are now overdue only from the day AFTER the due date
   (IST calendar date, `services/ageing.ts isPastDue`) on the dashboard KPI, invoice pages and agent;
   before, an invoice due today counted as overdue from 05:30 IST.
@@ -412,6 +419,19 @@ target `dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa`. No migration needed.
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-10-09 — Fix 7, branch `fix/agent-retest-7` (retest of `dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`).**
+  `21c8b6c` Drive PDFs, real root cause: the worker WAS deployed (fix 6), but `import("pdf-parse")`
+  threw **"DOMMatrix is not defined"** - pdf.js runs `new DOMMatrix()` at module load and polyfills it
+  from `@napi-rs/canvas`, whose Linux binary isn't installed. Production logs showed only the
+  "Cannot load @napi-rs/canvas" / "Cannot polyfill DOMMatrix" warnings; the error was reproduced on
+  an isolated copy of the deployed `.func`. Now an inert `DOMMatrix` stub (text never renders), PDF
+  extraction timeout 15 s, Drive download timeout 20 s. `90d0dee` search_vendor_bills: "all bills"
+  (no status, or all/any) = every status incl. Rejected/Paid/Cancelled, each listed with its status;
+  payables unchanged. `6457d2b` Drive: `zanapp-backup-*`, JSON and backup-named files hidden from
+  search/list (server-side clause + post-filter) and refused by get_document_content. `6fe5152`
+  prompt: final answer only, no thinking aloud/self-corrections, names and places only from tools.
+  Tests: API 141, admin-web 29.
 
 - **2026-10-09 — Fix 6, branch `fix/agent-retest-6` (retest of `dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa`).**
   `a4affa1` one overdue rule (`services/ageing.ts` isPastDue/documentAgeing): overdue only with a

@@ -115,6 +115,15 @@ General pass criteria for every row:
 | 43 | Open "AgsarPaint_Quote_TTCRN v1.2.pdf" from Drive and tell me the warranty clause. | search_documents, get_document_content | Google Drive (ZanF_DropBox top level) | Quotes the warranty clause from the PDF text; never "no OCR text" for a text PDF | |
 | 44 | Reopen an old thread that showed `<EOS_TOKEN>` (or any old thread) and ask a follow-up; then click "+ New". | (any) | Agent chat bubble | No `<EOS_TOKEN>` / `<\|...\|>` text anywhere in the old thread (a token-only reply shows "(no reply)"); "+ New" empties the panel immediately, never flashing the old thread | |
 
+## 12. Fix 7 retest (branch `fix/agent-retest-7`)
+
+| # | Question | Expected tool(s) | Admin-web page to cross-check | Pass criteria | Result |
+|---|---|---|---|---|---|
+| 45 | Show all Platino bills. (then "only the unpaid ones") | search_vendor_bills (no status / status all; then unpaid) | /finance/vendor-invoices (filter Platino) | Lists every bill incl. the Rejected TXIN0933 with each bill's status (3 Verified + 1 Rejected); the follow-up drops the Rejected one; payables totals never include Rejected | |
+| 46 | Search Drive for "backup" (and list recent documents). | search_documents, list_documents | Google Drive (ZanF_DropBox) | No `zanapp-backup-*` or other .json / backup files listed; asking to open one by id is refused with "app backup / data file" | |
+| 47 | Open "AgsarPaint_Quote_TTCRN v1.2.pdf" from Drive and tell me the warranty clause. | search_documents, get_document_content | Google Drive (ZanF_DropBox top level) | Quotes the warranty clause from the PDF text within a few seconds; never "PDF extraction tool is currently unavailable" or "no OCR text" | |
+| 48 | Where is the BOSTIK site? (and any site/customer location question) | search_orders_and_sites | /sites | One final answer with the place from tool data; no "X? Actually Y..." self-corrections or thinking aloud | |
+
 ## Run summary
 
 | Run date / time (IST) | Commit | Pass | Partial | Fail | Tester | Notes |
