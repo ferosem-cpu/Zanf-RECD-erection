@@ -124,6 +124,16 @@ General pass criteria for every row:
 | 47 | Open "AgsarPaint_Quote_TTCRN v1.2.pdf" from Drive and tell me the warranty clause. | search_documents, get_document_content | Google Drive (ZanF_DropBox top level) | Quotes the warranty clause from the PDF text within a few seconds; never "PDF extraction tool is currently unavailable" or "no OCR text" | |
 | 48 | Where is the BOSTIK site? (and any site/customer location question) | search_orders_and_sites | /sites | One final answer with the place from tool data; no "X? Actually Y..." self-corrections or thinking aloud | |
 
+## 13. Fix 8 retest (branch `fix/agent-retest-8`)
+
+| # | Question | Expected tool(s) | Admin-web page to cross-check | Pass criteria | Result |
+|---|---|---|---|---|---|
+| 49 | List Ethen sites in Bangalore. | search_orders_and_sites | /sites (filter Bangalore) | "Site" column = the Sites list "Site name" exactly (VRL, Mahindra Aerostructures, BPCL, Wipro Enterprises, INTERGLOBE AVIATION, ...); address only in a separate "Address" column; customer = Ethen; no "End-client" label; noticeably faster than ~32 s | |
+| 50 | Which sites are installing? | search_orders_and_sites (stageKey installing) | /sites (Stage = Installing) | Names exactly "BOSTIK" and "INTERGLOBE AVIATION" - never "BOSTIK - Bommasandra Industrial Area"; location, if given, as a separate field | |
+| 51 | What is the warranty in "AgsarPaint_Quote_TTCRN v1.2.pdf"? (also "AgsarPaint warranty") | search_documents and/or get_document_content (by id or exact name) | Google Drive (ZanF_DropBox top level) | Finds the file and quotes the warranty text; never "couldn't find the file in the shared document folder" | |
+| 52 | Search Drive for "backup". | search_documents | Google Drive | `zanapp-backup-*` and .json files never listed; a normal document with "backup" in its name IS listed | |
+| 53 | What was our revenue this quarter? | get_revenue_summary | /finance (dashboard), /invoices | Period dates, excl. + incl. GST, collected (cash + TDS = settled) AND the number of tax invoices; proformas excluded | |
+
 ## Run summary
 
 | Run date / time (IST) | Commit | Pass | Partial | Fail | Tester | Notes |
