@@ -1,6 +1,7 @@
 # Zan-F Bot - manual QA checklist
 
 Zan-F Bot 36-question run (7:36 PM IST): 12 pass / 4 partial / 20 fail on ba88248
+Retest of `dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa` (2026-10-09): 35/36 pass; rows 41-44 cover the fix-6 items.
 
 Re-run these questions in the admin-web agent chat after branch `fix/ledger-opening-date-and-drive-search`
 is deployed (API first, then admin-web). Ask each question in a fresh thread unless the row says
@@ -104,6 +105,15 @@ General pass criteria for every row:
 | 38 | When was invoice <inv no.> issued and when is it due? | search_invoices or get_document_detail | /invoices/[id] | IST dates match the page; a record stored at 18:30 UTC shows as the next day; no 1970 dates | |
 | 39 | Show the ledger for <customer X> this FY. (then "and for last FY?") | get_customer_ledger (re-called with new from/to) | /finance/ledgers | Opening balance dated at the period start, IST; follow-up re-calls the tool with the new range | |
 | 40 | "Sales last month?" then "and the month before?" | get_revenue_summary (re-called with from/to) | /reports/finance | Follow-up keeps the revenue subject, calls the tool again, states the new period and basis | |
+
+## 11. Fix 6 retest (branch `fix/agent-retest-6`)
+
+| # | Question | Expected tool(s) | Admin-web page to cross-check | Pass criteria | Result |
+|---|---|---|---|---|---|
+| 41 | Which vendor bills are overdue? (then "how many days for Selvam's?") | get_payables / search_vendor_bills (overdueOnly) | /finance/vendor-invoices (bill detail: due date) | Only bills WITH a due date before today are overdue (TXIN0934, 10 days on 09 Oct); bills without a due date are "no due date", aged by bill date, never overdue, no days past due and no "default terms"; asking again later the same day gives the same days | |
+| 42 | How many orders are open? then "how many are commissioned?" (and "which sites are at Dispatched?" then "how many are Installing?") | search_orders_and_sites (openOnly / stageKey) | /orders, /sites | Filtered answer uses totals; out-of-filter counts quote allOrders (whole set): e.g. 9 Commissioned, never "0 commissioned" or "all sites are Order received or Installing" | |
+| 43 | Open "AgsarPaint_Quote_TTCRN v1.2.pdf" from Drive and tell me the warranty clause. | search_documents, get_document_content | Google Drive (ZanF_DropBox top level) | Quotes the warranty clause from the PDF text; never "no OCR text" for a text PDF | |
+| 44 | Reopen an old thread that showed `<EOS_TOKEN>` (or any old thread) and ask a follow-up; then click "+ New". | (any) | Agent chat bubble | No `<EOS_TOKEN>` / `<\|...\|>` text anywhere in the old thread (a token-only reply shows "(no reply)"); "+ New" empties the panel immediately, never flashing the old thread | |
 
 ## Run summary
 
