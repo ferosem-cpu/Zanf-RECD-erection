@@ -330,15 +330,14 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 10. Current open items (as of 2026-10-09)
 
-**Branch `fix/ledger-opening-date-and-drive-search` - complete, READY FOR MERGE (pushed, NOT
-merged/deployed)** - see §11 2026-10-08/09. Merge `--no-ff` to master only with Ferose's approval;
-deploy API first (admin-web's "Delete rejected invoice" calls a new route), rollback target
-`dpl_BbA1zVGtVyQKXNbWBnfGYNHfkBpN`. No migration needed. After deploy, run
-`docs/agent-test-checklist.md` and verify against production: payables KPI includes Verified bills
-(Platino), Selvam Enterprises' partially paid bill in get_payables, receivables incl./excl. GST vs
-the Finance dashboard, sites with update status Done, Drive search for "proforma invoice" / "PCR",
-supplier ledger balances (now post Verified bills), GSTR-3B outward taxable value on discounted
-invoices. Progress note: `.claude-task/fix4b-progress.md` (local only).
+**Branch `fix/agent-retest-5` (2026-10-09)** - fixes the retest failures of production deploy
+`dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU` (26 pass / 2 partial / 8 fail), see §11 2026-10-09. After it is
+deployed, re-run `docs/agent-test-checklist.md` rows 7-8, 14, 16, 19-25 against production (revenue
+says "tax invoices only, proformas excluded"; "open purchase orders" lists PO/2026-27/0001; FY
+collections quote cash + TDS + settled total; overdue days match the pages; no `<EOS_TOKEN>` reply).
+Rollback target `dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU`. No migration needed.
+- Earlier branch `fix/ledger-opening-date-and-drive-search` merged (`527de68`) and deployed
+  (`dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU`).
 - **Drive access (Ferose):** the agent only sees files INSIDE `ZanF_DropBox` (any subfolder depth)
   that `zanfpowersystems@gmail.com` can read. Move (not shortcut) the Zan-F invoice / PCR folders
   into ZanF_DropBox, or share them to that account and add them inside it. Shortcuts are not followed.
@@ -402,6 +401,18 @@ invoices. Progress note: `.claude-task/fix4b-progress.md` (local only).
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-10-09 — Branch `fix/agent-retest-5` (retest of `dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU`).**
+  `58d2167` revenue = tax invoices only (query already filtered docType; output `revenueRule`,
+  prompt and checklist now say "tax invoices only, proformas excluded"). `37aaefe`
+  search_purchase_orders status `open` = Issued + Partially received (`OPEN_PO_STATUSES`, now in
+  zanAppReadTools.ts); label/case tolerant; unknown status returns the valid list. `a8c60ba`
+  get_revenue_summary collected = cashReceived + tdsDeducted = settledTotal (paymentSplit; quote
+  all three). `2925a05` `services/ageing.ts` days past due = difference of IST calendar dates (was
+  ms floor, one day short on IST mornings); vendor-bill `overdue` uses the same rule. `80e5918`
+  `agent/assistantText.ts`: special tokens (`<EOS_TOKEN>`, `<|endoftext|>`, ...) stripped; a
+  token-only reply is retried once, then falls through to the next provider. Tests: API 123,
+  admin-web 26.
 
 - **2026-10-08/09 — Same branch, continued (not yet merged/deployed; READY FOR MERGE).**
   `9578755` GST basis: search_invoices taxableValue + gstAmount, revenue "to date" + `all_time`.

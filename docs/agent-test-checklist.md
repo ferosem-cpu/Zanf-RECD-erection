@@ -31,7 +31,7 @@ General pass criteria for every row:
 |---|---|---|---|---|---|
 | 6 | Give me the receivables ageing. | get_receivables | /reports/finance (Receivables ageing) | Same buckets and amounts as the report (shared `services/ageing.ts`); buckets sum to total incl. GST | |
 | 7 | Which invoices are overdue? | get_receivables (overdueInvoices) or search_invoices (overdueOnly) | /invoices, /reports/finance | Every overdue invoice listed (number, customer, IST due date, balance, days overdue); overdue count/amount covers all, not 15 | |
-| 8 | Which overdue invoice is the oldest and by how many days? | get_receivables | /invoices/[id] | Days overdue counted from IST due date to today; correct invoice | |
+| 8 | Which overdue invoice is the oldest and by how many days? | get_receivables | /invoices/[id] | Days overdue = IST calendar days from due date to today (due 29 Sep, asked 9 Oct morning IST = 10, not 9), same as the page; correct invoice | |
 | 9 | Total overdue amount for <customer X>? | get_receivables (customer) | /customers/[id] | Matches overdue sum for that customer only; paid/cancelled excluded | |
 
 ## 3. Payables and vendor bills
@@ -42,14 +42,14 @@ General pass criteria for every row:
 | 11 | How much is pending to pay Selvam Enterprises? | get_payables (supplier) | /finance/vendor-invoices (filter supplier), /finance/vendor-payments | Supplier name resolved ("Selvam Ent." also works); amount matches page | |
 | 12 | List all bills from Platino Automotive with status. | search_vendor_bills | /finance/vendor-invoices | All bills listed incl. rejected/paid with correct status labels; count covers all rows | |
 | 13 | Show unpaid bills from Platino Automotive. | search_vendor_bills (status unpaid) | /finance/vendor-invoices/[id] | Only verified/approved/partially_paid; rejected and paid bills not shown; balance = total - paid | |
-| 14 | Payables ageing - how much is overdue? | get_payables | /finance/vendor-invoices | Buckets (current, 0-30, 31-60, 61-90, 90+) sum to total; overdueCount/amount match | |
+| 14 | Payables ageing - how much is overdue? | get_payables | /finance/vendor-invoices | Buckets (current, 0-30, 31-60, 61-90, 90+) sum to total; overdueCount/amount match; days overdue per bill = IST calendar days, same as /finance/vendor-invoices; never a literal `<EOS_TOKEN>` reply | |
 | 15 | Is the rejected bill <bill no.> counted in what we owe? | search_vendor_bills, get_payables | /finance/vendor-invoices/[id] | Says No - rejected bills are excluded from payables | |
 
 ## 4. Purchase orders vs bills
 
 | # | Question | Expected tool(s) | Admin-web page to cross-check | Pass criteria | Result |
 |---|---|---|---|---|---|
-| 16 | What POs are open with Selvam Enterprises and what is their value? | search_purchase_orders | /purchase-orders | PO numbers, status, IST order dates and totals match; dates not 1970 | |
+| 16 | What POs are open with Selvam Enterprises and what is their value? / Open purchase orders? | search_purchase_orders (status=open) | /purchase-orders | Open = Issued + Partially received (e.g. PO/2026-27/0001 Issued is listed); closed, cancelled, received and draft are not; PO numbers, status, IST order dates and totals match; dates not 1970 | |
 | 17 | Do we owe Selvam Enterprises the value of those POs? | search_purchase_orders, get_payables | /purchase-orders, /finance/vendor-invoices | States POs are commitments, not payables; amount owed = bills only | |
 | 18 | Show PO <PO no.> line items and its order date. | get_document_detail | /purchase-orders/[id] | Lines, qty, rates, total match; order date in IST (UTC 18:30 shows as next day) | |
 
