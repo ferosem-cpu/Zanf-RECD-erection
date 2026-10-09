@@ -14,6 +14,22 @@
 // this module sits on the startup import chain (index.ts -> agent routers -> tool registry ->
 // driveSearch -> docExtract), that crash took down every route including /health, not just
 // document search. A dynamic import scopes the failure to only PDF extraction attempts.
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+// The pdf.js worker: pdf-parse's bundled pdf.js loads it with `import(workerSrc)` (default
+// "./pdf.worker.mjs"), a non-literal import @vercel/nft can't trace - so the deployed function
+// had pdf-parse's index.cjs but no worker, and EVERY Drive PDF failed ("Setting up fake worker
+// failed"), which the agent reported as "no OCR text". The __dirname-relative literal path
+// (dist/lib -> repo-root node_modules, the layout both locally and inside the .func) is an
+// asset reference nft does trace; setWorker points pdf.js at the file explicitly. The
+// require.resolve candidate covers a differently hoisted install.
+export function pdfWorkerUrl(): string {
+  const traced = path.join(__dirname, "../../../../node_modules/pdf-parse/dist/pdf-parse/cjs/pdf.worker.mjs");
+  const file = fs.existsSync(traced) ? traced : path.join(path.dirname(require.resolve("pdf-parse")), "pdf.worker.mjs");
+  return pathToFileURL(file).href;
+}
 
 export class ExtractionError extends Error {}
 
@@ -37,6 +53,7 @@ export async function extractText(buffer: Buffer, mimeType: string): Promise<str
     let PDFParse: typeof import("pdf-parse").PDFParse;
     try {
       ({ PDFParse } = await import("pdf-parse"));
+      PDFParse.setWorker(pdfWorkerUrl());
     } catch (err) {
       throw new ExtractionError(
         `PDF extraction is unavailable in this environment: ${err instanceof Error ? err.message : String(err)}`,
