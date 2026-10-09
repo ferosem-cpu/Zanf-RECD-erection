@@ -98,3 +98,42 @@ test("search_vendor_bills: status + tolerant vendor filters reach the query; tot
   const customer = { userId: "c", roleKey: "customer", customerId: "x", permissions: new Set([PERMISSION_KEY.APPROVE_VENDOR_INVOICE]) };
   assert.match((await tool.handler({}, customer) as any).error, /permission/);
 });
+
+test("'all platino bills' lists every status incl. Rejected with its status; payables still exclude Rejected", async (t) => {
+  const tool = zanAppFinanceTools.find((x) => x.name === "search_vendor_bills")!;
+  const replace = (key: string, value: unknown) => {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  };
+  replace("supplier", { findMany: async () => [{ id: "p", name: "Platino Automotive" }] });
+  const bill = (id: string, status: string) => ({
+    id, billNumber: id, status, supplier: { name: "Platino Automotive" },
+    billDate: new Date("2026-09-27T18:30:00Z"), dueDate: null,
+    subtotal: "1000.00", taxAmount: "180.00", total: "1180.00", payments: [],
+    rejectedReason: status === "rejected" ? "Wrong GSTIN" : null,
+  });
+  const rows = [bill("V1", "verified"), bill("V2", "verified"), bill("V3", "verified"), bill("TXIN0933", "rejected")];
+  const wheres: any[] = [];
+  replace("bill", { findMany: async (args: any) => { wheres.push(args.where); return rows.filter((r) => !args.where.status.in || args.where.status.in.includes(r.status)); } });
+  const auth = { userId: "f", roleKey: "finance", permissions: new Set([PERMISSION_KEY.APPROVE_VENDOR_INVOICE]) };
+
+  for (const status of [undefined, "all", "All", "any"]) {
+    const res: any = await tool.handler({ supplier: "platino", ...(status ? { status } : {}) }, auth);
+    assert.deepEqual(wheres.at(-1).status, { not: "deleted" }, `status=${status}`);
+    assert.equal(res.totalCount, 4);
+    assert.deepEqual(res.bills.map((b: any) => `${b.billNumber}:${b.status}`), ["V1:verified", "V2:verified", "V3:verified", "TXIN0933:rejected"]);
+    assert.equal(res.byStatus.rejected.count, 1);
+    assert.equal(res.byStatus.rejected.outstanding, 0); // a rejected bill is never owed
+    assert.equal(res.totals.outstanding, 3540);
+    assert.match(res.statusFilter, /incl\. rejected/);
+  }
+  const unpaid: any = await tool.handler({ supplier: "platino", status: "unpaid" }, auth);
+  assert.deepEqual(wheres.at(-1).status, { in: ["verified", "approved", "partially_paid"] });
+  assert.equal(unpaid.totalCount, 3);
+  assert.equal(isPayableStatus("rejected"), false);
+  assert.match(tool.description, /'All bills' of a vendor = NO status/);
+});

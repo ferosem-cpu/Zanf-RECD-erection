@@ -24,7 +24,7 @@ export const driveTools: AgentTool[] = [
       "matches (name matches first) with fileId, name, folderPath, webViewLink and totalMatches - use " +
       "get_document_content on a fileId to read the text. Try a shorter or alternative term (e.g. 'PI', " +
       "'proforma', a customer or site name) before saying nothing exists; files outside the shared " +
-      "folder are not visible.",
+      "folder are not visible. App backups (zanapp-backup-*) and JSON/data files are never searched, listed or read.",
     inputSchema: {
       type: "object",
       properties: {

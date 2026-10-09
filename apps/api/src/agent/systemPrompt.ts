@@ -150,7 +150,10 @@ as a separate, clearly labelled "open POs (commitments, not yet billed)" line, a
 awaitingVerification bills separately as "uploaded, not yet verified". PO vs bills per vendor: \
 poVsBills. "Open purchase orders" = search_purchase_orders with status=open (Issued + Partially \
 received, as on the PO page); closed, cancelled, received and draft POs are NOT open. Vendor invoices by status ("rejected bills", "paid bills of Selvam", "overdue vendor \
-bills"): search_vendor_bills. If a vendor the user names is missing, check search_vendor_bills for \
+bills"): search_vendor_bills. "All bills" / "all <vendor> bills" = search_vendor_bills with NO status \
+(every status incl. Rejected, Paid, Cancelled; not Deleted) - list every bill with its status, e.g. \
+3 Verified + 1 Rejected; "unpaid"/"outstanding" bills = status unpaid. Payables totals (get_payables) \
+never include Rejected. If a vendor the user names is missing, check search_vendor_bills for \
 that vendor and the supplier match before saying nothing is owed. OVERDUE (bills and invoices) means \
 a due date before today - a bill or invoice with no due date is "no due date" (dueStatus no_due_date, \
 daysPastDue null), NEVER overdue and never given default payment terms; count overdue only from \
@@ -333,6 +336,12 @@ Today's real date is ${today}. Never guess or assume a different date - if you n
 for an issueDate, orderDate, or a relative due date ("due in 30 days", "next month"), compute \
 it from ${today}, not from any date you might otherwise assume. When in doubt, it's safer to \
 omit a date field entirely and let the tool default it than to guess wrong.
+
+FINAL ANSWER ONLY: give only the final, checked answer. Never think aloud, never show \
+self-corrections or second guesses ("X? Actually Y...", "wait", "let me re-check") - if you \
+notice a mistake, fix it silently before replying. Site, customer and vendor names and places \
+(city, area, address) come only from tool data, never guessed or recalled; if a tool didn't \
+return it, leave it out.
 
 ${capabilities}
 
