@@ -727,21 +727,49 @@ async function loadOpenCutoff() {
   return resolveOpenCutoff(commissionedStage, finalStage);
 }
 
-/** Every order in `scope` (permission scoping only), slimmed to stage + latest update status. */
-async function loadWholeSet(scope: Prisma.OrderWhereInput, closedFromSeq: number | null) {
-  const rows = await prisma.order.findMany({
-    where: scope,
+export const SITE_NAME_RULE =
+  "siteName = the site's name exactly as the app's Sites/Orders lists show it ('Site name' column); address = its " +
+  "'Address' column, a separate field. Quote siteName verbatim - never append the address/area/city to it, never " +
+  "combine or embellish names, and never present the address as the site name. customer = the contracting customer " +
+  "(the 'Customer' column).";
+
+/** The site name the admin UI shows (Sites/Orders "Site name" column = Site.companyName). */
+export function siteFields(site: { id: string; companyName: string | null; address: string | null }) {
+  return { id: site.id, siteName: site.companyName ?? null, address: site.address ?? null };
+}
+
+type LatestUpdate = {
+  siteId: string;
+  createdAt: Date;
+  statusOption: { key: string; label: string };
+  stageDefinition: { label: string };
+};
+
+/** Latest status update per site in ONE query. A nested `stageEvents: { take: 1 }` on an order
+ * list is paginated in memory by Prisma (every event row is read), and the tool used to do that
+ * in three separate order queries. */
+async function loadLatestUpdates(where: Prisma.SiteStageEventWhereInput = {}): Promise<Map<string, LatestUpdate>> {
+  const events = await prisma.siteStageEvent.findMany({
+    where,
+    distinct: ["siteId"],
+    orderBy: [{ siteId: "asc" }, { createdAt: "desc" }],
     select: {
-      site: {
-        select: {
-          currentStage: { select: { label: true, sequenceOrder: true } },
-          stageEvents: { orderBy: { createdAt: "desc" }, take: 1, select: { statusOption: { select: { label: true } } } },
-        },
-      },
+      siteId: true, createdAt: true,
+      statusOption: { select: { key: true, label: true } },
+      stageDefinition: { select: { label: true } },
     },
   });
+  return latestStatusBySite(events);
+}
+
+/** Every order in `scope` (permission scoping only), slimmed to stage + latest update status. */
+async function loadWholeSet(scope: Prisma.OrderWhereInput, closedFromSeq: number | null, latest: Map<string, LatestUpdate>) {
+  const rows = await prisma.order.findMany({
+    where: scope,
+    select: { site: { select: { id: true, currentStage: { select: { label: true, sequenceOrder: true } } } } },
+  });
   return wholeSetCounts(
-    rows.map((o) => ({ stage: o.site ? o.site.currentStage : null, updateStatus: o.site?.stageEvents[0]?.statusOption.label ?? null })),
+    rows.map((o) => ({ stage: o.site ? o.site.currentStage : null, updateStatus: o.site ? latest.get(o.site.id)?.statusOption.label ?? null : null })),
     closedFromSeq,
   );
 }
@@ -750,14 +778,15 @@ const searchOrdersAndSites: AgentTool = {
   name: "search_orders_and_sites",
   description:
     "Search sales orders (and their site's SITC progress) by order number, customer name, " +
-    "site/end-client company name (e.g. 'BPCL', 'VRL'), site address/location (e.g. " +
+    "site name (e.g. 'BPCL', 'VRL'), site address/location (e.g. " +
     "'Belgaum', 'Bangalore'), or product name/model/rating (e.g. 'RECD-500', '500', " +
     "'500 KVA') - matches any of these, not just order number or customer. Omit query to " +
     "cover every order. Lists up to 15 orders (newest first): id, orderNumber, customer, " +
     "product, quantity, additionalLineItems (extra products on the same order - an order can " +
     "carry more than one RECD/product), order value, dispatch dates, open (true until the site " +
-    "reaches the Commissioned SITC stage or later), and - if a site exists - its address, end-client company " +
-    "name, current SITC stage, assigned engineer, and erection vendor. ALWAYS also returns " +
+    "reaches the Commissioned SITC stage or later), and - if a site exists - site {id, siteName (exactly " +
+    "what the app's 'Site name' column shows - quote it verbatim, never add the address or city to it), address " +
+    "(the separate 'Address' column), current SITC stage, assigned engineer, erection vendor}. ALWAYS also returns " +
     "totalCount and totals {count, totalValue, ordersWithoutValue, totalUnits, unitsByProduct, " +
     "openCount, openValue, completedCount, byStage, byUpdateStatus} computed over EVERY matching order - quote " +
     "these for any 'how many orders/units' or 'total order value' question, never add up the " +
@@ -778,7 +807,7 @@ const searchOrdersAndSites: AgentTool = {
   inputSchema: {
     type: "object",
     properties: {
-      query: { type: "string", description: "Order number, customer name, site company name, or site address/location (partial match)." },
+      query: { type: "string", description: "Order number, customer name, site name, or site address/location (partial match)." },
       openOnly: { type: "boolean", description: "True = only open orders: no site yet, or the site has not yet reached the Commissioned SITC stage (commissioned / customer sign-off = closed)." },
       stageKey: { type: "string", description: "Optional: only orders whose site is currently at this SITC stage - key or label, any case, comma-separated for several, e.g. dispatched, installing, Commissioned, customer_signoff." },
       updateStatus: { type: "string", description: "Optional: only sites whose LATEST status update has this status - key or label, any case, comma-separated for several: pending, postpone_to_tomorrow, material_not_arrived, awaiting_scaffolding_materials, done ('completed' = done)." },
@@ -817,11 +846,15 @@ const searchOrdersAndSites: AgentTool = {
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
     }
 
-    const [{ closedFromSeq, openDefinition }, allStages, statusOptions] = await Promise.all([
+    const [{ closedFromSeq, openDefinition }, allStages, statusOptions, latest] = await Promise.all([
       loadOpenCutoff(),
       prisma.stageDefinition.findMany({ orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
       prisma.statusOption.findMany({ where: { domain: "site_stage" }, orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
+      loadLatestUpdates(auth.customerId ? { site: { order: { customerId: auth.customerId } } } : {}),
     ]);
+    const filtered = Boolean(query) || openOnly ||
+      (input.stageKey != null && String(input.stageKey).trim() !== "") ||
+      (input.updateStatus != null && String(input.updateStatus).trim() !== "");
     if (openOnly && closedFromSeq != null) filters.push(orderOpenWhere(closedFromSeq));
 
     if (input.stageKey != null && String(input.stageKey).trim()) {
@@ -846,35 +879,29 @@ const searchOrdersAndSites: AgentTool = {
         };
       }
       // "Latest update" can't be expressed in a Prisma where, so resolve it to site ids first.
-      const events = await prisma.siteStageEvent.findMany({
-        distinct: ["siteId"],
-        orderBy: [{ siteId: "asc" }, { createdAt: "desc" }],
-        select: { siteId: true, statusOption: { select: { key: true } } },
-      });
-      const siteIds = [...latestStatusBySite(events).values()]
+      const siteIds = [...latest.values()]
         .filter((e) => statuses.keys.includes(e.statusOption.key))
         .map((e) => e.siteId);
       filters.push({ site: { is: { id: { in: siteIds } } } });
     }
     const where: Prisma.OrderWhereInput = { AND: filters };
-    const latestUpdate = {
-      orderBy: { createdAt: "desc" as const },
-      take: 1,
-      select: { createdAt: true, statusOption: { select: { label: true } }, stageDefinition: { select: { label: true } } },
-    };
+    const latestOf = (siteId: string | undefined) => (siteId ? latest.get(siteId) : undefined);
 
     const productLabel = (p: { name: string; model: string }) => `${p.name} (${p.model})`;
-    const [orders, allMatching, allOrders] = await Promise.all([
+    const [orders, allMatching, wholeSet] = await Promise.all([
       prisma.order.findMany({
         where,
-        include: {
+        select: {
+          id: true, orderNumber: true, quantity: true, value: true,
+          orderDate: true, promisedDeliveryDate: true, actualDispatchDate: true,
           customer: { select: { name: true } },
           product: { select: { name: true, model: true } },
-          lineItems: { include: { product: { select: { name: true, model: true } } } },
+          lineItems: { select: { quantity: true, product: { select: { name: true, model: true } } } },
           site: {
-            include: {
-              currentStage: true, assignedEngineer: { select: { name: true } }, vendor: { select: { name: true } },
-              stageEvents: latestUpdate,
+            select: {
+              id: true, address: true, companyName: true,
+              currentStage: { select: { label: true, sequenceOrder: true } },
+              assignedEngineer: { select: { name: true } }, vendor: { select: { name: true } },
             },
           },
         },
@@ -889,60 +916,55 @@ const searchOrdersAndSites: AgentTool = {
           quantity: true,
           product: { select: { name: true, model: true } },
           lineItems: { select: { quantity: true, product: { select: { name: true, model: true } } } },
-          site: {
-            select: {
-              currentStage: { select: { label: true, sequenceOrder: true } },
-              stageEvents: { orderBy: { createdAt: "desc" }, take: 1, select: { statusOption: { select: { label: true } } } },
-            },
-          },
+          site: { select: { id: true, currentStage: { select: { label: true, sequenceOrder: true } } } },
         },
       }),
-      loadWholeSet(scope, closedFromSeq),
+      // Unfiltered call: the filtered set IS the whole set, so skip the second full-table read.
+      filtered ? loadWholeSet(scope, closedFromSeq, latest) : Promise.resolve(null),
     ]);
 
-    const totals = summarizeOrders(
-      allMatching.map((o) => ({
-        value: num(o.value),
-        quantity: o.quantity,
-        product: productLabel(o.product),
-        lineItems: o.lineItems.map((li) => ({ product: productLabel(li.product), quantity: li.quantity })),
-        stage: o.site ? o.site.currentStage : null,
-        updateStatus: o.site?.stageEvents[0]?.statusOption.label ?? null,
-      })),
-      closedFromSeq,
-    );
+    const matchingRows = allMatching.map((o) => ({
+      value: num(o.value),
+      quantity: o.quantity,
+      product: productLabel(o.product),
+      lineItems: o.lineItems.map((li) => ({ product: productLabel(li.product), quantity: li.quantity })),
+      stage: o.site ? o.site.currentStage : null,
+      updateStatus: latestOf(o.site?.id)?.statusOption.label ?? null,
+    }));
+    const totals = summarizeOrders(matchingRows, closedFromSeq);
+    const allOrders = wholeSet ?? wholeSetCounts(matchingRows, closedFromSeq);
 
     return {
       ...listMeta(orders.length, allMatching.length),
       openDefinition,
       updateStatusDefinition: UPDATE_STATUS_DEFINITION,
+      siteNameRule: SITE_NAME_RULE,
       totalsNote: "totals = the FILTERED subset only (query/openOnly/stageKey/updateStatus applied).",
       totals,
       allOrders,
-      orders: orders.map((o) => ({
-        id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
-        product: productLabel(o.product), quantity: o.quantity,
-        additionalLineItems: o.lineItems.map((li) => ({
-          product: productLabel(li.product), quantity: li.quantity,
-        })),
-        value: num(o.value),
-        orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
-        open: isOrderOpen(o.site?.currentStage.sequenceOrder ?? null, closedFromSeq),
-        site: o.site
-          ? {
-              id: o.site.id,
-              address: o.site.address,
-              companyName: o.site.companyName,
-              currentStage: o.site.currentStage.label,
-              updateStatus: o.site.stageEvents[0]?.statusOption.label ?? NO_UPDATES_LABEL,
-              lastUpdate: o.site.stageEvents[0]
-                ? { stage: o.site.stageEvents[0].stageDefinition.label, postedAt: isoDateIST(o.site.stageEvents[0].createdAt) }
-                : null,
-              assignedEngineer: o.site.assignedEngineer?.name ?? null,
-              vendor: o.site.vendor?.name ?? null,
-            }
-          : null,
-      })),
+      orders: orders.map((o) => {
+        const last = latestOf(o.site?.id);
+        return {
+          id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
+          product: productLabel(o.product), quantity: o.quantity,
+          additionalLineItems: o.lineItems.map((li) => ({
+            product: productLabel(li.product), quantity: li.quantity,
+          })),
+          value: num(o.value),
+          orderDate: o.orderDate, promisedDeliveryDate: o.promisedDeliveryDate, actualDispatchDate: o.actualDispatchDate,
+          open: isOrderOpen(o.site?.currentStage.sequenceOrder ?? null, closedFromSeq),
+          site: o.site
+            ? {
+                ...siteFields(o.site),
+                currentStage: o.site.currentStage.label,
+                updateStatus: last?.statusOption.label ?? NO_UPDATES_LABEL,
+                lastUpdate: last ? { stage: last.stageDefinition.label, postedAt: isoDateIST(last.createdAt) } : null,
+                assignedEngineer: o.site.assignedEngineer?.name ?? null,
+                vendor: o.site.vendor?.name ?? null,
+              }
+            : null,
+        };
+      }),
     };
   },
 };
@@ -953,7 +975,8 @@ const searchSiteStatusUpdates: AgentTool = {
     "List the SITC timeline entries (status-update history) already posted for a site - the " +
     "read-only counterpart to create_site_status_update. Resolve siteId first with " +
     "search_orders_and_sites (use the site's own \"id\" field, not the order's id). Returns " +
-    "each entry's stage, status, comment, who posted it, and when, most recent first. Use " +
+    "each entry's stage, status, comment, who posted it, and when, most recent first, and " +
+    "site {id, siteName, address} (quote siteName verbatim as the site's name; address is separate). Use " +
     "this whenever asked to view/summarise/recall past updates for a site, or to check the " +
     "current/last-logged stage before calling create_site_status_update. Also returns latestStatus " +
     "and byStatus/byStage counts over ALL of the site's updates. For counts ACROSS sites (e.g. how " +
@@ -1029,7 +1052,10 @@ const searchSiteStatusUpdates: AgentTool = {
         orderBy: { createdAt: "desc" },
         select: { statusOption: { select: { key: true, label: true } }, stageDefinition: { select: { label: true } } },
       }),
-      loadOpenCutoff().then(({ closedFromSeq }) => loadWholeSet(scope, closedFromSeq)),
+      Promise.all([
+        loadOpenCutoff(),
+        loadLatestUpdates(auth.customerId ? { site: { order: { customerId: auth.customerId } } } : auth.vendorId ? { site: { vendorId: auth.vendorId } } : {}),
+      ]).then(([{ closedFromSeq }, latest]) => loadWholeSet(scope, closedFromSeq, latest)),
     ]);
     const matching = statusKeys ? allForSite.filter((e) => statusKeys!.includes(e.statusOption.key)) : allForSite;
     const countBy = (labels: string[]) =>
@@ -1037,7 +1063,8 @@ const searchSiteStatusUpdates: AgentTool = {
 
     return {
       ...listMeta(events.length, matching.length),
-      site: site.companyName ?? site.address,
+      site: siteFields(site),
+      siteNameRule: SITE_NAME_RULE,
       orderNumber: site.order.orderNumber,
       latestStatus: allForSite[0]?.statusOption.label ?? NO_UPDATES_LABEL,
       byStatus: countBy(allForSite.map((e) => e.statusOption.label)),
