@@ -66,3 +66,18 @@ test("permission denials and customer restrictions survive capability guidance a
   assert.match(customer, /don't attempt a workaround/);
   assert.match(customer, /follow these unless they\s+conflict with the rules above/);
 });
+
+test("final answer only: no thinking aloud or self-corrections; names and places only from tool data", () => {
+  for (const prompt of [staff, buildAgentSystemPrompt(true)]) {
+    assert.match(prompt, /FINAL ANSWER ONLY: give only the final, checked answer/);
+    assert.match(prompt, /Never think aloud, never show\s+self-corrections/);
+    assert.match(prompt, /"X\? Actually Y\.\.\."/);
+    assert.match(prompt, /names and places\s+\(city, area, address\) come only from tool data, never guessed/);
+  }
+});
+
+test("'all bills' of a vendor include Rejected; payables never do", () => {
+  assert.match(staff, /"All bills" \/ "all <vendor> bills" = search_vendor_bills with NO status/);
+  assert.match(staff, /every status incl\. Rejected, Paid, Cancelled; not Deleted/);
+  assert.match(staff, /Payables totals \(get_payables\)\s+never include Rejected/);
+});
