@@ -31,6 +31,38 @@ export function pdfWorkerUrl(): string {
   return pathToFileURL(file).href;
 }
 
+/** pdf.js evaluates `new DOMMatrix()` at module load. Node has no DOMMatrix; pdf.js polyfills it
+ * from the optional native "@napi-rs/canvas", whose Linux binary isn't installed (only the
+ * Windows one is), so in the deployed function `import("pdf-parse")` threw "DOMMatrix is not
+ * defined" and every Drive PDF failed (fix 6 only shipped the worker). Text extraction never
+ * renders, so an inert stub is enough; a real DOMMatrix (browser, canvas) is left alone. */
+export function ensureDomMatrix(): void {
+  if (typeof (globalThis as { DOMMatrix?: unknown }).DOMMatrix !== "undefined") return;
+  class DOMMatrixStub {
+    a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
+    constructor(init?: number[]) {
+      if (Array.isArray(init) && init.length >= 6) [this.a, this.b, this.c, this.d, this.e, this.f] = init;
+    }
+    multiplySelf() { return this; }
+    preMultiplySelf() { return this; }
+    translate() { return this; }
+    scale() { return this; }
+    invertSelf() { return this; }
+  }
+  (globalThis as { DOMMatrix?: unknown }).DOMMatrix = DOMMatrixStub;
+}
+
+/** Fail fast with a clear message instead of hanging the agent turn on a huge/odd PDF. */
+export const PDF_EXTRACT_TIMEOUT_MS = 15_000;
+
+export function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ExtractionError(message)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
 export class ExtractionError extends Error {}
 
 const GOOGLE_DOC_EXPORT_MIME = "application/vnd.google-apps.document";
@@ -48,10 +80,15 @@ export function isExtractable(mimeType: string): boolean {
   );
 }
 
-export async function extractText(buffer: Buffer, mimeType: string): Promise<string> {
+export async function extractText(
+  buffer: Buffer,
+  mimeType: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<string> {
   if (mimeType === "application/pdf") {
     let PDFParse: typeof import("pdf-parse").PDFParse;
     try {
+      ensureDomMatrix();
       ({ PDFParse } = await import("pdf-parse"));
       PDFParse.setWorker(pdfWorkerUrl());
     } catch (err) {
@@ -61,7 +98,12 @@ export async function extractText(buffer: Buffer, mimeType: string): Promise<str
     }
     const parser = new PDFParse({ data: buffer });
     try {
-      const result = await parser.getText();
+      const timeoutMs = opts.timeoutMs ?? PDF_EXTRACT_TIMEOUT_MS;
+      const result = await withTimeout(
+        parser.getText(),
+        timeoutMs,
+        `PDF text extraction timed out after ${Math.round(timeoutMs / 1000)} s - the file may be very large; open it from its Drive link instead.`,
+      );
       if (!result.text.trim()) {
         throw new ExtractionError("PDF has no extractable text (likely scanned/image-only - OCR not supported).");
       }

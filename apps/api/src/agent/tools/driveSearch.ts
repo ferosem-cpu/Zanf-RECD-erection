@@ -286,12 +286,18 @@ export async function getFileMetadataWithinFolder(
   return { name: meta.name, mimeType: meta.mimeType, folderPath: folderPath(tree, parent), webViewLink: meta.webViewLink };
 }
 
+/** Download cap, so a stuck Drive response fails the tool call fast instead of eating the turn.
+ * Read-only by design: Drive has no read-only API that returns a PDF's text (files.export only
+ * covers Google Docs/Sheets; OCR needs a copy-and-convert, i.e. a write), so PDFs are always
+ * downloaded and parsed in-process. */
+export const DRIVE_DOWNLOAD_TIMEOUT_MS = 20_000;
+
 async function downloadRaw(drive: DriveLike, fileId: string): Promise<Buffer> {
-  const res = await drive.files.get({ fileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+  const res = await drive.files.get({ fileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer", timeout: DRIVE_DOWNLOAD_TIMEOUT_MS });
   return Buffer.from(res.data as ArrayBuffer);
 }
 
 async function downloadExport(drive: DriveLike, fileId: string, exportMimeType: string): Promise<Buffer> {
-  const res = await drive.files.export({ fileId, mimeType: exportMimeType }, { responseType: "arraybuffer" });
+  const res = await drive.files.export({ fileId, mimeType: exportMimeType }, { responseType: "arraybuffer", timeout: DRIVE_DOWNLOAD_TIMEOUT_MS });
   return Buffer.from(res.data as ArrayBuffer);
 }

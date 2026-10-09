@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { extractText, pdfWorkerUrl } from "../src/lib/docExtract";
-import { getDriveDocumentContent, resetFolderTreeCache, type DriveLike } from "../src/agent/tools/driveSearch";
+import { extractText, pdfWorkerUrl, ExtractionError, withTimeout } from "../src/lib/docExtract";
+import { getDriveDocumentContent, resetFolderTreeCache, DRIVE_DOWNLOAD_TIMEOUT_MS, type DriveLike } from "../src/agent/tools/driveSearch";
 
 /** Minimal one-page text PDF (Helvetica, correct xref offsets) - a fixture with no network. */
 function makePdf(text: string): Buffer {
@@ -64,4 +66,58 @@ test("get_document_content path: a Drive PDF inside the folder is downloaded and
   const out = await getDriveDocumentContent("q1", { drive, rootId: "root" });
   assert.equal(out.name, "AgsarPaint_Quote_TTCRN v1.2.pdf");
   assert.match(out.text, /Warranty clause 7\.2/);
+});
+
+test("PDF text extracts when @napi-rs/canvas is missing and Node has no DOMMatrix (the Vercel runtime)", () => {
+  // Fresh process: block the native canvas package like the deployed function (no Linux binary).
+  const script = `
+    const Module = require("node:module");
+    const orig = Module._resolveFilename;
+    Module._resolveFilename = function (req, ...rest) {
+      if (req === "@napi-rs/canvas" || req.startsWith("@napi-rs/canvas-")) throw new Error("Cannot find module '" + req + "'");
+      return orig.call(this, req, ...rest);
+    };
+    delete globalThis.DOMMatrix;
+    const { extractText } = require("./src/lib/docExtract.ts");
+    const pdf = Buffer.from(process.argv[1], "base64");
+    extractText(pdf, "application/pdf").then((t) => console.log("TEXT:" + t), (e) => console.log("ERR:" + e.message));
+  `;
+  const res = spawnSync(process.execPath, ["--import", "tsx", "-e", script, makePdf("Warranty: 24 months").toString("base64")], {
+    cwd: path.join(__dirname, ".."),
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.match(res.stdout, /TEXT:Warranty: 24 months/, res.stdout + res.stderr);
+});
+
+test("PDF extraction fails fast with a clear timeout message", async () => {
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 20, "PDF text extraction timed out after 0 s"),
+    (err: Error) => err instanceof ExtractionError && /timed out after/.test(err.message),
+  );
+});
+
+test("Drive downloads carry a timeout", async () => {
+  resetFolderTreeCache();
+  const seen: Array<Record<string, unknown> | undefined> = [];
+  const pdf = makePdf("x");
+  const drive: DriveLike = {
+    files: {
+      async list() {
+        return { data: { files: [] } };
+      },
+      async get(params, options) {
+        if (params.alt === "media") {
+          seen.push(options);
+          return { data: pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength) };
+        }
+        return { data: { id: "f1", name: "a.pdf", mimeType: "application/pdf", parents: ["root"] } };
+      },
+      async export() {
+        throw new Error("not used");
+      },
+    },
+  };
+  await getDriveDocumentContent("f1", { drive, rootId: "root" });
+  assert.equal(seen[0]?.timeout, DRIVE_DOWNLOAD_TIMEOUT_MS);
 });
