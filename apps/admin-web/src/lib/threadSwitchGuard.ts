@@ -14,3 +14,18 @@ export function createThreadSwitchGuard() {
 }
 
 export type ThreadSwitchGuard = ReturnType<typeof createThreadSwitchGuard>;
+
+/** "+ New": takes a ticket and clears the visible thread SYNCHRONOUSLY, before any await - the
+ * old thread's text must not stay on screen while the new conversation is being created. The
+ * created id is applied only if no later switch happened meanwhile. */
+export async function startNewThread(
+  guard: ThreadSwitchGuard,
+  clear: () => void,
+  create: () => Promise<string>,
+  apply: (id: string) => void,
+): Promise<void> {
+  const ticket = guard.begin();
+  clear();
+  const id = await create();
+  if (guard.isCurrent(ticket)) apply(id);
+}
