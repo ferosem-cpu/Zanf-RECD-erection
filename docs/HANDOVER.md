@@ -330,10 +330,17 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 10. Current open items (as of 2026-10-09)
 
-**Branch `fix/agent-retest-7` (2026-10-09)** - fixes the retest of `dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`
-(27 pass / 1 partial / 1 fail), see §11. After deploy, re-run `docs/agent-test-checklist.md` rows
-45-48 (all bills incl. Rejected; backups hidden; Drive PDF text; no thinking aloud) against
-production. Rollback target `dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`. No migration needed.
+**Branch `fix/agent-retest-8` (2026-10-09)** - fixes the retest of `dpl_JB9NPqWvwp3iDLLHS8EYdkHaEBGx`
+(10 pass / 2 partial / 1 fail), see §11. After deploy, re-run `docs/agent-test-checklist.md` rows
+49-53 (site names verbatim + address separate; AgsarPaint warranty from Drive; narrow backup
+hiding; revenue tax-invoice count) against production. Rollback target
+`dpl_JB9NPqWvwp3iDLLHS8EYdkHaEBGx`. No migration needed.
+- **Agent site fields:** tools return `site {id, siteName, address}`; siteName = `Site.companyName`
+  = the Sites/Orders "Site name" column. There is no end-client label in the UI.
+- **Commit `d22b077` has a wrong message** (a stale message file); its content is the Drive change,
+  reverted in `ef99b6d` and re-committed as `4697bce`. Net effect = `4697bce`.
+
+**Branch `fix/agent-retest-7` (2026-10-09)** - merged and deployed (`dpl_JB9NPqWvwp3iDLLHS8EYdkHaEBGx`).
 - **Drive PDF text needs no Drive write:** Drive has no read-only API that returns a PDF's text
   (`files.export` only covers Google Docs/Sheets; OCR needs a copy-and-convert), so PDFs are
   downloaded and parsed in-process. Scanned/image-only PDFs still can't be read (no OCR).
@@ -419,6 +426,28 @@ production. Rollback target `dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`. No migration nee
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-10-09 — Fix 8, branch `fix/agent-retest-8` (retest of `dpl_JB9NPqWvwp3iDLLHS8EYdkHaEBGx`).**
+  `ab9105b` site naming: search_orders_and_sites / search_site_status_updates return
+  `site {id, siteName, address}` (siteName = the app's "Site name" column = `Site.companyName`);
+  the old `companyName` + "end-client" wording, search_site_status_updates' `companyName ?? address`
+  and the prompt's "BPCL - Hosakote, Bangalore" link examples taught the model to label addresses
+  as sites and merge names with areas. New SITE NAMES prompt rule + `siteNameRule` in the output.
+  Query trim: the latest status per site is read once (one distinct `siteStageEvent` query) instead
+  of a nested `stageEvents take:1` in three order queries (Prisma paginates nested take in memory,
+  so each read every event); `select` instead of `include`; an unfiltered call reuses the totals
+  set for `allOrders` (2 order queries instead of 3). Not timed against production.
+  `4697bce` Drive search (`d22b077` = same change, wrong message; reverted in `ef99b6d`). **Root
+  cause (from code; the failing call's input was not visible, not verified against production):**
+  fix 7's exclusion did NOT match that name (test proves it). Search required EVERY word of the
+  query in the name or content, and Drive's `name contains` is a word-prefix match that doesn't
+  split `AgsarPaint_Quote_TTCRN` on underscores - so a model query like "AgsarPaint warranty" or
+  "AgsarPaint Quote TTCRN" found nothing; and a file NAME passed to get_document_content as
+  `fileId` threw a raw Drive "not found". Now: strict pass (full name with/without extension,
+  phrase, every word) + loose pass (any 3+ char word in the name), merged strict-first;
+  get_document_content takes an id or exact name; hiding narrowed to `zanapp-backup-*` names and
+  JSON (a "backup"-named PDF is visible again). `ced38ff` get_revenue_summary
+  `invoiced.taxInvoiceCount` (was invoiceCount) + prompt says to state it. Tests: API 145.
 
 - **2026-10-09 — Fix 7, branch `fix/agent-retest-7` (retest of `dpl_GNjor5icfnYpmvA2iEFEsTbRcZVF`).**
   `21c8b6c` Drive PDFs, real root cause: the worker WAS deployed (fix 6), but `import("pdf-parse")`

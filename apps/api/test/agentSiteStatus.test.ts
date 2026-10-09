@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PERMISSION_KEY } from "@recd/shared";
 import { prisma } from "../src/lib/prisma";
+import { buildAgentSystemPrompt } from "../src/agent/systemPrompt";
 import {
   resolveLookupFilter, latestStatusBySite, summarizeOrders, normalizeLabel, validValuesList,
   UPDATE_STATUS_SYNONYMS, STAGE_SYNONYMS, NO_UPDATES_LABEL, zanAppReadTools,
@@ -131,6 +132,7 @@ test("search_orders_and_sites: 'which ones are installing' filters server-side b
     findMany: async () => STAGES,
   });
   replace("statusOption", { findMany: async () => STATUS_OPTIONS });
+  replace("siteStageEvent", { findMany: async () => [] });
   const calls: any[] = [];
   replace("order", { findMany: async (args: any) => { calls.push(args); return []; } });
 
@@ -164,9 +166,13 @@ test("filtered order/site queries also return whole-set counts (allOrders) that 
     findMany: async () => STAGES,
   });
   replace("statusOption", { findMany: async () => STATUS_OPTIONS });
-  const site = (label: string, sequenceOrder: number, status = "Done") => ({
-    currentStage: { label, sequenceOrder }, stageEvents: [{ statusOption: { label: status } }],
-  });
+  // Latest update per site comes from ONE siteStageEvent query, joined by site id.
+  const events: any[] = [];
+  const site = (label: string, sequenceOrder: number, status = "Done") => {
+    const id = `s${events.length + 1}`;
+    events.push({ siteId: id, createdAt: new Date("2026-10-01T05:00:00Z"), statusOption: { key: status.toLowerCase(), label: status }, stageDefinition: { label } });
+    return { id, currentStage: { label, sequenceOrder } };
+  };
   // Whole set: 9 Commissioned, 2 Installing, 1 Dispatched, 1 without a site.
   const all = [
     ...Array.from({ length: 9 }, () => site("Commissioned", 11)),
@@ -182,7 +188,7 @@ test("filtered order/site queries also return whole-set counts (allOrders) that 
     },
   });
   replace("site", { findUnique: async () => ({ id: "s1", vendorId: null, companyName: "BPCL", address: "x", order: { customerId: "c1", orderNumber: "O1" } }) });
-  replace("siteStageEvent", { findMany: async () => [] });
+  replace("siteStageEvent", { findMany: async (args: any) => (args.distinct ? events : []) });
 
   const out: any = await tools.search_orders_and_sites.handler({ openOnly: true }, auth);
   assert.equal(out.totals.count, 4);
@@ -205,4 +211,68 @@ test("filtered order/site queries also return whole-set counts (allOrders) that 
   const customer = { userId: "c", roleKey: "customer", customerId: "c1", permissions: new Set([PERMISSION_KEY.VIEW_SITE_STATUS]) };
   await tools.search_orders_and_sites.handler({ stageKey: "installing" }, customer);
   assert.ok(wheres.some((w) => JSON.stringify(w) === JSON.stringify({ customerId: "c1" })));
+});
+
+test("site names: siteName = the app's 'Site name' (companyName) verbatim, address separate; one event query", async (t) => {
+  const tools = Object.fromEntries(zanAppReadTools.map((x) => [x.name, x]));
+  const auth = { userId: "u1", roleKey: "management", permissions: new Set([PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.VIEW_SITE_STATUS]) };
+  const replace = (key: string, value: unknown) => {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  };
+  replace("stageDefinition", {
+    findFirst: async () => ({ label: "Commissioned", sequenceOrder: 11 }),
+    findMany: async () => STAGES,
+  });
+  replace("statusOption", { findMany: async () => STATUS_OPTIONS });
+  let eventQueries = 0;
+  replace("siteStageEvent", {
+    findMany: async (args: any) => {
+      if (!args.distinct) return [];
+      eventQueries += 1;
+      return [{ siteId: "s1", createdAt: new Date("2026-10-08T06:00:00Z"), statusOption: { key: "pending", label: "Pending" }, stageDefinition: { label: "Installing" } }];
+    },
+  });
+  const site = {
+    id: "s1", companyName: "BOSTIK", address: "Bommasandra Industrial Area, Bangalore",
+    currentStage: { label: "Installing", sequenceOrder: 8 }, assignedEngineer: null, vendor: null,
+  };
+  const orderCalls: any[] = [];
+  replace("order", {
+    findMany: async (args: any) => {
+      orderCalls.push(args);
+      return [{
+        id: "o1", orderNumber: "ORD-1", quantity: 1, value: null, orderDate: null, promisedDeliveryDate: null, actualDispatchDate: null,
+        customer: { name: "Ethen" }, product: { name: "RECD", model: "R" }, lineItems: [], site,
+      }];
+    },
+  });
+  replace("site", { findUnique: async () => ({ ...site, vendorId: null, order: { customerId: "c1", orderNumber: "ORD-1" } }) });
+
+  const out: any = await tools.search_orders_and_sites.handler({}, auth);
+  const s = out.orders[0].site;
+  assert.equal(s.siteName, "BOSTIK");
+  assert.equal(s.address, "Bommasandra Industrial Area, Bangalore");
+  assert.equal(s.companyName, undefined, "no ambiguous companyName/end-client field");
+  assert.equal(out.orders[0].customer, "Ethen");
+  assert.equal(s.updateStatus, "Pending");
+  assert.deepEqual(s.lastUpdate, { stage: "Installing", postedAt: "2026-10-08" });
+  assert.match(out.siteNameRule, /verbatim/);
+  // Unfiltered: list + totals only (the whole set is the totals set), latest updates read once.
+  assert.equal(orderCalls.length, 2);
+  assert.equal(eventQueries, 1);
+  assert.equal(out.allOrders.total, 1);
+  assert.ok(orderCalls.every((c) => c.select && !c.include && !JSON.stringify(c.select).includes("stageEvents")));
+
+  const upd: any = await tools.search_site_status_updates.handler({ siteId: "s1" }, auth);
+  assert.deepEqual(upd.site, { id: "s1", siteName: "BOSTIK", address: "Bommasandra Industrial Area, Bangalore" });
+
+  const prompt = buildAgentSystemPrompt(false);
+  assert.match(prompt, /SITE NAMES: a site's name is the tool's siteName field/);
+  assert.match(prompt, /\[siteName\]\(\/sites\/\{site\.id\}\)/);
+  assert.doesNotMatch(prompt, /BPCL - Hosakote, Bangalore/);
 });

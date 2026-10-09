@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PERMISSION_KEY } from "@recd/shared";
 import { prisma } from "../src/lib/prisma";
+import { buildAgentSystemPrompt } from "../src/agent/systemPrompt";
 import {
   supplierNameMatches, summarizePayables, ageingBucket, indianFyQuarter, resolveRevenuePeriod, summarizeRevenue,
   zanAppFinanceTools, PAYABLE_BILL_STATUSES, type PayableBillRow,
@@ -112,7 +113,7 @@ test("revenue: invoiced excl. GST net of credit notes; collected = cash, TDS and
   assert.equal(out.invoiced.netExclGst, 140000);
   assert.equal(out.invoiced.netGst, 25200);
   assert.equal(out.invoiced.netInclGst, 165200);
-  assert.equal(out.invoiced.invoiceCount, 2);
+  assert.equal(out.invoiced.taxInvoiceCount, 2);
   assert.equal(out.collected.cashReceived, 100000);
   assert.equal(out.collected.tdsDeducted, 5000); // 2000 tdsAmount + the whole legacy "tds" row
   assert.equal(out.collected.settledTotal, 105000);
@@ -214,7 +215,10 @@ test("get_revenue_summary counts tax invoices only; proformas are excluded and t
   );
   assert.match(res.answerRule, /cash \+ TDS = settled total/);
   assert.equal(invoiceWheres[0].docType, "tax_invoice");
-  assert.equal(res.invoiced.invoiceCount, 1);
+  assert.equal(res.invoiced.taxInvoiceCount, 1);
+  assert.match(res.answerRule, /number of tax invoices \(invoiced\.taxInvoiceCount/);
+  assert.match(tool.description, /taxInvoiceCount/);
+  assert.match(buildAgentSystemPrompt(false), /invoiced\.taxInvoiceCount, e\.g\. "from 12 tax invoices"/);
   assert.equal(res.invoiced.netExclGst, 100000);
   assert.equal(res.invoiced.netInclGst, 118000);
   assert.equal(res.proformaInvoicesInPeriod.count, 1);

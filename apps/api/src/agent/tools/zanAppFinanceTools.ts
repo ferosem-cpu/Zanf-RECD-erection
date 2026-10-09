@@ -650,7 +650,8 @@ export function summarizeRevenue(invoices: RevenueInvoiceRow[], creditNotes: Rev
   return {
     invoiced: {
       basis: "Issued tax invoices (issued, partially paid or paid; drafts, cancelled and proforma invoices excluded) by invoice date, net of issued credit notes dated in the same period.",
-      invoiceCount: invoices.length,
+      /** Issued tax invoices dated in the period (the same rows as the figures below). */
+      taxInvoiceCount: invoices.length,
       creditNoteCount: creditNotes.length,
       netExclGst: sumMoney([inv.taxable, -cn.taxable]),
       netGst: sumMoney([inv.gst, -cn.gst]),
@@ -675,10 +676,10 @@ const getRevenueSummary: AgentTool = {
     "'turnover this FY'). Periods use the Indian financial year (Apr-Mar; Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, " +
     "Q4 Jan-Mar) in IST; current periods run to today ('to date'). Use all_time for 'total invoiced'. Returns the " +
     "exact period dates and two server-computed figures, each with its basis: invoiced (issued tax invoices by " +
-    "invoice date, net of credit notes: netExclGst = taxable value EXCL. GST, netGst, netInclGst = INCL. GST) and " +
+    "invoice date, net of credit notes: taxInvoiceCount, netExclGst = taxable value EXCL. GST, netGst, netInclGst = INCL. GST) and " +
     "collected (cashReceived, tdsDeducted and settledTotal = cash + TDS; quote all three, never cash alone as " +
     "'collected'). Answer with BOTH excl. and incl. GST " +
-    "invoiced figures, state the period dates and invoiced vs collected. Revenue = tax invoices only; proforma " +
+    "invoiced figures, state the period dates, the number of tax invoices and invoiced vs collected. Revenue = tax invoices only; proforma " +
     "invoices are excluded - say so briefly. Quote these, never add up invoice/payment rows.",
   inputSchema: {
     type: "object",
@@ -727,7 +728,7 @@ const getRevenueSummary: AgentTool = {
       ),
       revenueRule: REVENUE_RULE,
       proformaInvoicesInPeriod: { count: proformaCount, note: "Proforma invoices are not revenue and are excluded from every figure above." },
-      answerRule: "State the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or collections as cash + TDS = settled total - all three, never cash alone as 'collected'), and say briefly: tax invoices only, proformas excluded.",
+      answerRule: "State the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or collections as cash + TDS = settled total - all three, never cash alone as 'collected'), state the number of tax invoices (invoiced.taxInvoiceCount, e.g. 'from 12 tax invoices'), and say briefly: tax invoices only, proformas excluded.",
     };
   },
 };
