@@ -136,12 +136,73 @@ test("search_orders_and_sites: 'which ones are installing' filters server-side b
 
   const out: any = await tool.handler({ stageKey: "installing", query: "Chennai" }, auth);
   assert.equal(out.error, undefined);
-  // Both the listed page (take 15) and the totals query use the same filtered where.
-  assert.equal(calls.length, 2);
+  // Both the listed page (take 15) and the totals query use the same filtered where; the third
+  // (whole-set counts) has no user filters at all.
+  assert.equal(calls.length, 3);
   const listed = calls.find((c) => c.take != null);
-  const totals = calls.find((c) => c.take == null);
+  const totals = calls.find((c) => c.take == null && c.where.AND);
   assert.ok(listed && totals);
+  assert.deepEqual(calls.find((c) => !c.where.AND).where, {});
   assert.deepEqual(listed.where, totals.where);
   assert.deepEqual(listed.where.AND.at(-1), { site: { is: { currentStage: { key: { in: ["installing"] } } } } });
   assert.ok(listed.where.AND.some((f: any) => Array.isArray(f.OR)), "query filter is in the where too");
+});
+
+test("filtered order/site queries also return whole-set counts (allOrders) that ignore the filters", async (t) => {
+  const tools = Object.fromEntries(zanAppReadTools.map((x) => [x.name, x]));
+  const auth = { userId: "u1", roleKey: "management", permissions: new Set([PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.VIEW_SITE_STATUS]) };
+  const replace = (key: string, value: unknown) => {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  };
+  replace("stageDefinition", {
+    findFirst: async () => ({ label: "Commissioned", sequenceOrder: 11 }),
+    findMany: async () => STAGES,
+  });
+  replace("statusOption", { findMany: async () => STATUS_OPTIONS });
+  const site = (label: string, sequenceOrder: number, status = "Done") => ({
+    currentStage: { label, sequenceOrder }, stageEvents: [{ statusOption: { label: status } }],
+  });
+  // Whole set: 9 Commissioned, 2 Installing, 1 Dispatched, 1 without a site.
+  const all = [
+    ...Array.from({ length: 9 }, () => site("Commissioned", 11)),
+    site("Installing", 8, "Pending"), site("Installing", 8), site("Dispatched", 5, "Pending"), null,
+  ].map((s) => ({ value: null, quantity: 1, product: { name: "RECD", model: "R" }, lineItems: [], site: s }));
+  const wheres: any[] = [];
+  replace("order", {
+    findMany: async (args: any) => {
+      wheres.push(args.where);
+      if (args.take != null) return [];
+      // The filtered call (openOnly) only sees the open ones.
+      return args.where.AND ? all.filter((o) => !o.site || o.site.currentStage.sequenceOrder < 11) : all;
+    },
+  });
+  replace("site", { findUnique: async () => ({ id: "s1", vendorId: null, companyName: "BPCL", address: "x", order: { customerId: "c1", orderNumber: "O1" } }) });
+  replace("siteStageEvent", { findMany: async () => [] });
+
+  const out: any = await tools.search_orders_and_sites.handler({ openOnly: true }, auth);
+  assert.equal(out.totals.count, 4);
+  assert.equal(out.totals.completedCount, 0);
+  assert.deepEqual(
+    [out.allOrders.total, out.allOrders.open, out.allOrders.closed],
+    [13, 4, 9],
+  );
+  assert.deepEqual(out.allOrders.byStage.find((s: any) => s.stage === "Commissioned"), { stage: "Commissioned", count: 9 });
+  assert.deepEqual(out.allOrders.byUpdateStatus[0], { updateStatus: "Done", count: 10 });
+  assert.match(out.allOrders.note, /WHOLE SET, ignores filters/);
+  assert.ok(wheres.some((w) => JSON.stringify(w) === "{}"), "whole-set query has no user filters");
+
+  const upd: any = await tools.search_site_status_updates.handler({ siteId: "s1", status: "done" }, auth);
+  assert.equal(upd.error, undefined);
+  assert.deepEqual([upd.allOrders.total, upd.allOrders.closed], [13, 9]);
+
+  // A customer's whole set is still scoped to their own orders.
+  wheres.length = 0;
+  const customer = { userId: "c", roleKey: "customer", customerId: "c1", permissions: new Set([PERMISSION_KEY.VIEW_SITE_STATUS]) };
+  await tools.search_orders_and_sites.handler({ stageKey: "installing" }, customer);
+  assert.ok(wheres.some((w) => JSON.stringify(w) === JSON.stringify({ customerId: "c1" })));
 });

@@ -11,7 +11,8 @@ import { api, NetworkError } from "@/lib/apiClient";
 const AGENT_REPLY_TIMEOUT_MS = 90_000;
 import { useAuth } from "@/components/AuthContext";
 import { captureFile } from "@/lib/fileCapture";
-import { createThreadSwitchGuard } from "@/lib/threadSwitchGuard";
+import { createThreadSwitchGuard, startNewThread } from "@/lib/threadSwitchGuard";
+import { sanitizeMessages } from "@/lib/assistantText";
 
 /**
  * Minimal typing for the Web Speech API's SpeechRecognition - not in TypeScript's default DOM
@@ -144,6 +145,7 @@ export default function AgentChatBubble() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
+  const [creatingThread, setCreatingThread] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -285,13 +287,28 @@ export default function AgentChatBubble() {
   }
 
   async function startNewConversation() {
-    const ticket = threadGuard.begin();
-    const created = await api<{ id: string }>("/agent/conversations", { method: "POST", body: JSON.stringify({}) });
-    if (!threadGuard.isCurrent(ticket)) return;
-    setActiveId(created.id);
-    setMessages([]);
-    setShowHistory(false);
-    loadConversations();
+    try {
+      await startNewThread(
+        threadGuard,
+        () => {
+          // Before any await, so the old thread's text never lingers on screen.
+          setMessages([]);
+          setError(null);
+          setActiveId(null);
+          setCreatingThread(true);
+          setShowHistory(false);
+        },
+        async () => (await api<{ id: string }>("/agent/conversations", { method: "POST", body: JSON.stringify({}) })).id,
+        (id) => {
+          setActiveId(id);
+          loadConversations();
+        },
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingThread(false);
+    }
   }
 
   async function openPanel() {
@@ -324,7 +341,9 @@ export default function AgentChatBubble() {
   async function send() {
     const text = input.trim();
     const attachment = attachedFile;
-    if ((!text && !attachment) || sending) return;
+    // While "+ New" is creating its thread there is no active id yet; sending now would fall
+    // back to the most recent (old) thread.
+    if ((!text && !attachment) || sending || creatingThread) return;
     setInput("");
     setAttachedFile(null);
     setAttachError(null);
@@ -447,7 +466,9 @@ export default function AgentChatBubble() {
   // Render user turns, assistant turns that said something, and any tool-result that's a
   // proposed write action (confirm card) - other tool-call-only/raw-result turns stay hidden
   // as implementation detail.
-  const visibleMessages = messages.filter(
+  // Sanitised at render time too: a thread saved before the special-token fix may still hold
+  // an "<EOS_TOKEN>" reply (the API sanitises on load; this covers an older API as well).
+  const visibleMessages = sanitizeMessages(messages).filter(
     (m) => ((m.role === "user" || m.role === "assistant") && m.content) || parsePendingAction(m),
   );
 

@@ -13,6 +13,7 @@ import { settledFromAllocations, netInvoiceTotal } from "../../services/settleme
 import { paymentCashAndTds, normalizePaymentMethod } from "../../services/paymentSplit";
 import { LIST_LIMIT, listMeta, listPage } from "../listResult";
 import { isoDateIST } from "../istDates";
+import { isPastDue, istStartOfDay } from "../../services/ageing";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const RESULT_LIMIT = LIST_LIMIT;
@@ -228,7 +229,7 @@ const searchQuotations: AgentTool = {
 };
 
 /** Same definition as the finance dashboard (routes/financeDashboard.ts /summary): an
- * issued/partially_paid invoice whose dueDate is set and earlier than now. Drafts, paid and
+ * issued/partially_paid invoice whose dueDate is set and before today (IST, isPastDue). Drafts, paid and
  * cancelled invoices are never overdue; no balance > 0 filter (the dashboard has none). */
 export const OVERDUE_INVOICE_STATUSES = ["issued", "partially_paid"];
 
@@ -259,7 +260,8 @@ export function invoiceStatusWhere(filter: { overdueOnly: boolean; statuses?: st
   }
   // An explicit status can only narrow the overdue set (status="paid" + overdueOnly = nothing).
   const overdueStatuses = statuses ? OVERDUE_INVOICE_STATUSES.filter((s) => statuses.includes(s)) : OVERDUE_INVOICE_STATUSES;
-  return { status: { in: overdueStatuses }, dueDate: { lt: now } };
+  // services/ageing isPastDue: due date's IST calendar date before today's (no due date = not overdue).
+  return { status: { in: overdueStatuses }, dueDate: { lt: istStartOfDay(now) } };
 }
 
 export interface InvoiceSummaryRow {
@@ -378,7 +380,7 @@ const searchInvoices: AgentTool = {
       const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
       const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), cnTotal);
       const balance = netTotal.minus(paid);
-      const overdue = OVERDUE_INVOICE_STATUSES.includes(inv.status) && !!inv.dueDate && inv.dueDate.getTime() < now.getTime();
+      const overdue = OVERDUE_INVOICE_STATUSES.includes(inv.status) && isPastDue(inv.dueDate, now);
       return {
         id: inv.id,
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
@@ -688,6 +690,62 @@ export function summarizeOrders(rows: OrderSummaryRow[], closedFromSeq: number |
   };
 }
 
+export const WHOLE_SET_NOTE =
+  "WHOLE SET, ignores filters (query/openOnly/stageKey/updateStatus/status): every order the user may see. Quote these " +
+  "for any count outside the filtered subset (e.g. how many are commissioned while openOnly=true); never infer them " +
+  "from the filtered totals or rows.";
+
+/** Whole-set order counts (no user filters, only permission scope): total, open, closed
+ * (Commissioned or later), byStage, byUpdateStatus - next to filtered totals so a filtered
+ * answer never says "0 commissioned" when 9 are. */
+export function wholeSetCounts(rows: Pick<OrderSummaryRow, "stage" | "updateStatus">[], closedFromSeq: number | null) {
+  const s = summarizeOrders(rows.map((r) => ({ ...r, value: null, quantity: 0, product: "", lineItems: [] })), closedFromSeq);
+  return {
+    note: WHOLE_SET_NOTE,
+    total: s.count,
+    open: s.openCount,
+    closed: s.completedCount,
+    byStage: s.byStage.map(({ stage, count }) => ({ stage, count })),
+    byUpdateStatus: s.byUpdateStatus,
+  };
+}
+
+async function loadOpenCutoff() {
+  // Stages are DB rows, so the Commissioned cutoff is read by key/label, not hard-coded
+  // (sequenceOrder 11 in the seed, just before customer_signoff).
+  const [commissionedStage, finalStage] = await Promise.all([
+    prisma.stageDefinition.findFirst({
+      where: { OR: [{ key: STAGE_KEY.COMMISSIONED }, { label: { equals: "Commissioned", mode: "insensitive" } }] },
+      orderBy: { sequenceOrder: "asc" },
+      select: { label: true, sequenceOrder: true },
+    }),
+    prisma.stageDefinition.findFirst({
+      orderBy: { sequenceOrder: "desc" },
+      select: { label: true, sequenceOrder: true },
+    }),
+  ]);
+  return resolveOpenCutoff(commissionedStage, finalStage);
+}
+
+/** Every order in `scope` (permission scoping only), slimmed to stage + latest update status. */
+async function loadWholeSet(scope: Prisma.OrderWhereInput, closedFromSeq: number | null) {
+  const rows = await prisma.order.findMany({
+    where: scope,
+    select: {
+      site: {
+        select: {
+          currentStage: { select: { label: true, sequenceOrder: true } },
+          stageEvents: { orderBy: { createdAt: "desc" }, take: 1, select: { statusOption: { select: { label: true } } } },
+        },
+      },
+    },
+  });
+  return wholeSetCounts(
+    rows.map((o) => ({ stage: o.site ? o.site.currentStage : null, updateStatus: o.site?.stageEvents[0]?.statusOption.label ?? null })),
+    closedFromSeq,
+  );
+}
+
 const searchOrdersAndSites: AgentTool = {
   name: "search_orders_and_sites",
   description:
@@ -703,7 +761,10 @@ const searchOrdersAndSites: AgentTool = {
     "totalCount and totals {count, totalValue, ordersWithoutValue, totalUnits, unitsByProduct, " +
     "openCount, openValue, completedCount, byStage, byUpdateStatus} computed over EVERY matching order - quote " +
     "these for any 'how many orders/units' or 'total order value' question, never add up the " +
-    "listed rows. For open/pending/in-progress orders set openOnly=true (Order has no status " +
+    "listed rows. totals cover the FILTERED subset only; allOrders {total, open, closed, byStage, byUpdateStatus} " +
+    "is the WHOLE set (ignores every filter) - quote allOrders for any count outside the filter (e.g. 'how many " +
+    "are commissioned' after an openOnly or stage-filtered call) and never infer such counts from the filtered " +
+    "subset. For open/pending/in-progress orders set openOnly=true (Order has no status " +
     "field; see openDefinition in the result). Each site also has updateStatus = the status of its " +
     "latest SITC status update (the Sites list 'Update status' column: Done, Pending, Postpone to " +
     "tomorrow, ...); for 'how many sites are in done status' / 'sites whose update is Done' set " +
@@ -744,31 +805,23 @@ const searchOrdersAndSites: AgentTool = {
       : {};
 
     const filters: Prisma.OrderWhereInput[] = [searchClauses];
+    // Permission scope only - the whole-set counts use this, never the user's filters.
+    let scope: Prisma.OrderWhereInput = {};
     if (auth.customerId) {
       // A customer's own id comes from their authenticated session (middleware/auth.ts), never
       // from tool input, so this scoping can't be bypassed by anything the model or user types.
       if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("your sites");
-      filters.unshift({ customerId: auth.customerId });
+      scope = { customerId: auth.customerId };
+      filters.unshift(scope);
     } else {
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
     }
 
-    // Stages are DB rows, so the Commissioned cutoff is read by key/label, not hard-coded
-    // (sequenceOrder 11 in the seed, just before customer_signoff).
-    const [commissionedStage, finalStage, allStages, statusOptions] = await Promise.all([
-      prisma.stageDefinition.findFirst({
-        where: { OR: [{ key: STAGE_KEY.COMMISSIONED }, { label: { equals: "Commissioned", mode: "insensitive" } }] },
-        orderBy: { sequenceOrder: "asc" },
-        select: { label: true, sequenceOrder: true },
-      }),
-      prisma.stageDefinition.findFirst({
-        orderBy: { sequenceOrder: "desc" },
-        select: { label: true, sequenceOrder: true },
-      }),
+    const [{ closedFromSeq, openDefinition }, allStages, statusOptions] = await Promise.all([
+      loadOpenCutoff(),
       prisma.stageDefinition.findMany({ orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
       prisma.statusOption.findMany({ where: { domain: "site_stage" }, orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
     ]);
-    const { closedFromSeq, openDefinition } = resolveOpenCutoff(commissionedStage, finalStage);
     if (openOnly && closedFromSeq != null) filters.push(orderOpenWhere(closedFromSeq));
 
     if (input.stageKey != null && String(input.stageKey).trim()) {
@@ -811,7 +864,7 @@ const searchOrdersAndSites: AgentTool = {
     };
 
     const productLabel = (p: { name: string; model: string }) => `${p.name} (${p.model})`;
-    const [orders, allMatching] = await Promise.all([
+    const [orders, allMatching, allOrders] = await Promise.all([
       prisma.order.findMany({
         where,
         include: {
@@ -844,6 +897,7 @@ const searchOrdersAndSites: AgentTool = {
           },
         },
       }),
+      loadWholeSet(scope, closedFromSeq),
     ]);
 
     const totals = summarizeOrders(
@@ -862,7 +916,9 @@ const searchOrdersAndSites: AgentTool = {
       ...listMeta(orders.length, allMatching.length),
       openDefinition,
       updateStatusDefinition: UPDATE_STATUS_DEFINITION,
+      totalsNote: "totals = the FILTERED subset only (query/openOnly/stageKey/updateStatus applied).",
       totals,
+      allOrders,
       orders: orders.map((o) => ({
         id: o.id, orderNumber: o.orderNumber, customer: o.customer.name,
         product: productLabel(o.product), quantity: o.quantity,
@@ -901,7 +957,9 @@ const searchSiteStatusUpdates: AgentTool = {
     "this whenever asked to view/summarise/recall past updates for a site, or to check the " +
     "current/last-logged stage before calling create_site_status_update. Also returns latestStatus " +
     "and byStatus/byStage counts over ALL of the site's updates. For counts ACROSS sites (e.g. how " +
-    "many sites are in Done status) use search_orders_and_sites with updateStatus instead.",
+    "many sites are in Done status) use search_orders_and_sites with updateStatus instead. Also returns " +
+    "allOrders {total, open, closed, byStage, byUpdateStatus} over the WHOLE set of orders/sites (ignores " +
+    "filters) - quote it for any count across sites, never infer such counts from this one site.",
   inputSchema: {
     type: "object",
     properties: {
@@ -948,8 +1006,13 @@ const searchSiteStatusUpdates: AgentTool = {
       statusKeys = resolved.keys;
     }
     const where: Prisma.SiteStageEventWhereInput = { siteId, ...(statusKeys ? { statusOption: { key: { in: statusKeys } } } : {}) };
+    // Whole-set scope mirrors the access checks above: customers their own orders, vendor
+    // engineers their vendor's sites, everyone else all orders.
+    const scope: Prisma.OrderWhereInput = auth.customerId
+      ? { customerId: auth.customerId }
+      : auth.vendorId ? { site: { is: { vendorId: auth.vendorId } } } : {};
 
-    const [events, allForSite] = await Promise.all([
+    const [events, allForSite, allOrders] = await Promise.all([
       prisma.siteStageEvent.findMany({
         where,
         include: {
@@ -966,6 +1029,7 @@ const searchSiteStatusUpdates: AgentTool = {
         orderBy: { createdAt: "desc" },
         select: { statusOption: { select: { key: true, label: true } }, stageDefinition: { select: { label: true } } },
       }),
+      loadOpenCutoff().then(({ closedFromSeq }) => loadWholeSet(scope, closedFromSeq)),
     ]);
     const matching = statusKeys ? allForSite.filter((e) => statusKeys!.includes(e.statusOption.key)) : allForSite;
     const countBy = (labels: string[]) =>
@@ -978,6 +1042,8 @@ const searchSiteStatusUpdates: AgentTool = {
       latestStatus: allForSite[0]?.statusOption.label ?? NO_UPDATES_LABEL,
       byStatus: countBy(allForSite.map((e) => e.statusOption.label)),
       byStage: countBy(allForSite.map((e) => e.stageDefinition.label)),
+      siteCountsNote: "latestStatus/byStatus/byStage = ALL of this site's updates (status filter ignored); updates = the filtered list.",
+      allOrders,
       updates: events.map((e) => ({
         id: e.id,
         stage: e.stageDefinition.label,

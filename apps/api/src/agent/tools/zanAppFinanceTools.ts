@@ -8,7 +8,7 @@ import { PERMISSION_KEY, BILL_STATUS, PO_STATUS, INVOICE_STATUS, INVOICE_DOC_TYP
 import { prisma } from "../../lib/prisma";
 import { splitPayment } from "../../services/paymentSplit";
 import { settledFromAllocations } from "../../services/settlement";
-import { ageingBucket, emptyAgeing } from "../../services/ageing";
+import { ageingBucket, documentAgeing, emptyAgeing } from "../../services/ageing";
 import {
   PAYABLE_BILL_STATUSES, AWAITING_VERIFICATION_BILL_STATUSES, DEAD_BILL_STATUSES, isPayableStatus,
   summarizePayables as summarizePayablesShared, type PayableBillRow,
@@ -80,6 +80,10 @@ export const PAYABLES_BASIS =
   "notes are not netted (shown separately). Uploaded (not yet verified) bills are listed separately; rejected, cancelled, " +
   "deleted and paid bills are excluded. Open purchase orders are commitments, not payables, and are listed separately.";
 
+export const OVERDUE_RULE =
+  "Overdue ONLY when a due date is set and it is before today's IST date. No due date = dueStatus 'no_due_date': never " +
+  "overdue, daysPastDue null, ageing bucket by bill/issue date (ageingBasis says so). Never assume default payment terms.";
+
 /** Agent view of the shared payables summary: dates as IST yyyy-mm-dd. */
 export function summarizePayables(bills: PayableBillRow[], now: Date, listLimit = LIST_LIMIT) {
   const s = summarizePayablesShared(bills, now, listLimit);
@@ -88,8 +92,10 @@ export function summarizePayables(bills: PayableBillRow[], now: Date, listLimit 
     dueList: s.dueList.map((b) => ({
       id: b.id, billNumber: b.billNumber, supplier: b.supplier, status: b.status,
       billDate: isoDateIST(b.billDate), dueDate: b.dueDate ? isoDateIST(b.dueDate) : null,
-      total: b.total, paid: b.paid, outstanding: b.outstanding, daysPastDue: b.daysPastDue, ageingBucket: b.bucket,
+      total: b.total, paid: b.paid, outstanding: b.outstanding, dueStatus: b.dueStatus, overdue: b.overdue,
+      daysPastDue: b.daysPastDue, ageingBucket: b.bucket, ageingBasis: b.ageingBasis,
     })),
+    overdueRule: OVERDUE_RULE,
   };
 }
 
@@ -141,6 +147,8 @@ const getPayables: AgentTool = {
     "overdueCount/overdueAmount, ageing buckets (current, 0-30, 31-60, 61-90, 90+ days past due), byVendor " +
     "(outstanding per supplier), byStatus and a dueList of open vendor invoices (most overdue first), over EVERY " +
     "verified/approved/partially paid vendor invoice - basis states the exact rule (same as the Finance dashboard). " +
+    "A bill is overdue ONLY if it has a dueDate before today; bills without a due date are dueStatus 'no_due_date' " +
+    "(noDueDateCount/noDueDateAmount), never overdue - say 'no due date', never assume default terms. " +
     "Also returns, SEPARATELY, awaitingVerification (uploaded bills), poVsBills (per vendor: PO value vs billed vs " +
     "paid vs bill balance vs open PO commitment), openPurchaseOrders (commitments, not payables) and " +
     "unappliedAdvances. Use it for 'to whom?', 'ageing?', 'PO vs bills'. For individual bills by status " +
@@ -304,7 +312,8 @@ const searchVendorBills: AgentTool = {
     "approved + partially paid), billNumber, overdueOnly. Returns totalCount and totals {count, totalAmount, " +
     "taxableAmount, gstAmount, paid, outstanding} and byStatus over EVERY matching bill, plus up to 15 bills (overdue " +
     "first when overdueOnly, else newest): billNumber, supplier, status, billDate, dueDate, subtotal, taxAmount, total, " +
-    "paid, balance, daysOverdue, rejectedReason. Deleted bills only appear when status=deleted.",
+    "paid, balance, dueStatus (overdue / not_due / no_due_date), daysOverdue, rejectedReason. Overdue needs a due date " +
+    "before today; a bill with no due date is never overdue. Deleted bills only appear when status=deleted.",
   inputSchema: {
     type: "object",
     properties: {
@@ -352,13 +361,17 @@ const searchVendorBills: AgentTool = {
       .map((b) => {
         const paid = sumMoney(b.payments.map((p) => money(p.amount)));
         const balance = isPayableStatus(b.status) ? Math.max(sumMoney([money(b.total), -paid]), 0) : 0;
-        const { daysPastDue } = ageingBucket(b.dueDate ?? b.billDate, now);
-        const overdue = isPayableStatus(b.status) && balance > 0 && !!b.dueDate && daysPastDue > 0;
+        const unpaid = isPayableStatus(b.status) && balance > 0;
+        const a = documentAgeing(b.dueDate, b.billDate, now);
+        const overdue = unpaid && a.overdue;
         return {
           id: b.id, billNumber: b.billNumber, supplier: b.supplier.name, status: b.status,
           billDate: isoDateIST(b.billDate), dueDate: b.dueDate ? isoDateIST(b.dueDate) : null,
           subtotal: money(b.subtotal), taxAmount: money(b.taxAmount), total: money(b.total), paid, balance,
-          overdue, daysOverdue: overdue ? daysPastDue : 0, rejectedReason: b.rejectedReason,
+          // Only unpaid bills carry a due status; no due date => "no_due_date", never overdue.
+          dueStatus: unpaid ? a.dueStatus : null, overdue, daysOverdue: overdue ? (a.daysPastDue as number) : 0,
+          ...(unpaid && a.dueStatus === "no_due_date" ? { ageDays: a.ageDays, ageingBasis: a.ageingBasis } : {}),
+          rejectedReason: b.rejectedReason,
         };
       })
       .filter((r) => !overdueOnly || r.overdue);
@@ -384,6 +397,9 @@ const searchVendorBills: AgentTool = {
         outstanding: sumMoney(rows.map((r) => r.balance)),
       },
       byStatus,
+      overdueCount: rows.filter((r) => r.overdue).length,
+      noDueDateCount: rows.filter((r) => r.dueStatus === "no_due_date").length,
+      overdueRule: OVERDUE_RULE,
       bills: listed.slice(0, LIST_LIMIT),
     };
   },
@@ -421,8 +437,8 @@ export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, li
     const net = Math.max(sumMoney([r.total, -r.creditNoteTotal]), 0);
     const outstandingInclGst = sumMoney([net, -r.settled]);
     const outstandingExclGst = exclGstPortion(outstandingInclGst, r.subtotal, r.total);
-    const { bucket, daysPastDue } = ageingBucket(r.dueDate ?? r.issueDate, now);
-    return { ...r, outstandingInclGst, outstandingExclGst, gstPortion: sumMoney([outstandingInclGst, -outstandingExclGst]), bucket, daysPastDue };
+    const { bucket, daysPastDue, overdue, dueStatus, ageingBasis } = documentAgeing(r.dueDate, r.issueDate, now, "issue date");
+    return { ...r, outstandingInclGst, outstandingExclGst, gstPortion: sumMoney([outstandingInclGst, -outstandingExclGst]), bucket, daysPastDue, overdue, dueStatus, ageingBasis };
   });
 
   const ageing = emptyAgeing();
@@ -440,12 +456,12 @@ export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, li
     const g = computed.filter((r) => r.docType === docType);
     return { count: g.length, outstandingInclGst: sumMoney(g.map((r) => r.outstandingInclGst)), outstandingExclGst: sumMoney(g.map((r) => r.outstandingExclGst)) };
   };
-  const overdue = computed.filter((r) => r.daysPastDue > 0 && r.dueDate);
+  const overdue = computed.filter((r) => r.overdue);
   const listed = [...computed].filter((r) => r.outstandingInclGst > 0).sort((a, b) => b.outstandingInclGst - a.outstandingInclGst);
   // Every overdue invoice with a balance, most overdue first (capped at 50 for the model).
   const overdueList = overdue
     .filter((r) => r.outstandingInclGst > 0)
-    .sort((a, b) => b.daysPastDue - a.daysPastDue || b.outstandingInclGst - a.outstandingInclGst);
+    .sort((a, b) => (b.daysPastDue ?? 0) - (a.daysPastDue ?? 0) || b.outstandingInclGst - a.outstandingInclGst);
 
   return {
     totals: {
@@ -472,8 +488,10 @@ export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, li
       id: r.id, invoiceNumber: r.invoiceNumber, docType: r.docType, customer: r.customer,
       issueDate: isoDateIST(r.issueDate), dueDate: r.dueDate ? isoDateIST(r.dueDate) : null,
       total: r.total, creditNoteTotal: r.creditNoteTotal, settled: r.settled,
-      outstandingInclGst: r.outstandingInclGst, outstandingExclGst: r.outstandingExclGst, daysPastDue: r.daysPastDue,
+      outstandingInclGst: r.outstandingInclGst, outstandingExclGst: r.outstandingExclGst, dueStatus: r.dueStatus,
+      daysPastDue: r.daysPastDue, ageingBasis: r.ageingBasis,
     })),
+    overdueRule: OVERDUE_RULE,
   };
 }
 

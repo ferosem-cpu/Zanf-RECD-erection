@@ -6,7 +6,7 @@ import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
 import { settledFromAllocations } from "../services/settlement";
 import { splitPayment } from "../services/paymentSplit";
-import { ageingBucket } from "../services/ageing";
+import { ageingBucket, isPastDue } from "../services/ageing";
 import { PAYABLE_BILL_STATUSES, billOutstanding } from "../services/payables";
 
 export const financeDashboardRouter = Router();
@@ -43,7 +43,7 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
     const netTotal = D(inv.total).minus(cnTotal);
     const balance = (netTotal.isNegative() ? zero : netTotal).minus(paid);
     outstandingReceivables = outstandingReceivables.plus(balance);
-    if (inv.dueDate && inv.dueDate.getTime() < now.getTime()) {
+    if (isPastDue(inv.dueDate, now)) {
       overdueCount += 1;
       overdueValue = overdueValue.plus(balance);
     }

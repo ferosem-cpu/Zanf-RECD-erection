@@ -54,8 +54,9 @@ export const driveTools: AgentTool[] = [
     name: "get_document_content",
     description:
       "Reads and extracts the text content of one specific document, given the fileId returned by " +
-      "search_documents or list_documents. Supports PDF, DOCX, and plain text/CSV files. Scanned " +
-      "or image-only PDFs cannot be read (no OCR support) and will return an error.",
+      "search_documents or list_documents. Supports PDF (its text layer), DOCX, and plain text/CSV files. " +
+      "Only a scanned/image-only PDF with no text layer cannot be read (no OCR); any other error is a read " +
+      "failure - quote it, don't call the file 'scanned' or 'without OCR text'.",
     inputSchema: {
       type: "object",
       properties: {

@@ -330,12 +330,23 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 10. Current open items (as of 2026-10-09)
 
-**Branch `fix/agent-retest-5` (2026-10-09)** - fixes the retest failures of production deploy
-`dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU` (26 pass / 2 partial / 8 fail), see §11 2026-10-09. After it is
-deployed, re-run `docs/agent-test-checklist.md` rows 7-8, 14, 16, 19-25 against production (revenue
-says "tax invoices only, proformas excluded"; "open purchase orders" lists PO/2026-27/0001; FY
-collections quote cash + TDS + settled total; overdue days match the pages; no `<EOS_TOKEN>` reply).
-Rollback target `dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU`. No migration needed.
+**Branch `fix/agent-retest-6` (2026-10-09)** - fixes the remaining items of the retest of
+`dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa` (35/36 pass), see §11. After deploy, re-run
+`docs/agent-test-checklist.md` rows 41-44 (overdue needs a due date; whole-set order counts; Drive
+PDF text; no `<EOS_TOKEN>` in old threads, "+ New" clears at once) against production. Rollback
+target `dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa`. No migration needed.
+- **Behaviour change:** customer invoices are now overdue only from the day AFTER the due date
+  (IST calendar date, `services/ageing.ts isPastDue`) on the dashboard KPI, invoice pages and agent;
+  before, an invoice due today counted as overdue from 05:30 IST.
+- **Drive (code + docs only, env not read):** the app reads Drive as the company account
+  `zanfpowersystems@gmail.com` (OAuth refresh token, `lib/googleDrive.ts`); `GOOGLE_DRIVE_FOLDER_ID` =
+  ZanF_DropBox on that account per this file - the id itself is not verified against production.
+  search_documents, list_documents and get_document_content (file by id) all enforce
+  "descendant of that folder" in code (parents filter over the cached folder tree + post-filter;
+  get-by-id checks the file's parent is in the tree); tests cover all three. "AgsarPaint_Quote_TTCRN
+  v1.2.pdf" at ZanF_DropBox's top level is therefore a file in the company account's folder (likely
+  a copy of ferosem@gmail.com's Zan-F/Quotation file).
+- Earlier branch `fix/agent-retest-5` merged and deployed (`dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa`).
 - Earlier branch `fix/ledger-opening-date-and-drive-search` merged (`527de68`) and deployed
   (`dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU`).
 - **Drive access (Ferose):** the agent only sees files INSIDE `ZanF_DropBox` (any subfolder depth)
@@ -401,6 +412,19 @@ Rollback target `dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU`. No migration needed.
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-10-09 — Fix 6, branch `fix/agent-retest-6` (retest of `dpl_G9BdwcWwhTewxZXfpJXWEe4XsmTa`).**
+  `a4affa1` one overdue rule (`services/ageing.ts` isPastDue/documentAgeing): overdue only with a
+  due date before today (IST); no due date = "no_due_date", daysPastDue null, aged by bill/issue
+  date ("aged by bill date (no due date)") - payables, search_vendor_bills, receivables,
+  search_invoices, invoice routes, dashboard KPI. `ab40539` search_orders_and_sites /
+  search_site_status_updates return `allOrders` whole-set counts (ignore filters) + prompt rule.
+  `22c731e` Drive PDFs: pdf.js loads `pdf.worker.mjs` via a non-literal import nft can't trace, so
+  the deployed function had no worker and every PDF failed ("Setting up fake worker failed",
+  reported as "no OCR text"); now a traced `__dirname` path + `PDFParse.setWorker` (no new
+  dependency). `20db7d9` list_documents scope test. `e46bf63` special tokens sanitised on thread
+  save/load/LLM replay and admin-web render (stored rows untouched). `f9f3aa3` "+ New" clears the
+  panel before awaiting the create call. Tests: API 134, admin-web 29.
 
 - **2026-10-09 — Branch `fix/agent-retest-5` (retest of `dpl_Bc5qJ6eLuPR8AZ9YEVLfR9yvNGcU`).**
   `58d2167` revenue = tax invoices only (query already filtered docType; output `revenueRule`,
