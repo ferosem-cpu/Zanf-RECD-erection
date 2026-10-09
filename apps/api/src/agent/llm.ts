@@ -11,6 +11,7 @@ import { formatProviderFailures, providersToAttempt, recordProviderFailure, type
 import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
 import { AgentDeadline, LLM_CALL_TIMEOUT_MS } from "./timeouts";
 import { executeToolCalls } from "./toolExecution";
+import { sendCleaned } from "./assistantText";
 
 const MAX_TOOL_TURNS = 8;
 
@@ -68,7 +69,10 @@ async function sendWithFallback(
         adapter = createAdapterForRow(providerRow);
         adapters.set(providerRow.id, adapter);
       }
-      return await adapter.sendMessage({ ...params, timeoutMs: deadline.callTimeoutMs(LLM_CALL_TIMEOUT_MS) });
+      // An empty / special-token-only reply (e.g. literal "<EOS_TOKEN>") is retried once on the
+      // same provider, then treated as that provider failing so the next one is tried.
+      const send = () => adapter!.sendMessage({ ...params, timeoutMs: deadline.callTimeoutMs(LLM_CALL_TIMEOUT_MS) });
+      return await sendCleaned(send, () => !deadline.expired());
     } catch (err) {
       failures.push(recordProviderFailure(providerRow, err, "chat", { primary }));
     }

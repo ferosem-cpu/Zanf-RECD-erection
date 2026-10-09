@@ -29,6 +29,18 @@ test("ageing buckets match the payables report (days past due date, else bill da
   assert.equal(ageingBucket(d("2026-10-20T00:00:00Z"), NOW).daysPastDue, 0);
 });
 
+test("days past due = difference of IST calendar dates (bills and invoices alike)", () => {
+  const d = (s: string) => new Date(s);
+  const nineOctMorningIST = d("2026-10-08T23:30:00.000Z"); // 09 Oct 05:00 IST
+  assert.deepEqual(ageingBucket(d("2026-09-29T00:00:00.000Z"), nineOctMorningIST), { bucket: "days0_30", daysPastDue: 10 });
+  // Due 28 Sep 18:30 UTC = 29 Sep 00:00 IST: still 29 Sep, still 10 days.
+  assert.equal(ageingBucket(d("2026-09-28T18:30:00.000Z"), nineOctMorningIST).daysPastDue, 10);
+  // Due today (IST) or later: not yet due.
+  assert.deepEqual(ageingBucket(d("2026-10-09T00:00:00.000Z"), nineOctMorningIST), { bucket: "current", daysPastDue: 0 });
+  assert.deepEqual(ageingBucket(d("2026-10-08T18:30:00.000Z"), nineOctMorningIST), { bucket: "current", daysPastDue: 0 });
+  assert.equal(ageingBucket(d("2026-10-08T00:00:00.000Z"), nineOctMorningIST).daysPastDue, 1);
+});
+
 test("payables = approved/partially paid bills minus payments; fully paid bills drop out; per-vendor + ageing add up", () => {
   const bill = (over: Partial<PayableBillRow>): PayableBillRow => ({
     id: "b", billNumber: "B", supplierId: "s1", supplier: "Selvam Enterprises", status: "approved",
@@ -79,7 +91,7 @@ test("revenue periods resolve to explicit dates", () => {
   assert.ok("error" in resolveRevenuePeriod({ period: "fortnight" }, today));
 });
 
-test("revenue: invoiced excl. GST net of credit notes; collected = cash only (TDS out)", () => {
+test("revenue: invoiced excl. GST net of credit notes; collected = cash, TDS and settled total", () => {
   const out = summarizeRevenue(
     [{ subtotal: 100000, gst: 18000, total: 118000 }, { subtotal: 50000, gst: 9000, total: 59000 }],
     [{ subtotal: 10000, gst: 1800, total: 11800 }],
@@ -93,7 +105,9 @@ test("revenue: invoiced excl. GST net of credit notes; collected = cash only (TD
   assert.equal(out.invoiced.netInclGst, 165200);
   assert.equal(out.invoiced.invoiceCount, 2);
   assert.equal(out.collected.cashReceived, 100000);
-  assert.equal(out.collected.tdsDeducted, 5000);
+  assert.equal(out.collected.tdsDeducted, 5000); // 2000 tdsAmount + the whole legacy "tds" row
+  assert.equal(out.collected.settledTotal, 105000);
+  assert.match(out.collected.basis, /settledTotal = cash \+ TDS/);
   assert.match(out.invoiced.basis, /net of issued credit notes/);
   assert.match(out.collected.basis, /Finance dashboard/);
 });
@@ -151,4 +165,51 @@ test("get_payables: tolerant supplier filter, separate POs/awaiting approval, un
   const missing: any = await tool.handler({ supplier: "Kumar Traders" }, auth);
   assert.match(missing.error, /No supplier matches/);
   assert.ok(missing.suppliers.includes("Selvam Enterprises"));
+});
+
+test("get_revenue_summary counts tax invoices only; proformas are excluded and the rule is stated", async (t) => {
+  const tool = zanAppFinanceTools.find((x) => x.name === "get_revenue_summary")!;
+  const auth = { userId: "f", roleKey: "finance", permissions: new Set([PERMISSION_KEY.VIEW_FINANCE_DASHBOARD]) };
+  const replace = (key: string, value: unknown) => {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  };
+  const rows = [
+    { docType: "tax_invoice", subtotal: "100000.00", cgstAmount: "9000.00", sgstAmount: "9000.00", igstAmount: "0", total: "118000.00" },
+    { docType: "proforma", subtotal: "500000.00", cgstAmount: "45000.00", sgstAmount: "45000.00", igstAmount: "0", total: "590000.00" },
+  ];
+  const invoiceWheres: any[] = [];
+  replace("invoice", {
+    findMany: async (args: any) => {
+      invoiceWheres.push(args.where);
+      return rows.filter((r) => r.docType === args.where.docType);
+    },
+    count: async (args: any) => rows.filter((r) => r.docType === args.where.docType).length,
+  });
+  replace("creditNote", { findMany: async () => [] });
+  replace("paymentReceived", {
+    findMany: async () => [
+      { amount: "50000.00", tdsAmount: "1000.00", method: "neft" },
+      { amount: "2000.00", tdsAmount: "0", method: "tds" },
+    ],
+  });
+
+  const res: any = await tool.handler({ period: "this_fy" }, auth);
+  assert.deepEqual(
+    [res.collected.cashReceived, res.collected.tdsDeducted, res.collected.settledTotal],
+    [50000, 3000, 53000],
+  );
+  assert.match(res.answerRule, /cash \+ TDS = settled total/);
+  assert.equal(invoiceWheres[0].docType, "tax_invoice");
+  assert.equal(res.invoiced.invoiceCount, 1);
+  assert.equal(res.invoiced.netExclGst, 100000);
+  assert.equal(res.invoiced.netInclGst, 118000);
+  assert.equal(res.proformaInvoicesInPeriod.count, 1);
+  assert.match(res.revenueRule, /tax invoices only; proforma invoices are excluded/);
+  assert.match(res.answerRule, /tax invoices only, proformas excluded/);
+  assert.match(tool.description, /proforma/);
 });
