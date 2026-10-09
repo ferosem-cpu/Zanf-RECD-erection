@@ -61,9 +61,18 @@ test("payables = approved/partially paid bills minus payments; fully paid bills 
   const ageingTotal = Object.values(out.ageing).reduce((s, n) => s + n, 0);
   assert.equal(Math.round(ageingTotal * 100), Math.round(out.totalOutstanding * 100));
   assert.equal(out.ageing.current, 418900);
-  assert.equal(out.overdueCount, 2);
-  assert.equal(out.dueList[0].billNumber, "SE/102"); // anchored on bill date 2026-09-01: most overdue
-  assert.equal(out.dueList.at(-1)!.billNumber, "PA/9"); // not yet due
+  // SE/102 has no due date: aged by bill date (31-60 bucket) but never overdue.
+  assert.equal(out.overdueCount, 1);
+  assert.equal(out.overdueAmount, 118000);
+  assert.equal(out.noDueDateCount, 1);
+  assert.equal(out.ageing.days31_60, 38999.5);
+  assert.equal(out.dueList[0].billNumber, "SE/101"); // the only bill past its due date
+  const se102 = out.dueList.find((b) => b.billNumber === "SE/102")!;
+  assert.equal(se102.dueStatus, "no_due_date");
+  assert.equal(se102.overdue, false);
+  assert.equal(se102.daysPastDue, null);
+  assert.equal(se102.ageingBasis, "aged by bill date (no due date)");
+  assert.equal(out.dueList.find((b) => b.billNumber === "PA/9")!.dueStatus, "not_due");
   assert.deepEqual(PAYABLE_BILL_STATUSES, ["verified", "approved", "partially_paid"]);
 });
 

@@ -18,6 +18,7 @@ import { authenticate, requirePermission, type AuthenticatedRequest } from "../m
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { nextDocumentNumber } from "../services/documentNumber";
+import { isPastDue } from "../services/ageing";
 import { issuedCreditNoteTotal, netInvoiceTotal, deriveInvoiceStatus, recomputeInvoiceSettlement, settledFromAllocations } from "../services/settlement";
 
 export const invoicesRouter = Router();
@@ -91,8 +92,7 @@ invoicesRouter.get("/", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async
     const balance = netTotal.minus(paid);
     const overdue =
       (inv.status === INVOICE_STATUS.ISSUED || inv.status === INVOICE_STATUS.PARTIALLY_PAID) &&
-      !!inv.dueDate &&
-      new Prisma.Decimal(inv.dueDate.getTime()).lessThan(now.getTime());
+      isPastDue(inv.dueDate, now);
     return {
       ...inv,
       invoiceNumber: inv.status === INVOICE_STATUS.DRAFT ? `DRAFT-${inv.id}` : inv.invoiceNumber,
@@ -173,8 +173,7 @@ invoicesRouter.get("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
   const now = new Date();
   const overdue =
     (inv.status === INVOICE_STATUS.ISSUED || inv.status === INVOICE_STATUS.PARTIALLY_PAID) &&
-    !!inv.dueDate &&
-    inv.dueDate.getTime() < now.getTime();
+    isPastDue(inv.dueDate, now);
   res.json({
     ...inv,
     invoiceNumber: inv.status === INVOICE_STATUS.DRAFT ? `DRAFT-${inv.id}` : inv.invoiceNumber,

@@ -4,6 +4,8 @@ import { resolveInvoiceFilter, invoiceStatusWhere, summarizeInvoices, OVERDUE_IN
 import { annotateListResult, EMPTY_LIST_NOTE, LIST_LIMIT } from "../src/agent/listResult";
 
 const now = new Date("2026-10-08T00:00:00Z");
+/** 08 Oct 00:00 IST: overdue = due date before today's IST calendar date (services/ageing isPastDue). */
+const todayIST = new Date("2026-10-07T18:30:00Z");
 const row = (id: string, dueDate: string | null, balance: number | null) => ({
   id, status: "issued", dueDate: dueDate ? new Date(dueDate) : null,
   total: balance, creditNoteTotal: 0, netTotal: balance, amountPaid: 0, balance, overdue: true,
@@ -16,12 +18,12 @@ test("a guessed status='overdue' (any case/spacing) maps to overdueOnly instead 
   assert.deepEqual(resolveInvoiceFilter({}), { overdueOnly: false, statuses: undefined });
 });
 
-test("overdue where clause matches the finance dashboard: issued/partially_paid with dueDate before now", () => {
+test("overdue where clause matches the finance dashboard: issued/partially_paid with dueDate before today (IST)", () => {
   assert.deepEqual(OVERDUE_INVOICE_STATUSES, ["issued", "partially_paid"]);
-  assert.deepEqual(invoiceStatusWhere({ overdueOnly: true }, now), { status: { in: ["issued", "partially_paid"] }, dueDate: { lt: now } });
+  assert.deepEqual(invoiceStatusWhere({ overdueOnly: true }, now), { status: { in: ["issued", "partially_paid"] }, dueDate: { lt: todayIST } });
   // An explicit status only narrows; a status that can never be overdue yields nothing.
-  assert.deepEqual(invoiceStatusWhere({ overdueOnly: true, statuses: ["partially_paid"] }, now), { status: { in: ["partially_paid"] }, dueDate: { lt: now } });
-  assert.deepEqual(invoiceStatusWhere({ overdueOnly: true, statuses: ["paid"] }, now), { status: { in: [] }, dueDate: { lt: now } });
+  assert.deepEqual(invoiceStatusWhere({ overdueOnly: true, statuses: ["partially_paid"] }, now), { status: { in: ["partially_paid"] }, dueDate: { lt: todayIST } });
+  assert.deepEqual(invoiceStatusWhere({ overdueOnly: true, statuses: ["paid"] }, now), { status: { in: [] }, dueDate: { lt: todayIST } });
   assert.deepEqual(invoiceStatusWhere({ overdueOnly: false, statuses: ["draft"] }, now), { status: "draft" });
   assert.deepEqual(invoiceStatusWhere({ overdueOnly: false }, now), {});
 });

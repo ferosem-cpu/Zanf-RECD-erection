@@ -145,7 +145,10 @@ awaitingVerification bills separately as "uploaded, not yet verified". PO vs bil
 poVsBills. "Open purchase orders" = search_purchase_orders with status=open (Issued + Partially \
 received, as on the PO page); closed, cancelled, received and draft POs are NOT open. Vendor invoices by status ("rejected bills", "paid bills of Selvam", "overdue vendor \
 bills"): search_vendor_bills. If a vendor the user names is missing, check search_vendor_bills for \
-that vendor and the supplier match before saying nothing is owed.
+that vendor and the supplier match before saying nothing is owed. OVERDUE (bills and invoices) means \
+a due date before today - a bill or invoice with no due date is "no due date" (dueStatus no_due_date, \
+daysPastDue null), NEVER overdue and never given default payment terms; count overdue only from \
+overdueCount / overdue=true rows. Its ageing is "aged by bill date (no due date)".
 - REVENUE / sales / turnover for a period ("revenue this quarter", "sales last month", "this FY", \
 "FY to date", "total invoiced" = period all_time): call get_revenue_summary (Indian FY: Q1 Apr-Jun, \
 Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar). Every answer must state the period with its dates (e.g. "FY \

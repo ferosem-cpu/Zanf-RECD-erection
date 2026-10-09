@@ -1,5 +1,5 @@
 import { BILL_STATUS } from "@recd/shared";
-import { ageingBucket, emptyAgeing } from "./ageing";
+import { documentAgeing, emptyAgeing } from "./ageing";
 
 /**
  * The ONE definition of "payable" (what we owe suppliers), shared by the Finance dashboard
@@ -49,8 +49,7 @@ export function summarizePayables(bills: PayableBillRow[], now: Date, listLimit 
     .filter((b) => isPayableStatus(b.status))
     .map((b) => {
       const outstanding = money([b.total, -b.paid]);
-      const { bucket, daysPastDue } = ageingBucket(b.dueDate ?? b.billDate, now);
-      return { ...b, outstanding, bucket, daysPastDue };
+      return { ...b, outstanding, ...documentAgeing(b.dueDate, b.billDate, now) };
     })
     .filter((b) => b.outstanding > 0);
 
@@ -71,8 +70,13 @@ export function summarizePayables(bills: PayableBillRow[], now: Date, listLimit 
     s.outstanding = money([s.outstanding, b.outstanding]);
     byStatus[b.status] = s;
   }
-  const due = [...open].sort((a, b) => b.daysPastDue - a.daysPastDue || (a.dueDate ?? a.billDate).getTime() - (b.dueDate ?? b.billDate).getTime());
-  const overdue = open.filter((b) => b.daysPastDue > 0);
+  // Overdue first (most days past due first), then the rest by due date / bill date.
+  const due = [...open].sort(
+    (a, b) => Number(b.overdue) - Number(a.overdue) || (b.daysPastDue ?? 0) - (a.daysPastDue ?? 0) || (a.dueDate ?? a.billDate).getTime() - (b.dueDate ?? b.billDate).getTime(),
+  );
+  // Only bills with a due date before today are overdue; no due date is never overdue.
+  const overdue = open.filter((b) => b.overdue);
+  const noDueDate = open.filter((b) => b.dueStatus === "no_due_date");
 
   return {
     totalOutstanding: money(open.map((b) => b.outstanding)),
@@ -80,6 +84,8 @@ export function summarizePayables(bills: PayableBillRow[], now: Date, listLimit 
     vendorCount: vendors.size,
     overdueCount: overdue.length,
     overdueAmount: money(overdue.map((b) => b.outstanding)),
+    noDueDateCount: noDueDate.length,
+    noDueDateAmount: money(noDueDate.map((b) => b.outstanding)),
     debitNotesAgainstOpenBills: money(open.map((b) => b.debitNotes)),
     byStatus,
     ageing,

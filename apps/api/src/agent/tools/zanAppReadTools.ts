@@ -13,6 +13,7 @@ import { settledFromAllocations, netInvoiceTotal } from "../../services/settleme
 import { paymentCashAndTds, normalizePaymentMethod } from "../../services/paymentSplit";
 import { LIST_LIMIT, listMeta, listPage } from "../listResult";
 import { isoDateIST } from "../istDates";
+import { isPastDue, istStartOfDay } from "../../services/ageing";
 import type { AgentTool, AgentAuthContext } from "./types";
 
 const RESULT_LIMIT = LIST_LIMIT;
@@ -228,7 +229,7 @@ const searchQuotations: AgentTool = {
 };
 
 /** Same definition as the finance dashboard (routes/financeDashboard.ts /summary): an
- * issued/partially_paid invoice whose dueDate is set and earlier than now. Drafts, paid and
+ * issued/partially_paid invoice whose dueDate is set and before today (IST, isPastDue). Drafts, paid and
  * cancelled invoices are never overdue; no balance > 0 filter (the dashboard has none). */
 export const OVERDUE_INVOICE_STATUSES = ["issued", "partially_paid"];
 
@@ -259,7 +260,8 @@ export function invoiceStatusWhere(filter: { overdueOnly: boolean; statuses?: st
   }
   // An explicit status can only narrow the overdue set (status="paid" + overdueOnly = nothing).
   const overdueStatuses = statuses ? OVERDUE_INVOICE_STATUSES.filter((s) => statuses.includes(s)) : OVERDUE_INVOICE_STATUSES;
-  return { status: { in: overdueStatuses }, dueDate: { lt: now } };
+  // services/ageing isPastDue: due date's IST calendar date before today's (no due date = not overdue).
+  return { status: { in: overdueStatuses }, dueDate: { lt: istStartOfDay(now) } };
 }
 
 export interface InvoiceSummaryRow {
@@ -378,7 +380,7 @@ const searchInvoices: AgentTool = {
       const cnTotal = inv.creditNotes.reduce((s, cn) => s.plus(cn.total), new Prisma.Decimal(0));
       const netTotal = netInvoiceTotal(new Prisma.Decimal(inv.total), cnTotal);
       const balance = netTotal.minus(paid);
-      const overdue = OVERDUE_INVOICE_STATUSES.includes(inv.status) && !!inv.dueDate && inv.dueDate.getTime() < now.getTime();
+      const overdue = OVERDUE_INVOICE_STATUSES.includes(inv.status) && isPastDue(inv.dueDate, now);
       return {
         id: inv.id,
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
