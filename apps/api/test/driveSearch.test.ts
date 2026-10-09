@@ -134,6 +134,13 @@ test("list_documents covers subfolders, newest first, folders excluded", async (
   assert.deepEqual(list.map((r) => r.fileId), ["f2", "f1", "f3", "f4"]);
 });
 
+test("list_documents: descendants only, even if Drive returns a file outside the folder tree", async () => {
+  const { drive } = fakeDrive(library(), { ignoreParents: true });
+  const list = await listDriveDocuments(50, { drive, rootId: ROOT });
+  assert.ok(!list.some((r) => r.fileId === "out"));
+  assert.ok(list.every((r) => r.folderPath.startsWith("ZanF_DropBox")));
+});
+
 test("empty result explains scope; customers are refused every Drive tool", async () => {
   const { drive } = fakeDrive(library());
   const none = await searchDriveDocuments("nonexistent", 25, { drive, rootId: ROOT });
