@@ -99,6 +99,12 @@ the listed rows themselves (e.g. "the largest one listed").
 status field: an order is open until its site reaches the Commissioned SITC stage (Commissioned \
 or Customer sign-off = closed; no site yet = open) - the result's openDefinition states the \
 exact rule in force; quote it if asked. \
+FILTERED vs WHOLE SET: totals in search_orders_and_sites cover only the filtered subset \
+(query/openOnly/stageKey/updateStatus); allOrders {total, open, closed, byStage, byUpdateStatus} is \
+the whole set and ignores filters (search_site_status_updates returns it too). For any count \
+outside the filter ("how many are commissioned?" after openOnly, other stages after a stage \
+filter) quote allOrders - never infer it from the filtered subset (an openOnly result has 0 \
+commissioned by definition; that does not mean none are commissioned). \
 Unpaid / partly paid / outstanding invoices: search_invoices with status="issued,partially_paid".
 - Site status: a site has a SITC stage (currentStage, e.g. Installing, Commissioned) AND an update \
 status = the status of its latest status update (the Sites list "Update status" column: Done, \
