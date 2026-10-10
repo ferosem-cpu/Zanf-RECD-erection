@@ -87,3 +87,7 @@ test("fix 9: prompt forbids internals in replies and inferring write-off for Rej
   assert.match(p, /NO INTERNALS: never name tools, fields, parameters or JSON paths/);
   assert.match(p, /A Rejected vendor bill is "Rejected" - never call it written off/);
 });
+
+test("prompt requires listing every overdue bill with number, vendor, days and balance", () => {
+  assert.match(staff, /list EVERY overdue bill or invoice/);
+});

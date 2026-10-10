@@ -4,6 +4,7 @@ import {
   buildTextClause, searchTokens, searchDriveDocuments, listDriveDocuments, getFileMetadataWithinFolder, resetFolderTreeCache,
   getFolderTree, FOLDER_TREE_TTL_MS, HIDDEN_FILES_CLAUSE, HIDDEN_FILE_MESSAGE, isHiddenDriveFile, type DriveLike, type DriveFile,
   buildLooseNameClause, stripExtension, findFileIdByName, getDriveDocumentByRef, resetDocContentCache, DOC_MAX_TEXT_CHARS,
+  excerptForFocus, AmbiguousDocumentError, EXCERPT_MAX_CHARS,
 } from "../src/agent/tools/driveSearch";
 import { driveTools } from "../src/agent/tools/driveTool";
 
@@ -243,8 +244,8 @@ test("get_document_content accepts a fileId or the exact file name; hidden names
   assert.equal(byName.name, AGSAR);
   assert.match(byName.text, /Warranty: 12 months/);
   assert.equal((await getDriveDocumentByRef("agsarPaintFileId123", { drive, rootId: ROOT })).name, AGSAR);
-  // Id-shaped but unknown to Drive (404): retried as a name, not an exact match here.
-  await assert.rejects(getDriveDocumentByRef("AgsarPaint_Quote_TTCRN", { drive, rootId: ROOT }), /No document named "AgsarPaint_Quote_TTCRN"/);
+  // Id-shaped but unknown to Drive (404): retried as a name; a partial name that fits one file reads it.
+  assert.equal((await getDriveDocumentByRef("AgsarPaint_Quote_TTCRN", { drive, rootId: ROOT })).name, AGSAR);
   await assert.rejects(findFileIdByName("zanapp-backup-2026-10-08.json", { drive, rootId: ROOT }), (e: Error) => e.message === HIDDEN_FILE_MESSAGE);
   await assert.rejects(findFileIdByName("nothing here.pdf", { drive, rootId: ROOT }), /No document named "nothing here.pdf"/);
 });
@@ -276,4 +277,93 @@ test("get_document_content: repeat reads within 60 s hit memory; long text is cu
   await getDriveDocumentByRef("Long.txt", { drive, rootId: ROOT });
   await getDriveDocumentByRef("Long.txt", { drive, rootId: ROOT });
   assert.equal(downloads, 4, "no caching unless asked when a drive is injected");
+});
+
+function countingDrive(files: FakeFile[], bodies: Record<string, string>) {
+  const base = fakeDrive(files);
+  const stats = { downloads: 0, lists: 0, gets: 0 };
+  const drive: DriveLike = {
+    files: {
+      ...base.drive.files,
+      list: async (params) => { stats.lists++; return base.drive.files.list(params); },
+      get: async (params, options) => {
+        if (params.alt === "media") { stats.downloads++; return { data: new TextEncoder().encode(bodies[String(params.fileId)] ?? "").buffer }; }
+        stats.gets++;
+        return base.drive.files.get(params, options);
+      },
+    },
+  };
+  return { drive, stats };
+}
+
+test("get_document_content by partial name: ONE tool call resolves and reads (no search_documents round)", async () => {
+  resetDocContentCache();
+  const files: FakeFile[] = [
+    ...library(),
+    { id: "agsarPaintFileId123", name: AGSAR, mimeType: "text/plain", parents: [ROOT], modifiedTime: "2026-10-01T00:00:00Z" },
+  ];
+  const { drive } = countingDrive(files, { agsarPaintFileId123: "Warranty: 12 months from commissioning" });
+  assert.equal(await findFileIdByName("AgsarPaint quote", { drive, rootId: ROOT }), "agsarPaintFileId123");
+  const doc = await getDriveDocumentByRef("agsarpaint ttcrn", { drive, rootId: ROOT });
+  assert.equal(doc.name, AGSAR);
+  assert.match(doc.text, /Warranty: 12 months/);
+});
+
+test("get_document_content: several partial matches return candidates instead of guessing", async () => {
+  const files: FakeFile[] = [
+    ...library(),
+    { id: "qa1234567890", name: "Vendor_Quote_A.pdf", mimeType: "text/plain", parents: [ROOT], modifiedTime: "2026-10-01T00:00:00Z" },
+    { id: "qb1234567890", name: "Vendor_Quote_B.pdf", mimeType: "text/plain", parents: [ROOT], modifiedTime: "2026-10-02T00:00:00Z" },
+  ];
+  const { drive } = fakeDrive(files);
+  await assert.rejects(findFileIdByName("vendor quote", { drive, rootId: ROOT }), (e: unknown) => e instanceof AmbiguousDocumentError && e.candidates.length === 2);
+  await assert.rejects(findFileIdByName("zzz nothing", { drive, rootId: ROOT }), /No document named/);
+});
+
+test("name and content caches: repeat read skips search and download; an edited file (new modifiedTime) is re-read", async () => {
+  resetDocContentCache();
+  const file: FakeFile = { id: "cachedDocFile123", name: "Terms.txt", mimeType: "text/plain", parents: [ROOT], modifiedTime: "2026-10-01T00:00:00Z" };
+  const { drive, stats } = countingDrive([...library(), file], { cachedDocFile123: "Payment terms: 30 days" });
+  const opts = { drive, rootId: ROOT, cache: true };
+  await getDriveDocumentByRef("Terms.txt", opts);
+  const listsAfterFirst = stats.lists;
+  await getDriveDocumentByRef("Terms.txt", opts);
+  assert.equal(stats.downloads, 1, "text served from the 10-minute cache");
+  assert.equal(stats.lists, listsAfterFirst, "name->id resolution served from cache, no Drive search");
+  file.modifiedTime = "2026-10-02T00:00:00Z";
+  await getDriveDocumentByRef("Terms.txt", opts);
+  assert.equal(stats.downloads, 2, "new modifiedTime = cache miss");
+});
+
+test("folder tree is built once for concurrent callers (single flight)", async () => {
+  const { drive, stats } = countingDrive(library(), {});
+  await Promise.all([getFolderTree(drive, ROOT), getFolderTree(drive, ROOT), getFolderTree(drive, ROOT)]);
+  const once = stats.lists;
+  await getFolderTree(drive, ROOT);
+  assert.equal(stats.lists, once);
+  resetFolderTreeCache();
+  const { drive: d2, stats: s2 } = countingDrive(library(), {});
+  await getFolderTree(d2, ROOT);
+  assert.equal(s2.lists, once, "three concurrent callers cost the same as one");
+});
+
+test("excerptForFocus: long text with keywords returns head + matching paragraphs, capped; short text untouched", () => {
+  const filler = (n: number) => Array.from({ length: n }, (_, i) => `Clause ${i}: general conditions of supply apply here and nothing else.`).join("\n\n");
+  const long = `Quotation\n\n${filler(200)}\n\nWarranty: 12 months from commissioning.\n\n${filler(50)}`;
+  const out = excerptForFocus(long, "warranty period");
+  assert.ok(out.excerpted);
+  assert.equal(out.totalChars, long.length);
+  assert.ok(out.text.length <= EXCERPT_MAX_CHARS + 400);
+  assert.match(out.text, /Warranty: 12 months from commissioning/);
+  assert.match(out.text, /^Quotation/);
+  assert.equal(excerptForFocus("short text", "warranty").excerpted, false);
+  assert.equal(excerptForFocus(long, undefined).excerpted, false);
+  assert.ok(excerptForFocus(long, "nomatchword").text.length <= EXCERPT_MAX_CHARS);
+});
+
+test("get_document_content tool: focus excerpts, ambiguous names return candidates, schema offers focus", async () => {
+  const tool = driveTools.find((t) => t.name === "get_document_content")!;
+  assert.ok((tool.inputSchema as any).properties.focus);
+  assert.match(tool.description, /call THIS tool directly|call THIS tool\s+directly/);
+  assert.match(tool.description, /NOT call search_documents first/);
 });

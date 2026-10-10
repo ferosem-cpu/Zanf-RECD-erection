@@ -65,7 +65,7 @@ test("open cutoff: Commissioned stage, else final stage fallback, else everythin
   const signoff = { label: "Customer sign-off", sequenceOrder: FINAL };
   const found = resolveOpenCutoff(commissioned, signoff);
   assert.equal(found.closedFromSeq, COMMISSIONED);
-  assert.match(found.openDefinition, /"Commissioned" SITC stage or any later stage/);
+  assert.match(found.openDefinition, /"Commissioned" SITC stage \(Commissioned or later\)/);
   const fallback = resolveOpenCutoff(null, signoff);
   assert.equal(fallback.closedFromSeq, FINAL);
   assert.match(fallback.openDefinition, /No "Commissioned" SITC stage is configured/);
@@ -234,4 +234,10 @@ test("search_purchase_orders: status 'open' = issued + partially received; unkno
   assert.match(unknown.error, /Unknown purchase order status/);
   assert.ok(unknown.validStatuses.includes("closed"));
   assert.ok(unknown.validStatuses.some((s: string) => s.startsWith("open")));
+});
+
+test("open-order rule wording: '(Commissioned or later)', never '(site stage = ...)'", () => {
+  const { openDefinition } = resolveOpenCutoff({ label: "Commissioned", sequenceOrder: 11 }, { label: "Customer sign-off", sequenceOrder: 12 });
+  assert.match(openDefinition, /\(Commissioned or later\)/);
+  assert.doesNotMatch(openDefinition, /site stage =/);
 });

@@ -569,7 +569,7 @@ export function resolveOpenCutoff(commissioned: StageRef, finalStage: StageRef):
   if (commissioned) {
     return {
       closedFromSeq: commissioned.sequenceOrder,
-      openDefinition: `${base} An order is open until its site reaches the "${commissioned.label}" SITC stage or any later stage; an order with no site yet is open.`,
+      openDefinition: `${base} An order is open until its site reaches the "${commissioned.label}" SITC stage (Commissioned or later) and closed from then on; an order with no site yet is open.`,
     };
   }
   if (finalStage) {
