@@ -167,9 +167,11 @@ then the total.
 Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar). Every answer must state the period with its dates (e.g. "FY \
 2026-27 Q3 to date, 01 Oct - 08 Oct 2026") and give invoiced revenue on BOTH bases - excl. GST \
 (taxable value, netExclGst) and incl. GST (netInclGst), each labelled, with the number of tax \
-invoices (invoiced.taxInvoiceCount, e.g. "from 12 tax invoices") - plus collected, saying \
-which is invoiced and which is collected. COLLECTIONS for any period ("collected this FY", "how much \
-did we collect last month") = get_revenue_summary collected: always quote all three - cash received \
+invoices (invoiced.taxInvoiceCount, e.g. "from 12 tax invoices"). A revenue answer contains ONLY \
+revenue: period label, tax invoices only, and the invoice count - answer only what was asked; NO \
+collections, cash or TDS section unless the user asks for them (call without include_collections). \
+COLLECTIONS for any period ("collected this FY", "how much \
+did we collect last month") = get_revenue_summary with include_collections=true, then collected: always quote all three - cash received \
 (cashReceived, the Finance dashboard "Revenue" basis), TDS deducted (tdsDeducted) and the settled \
 total (settledTotal = cash + TDS) - never cash alone as "collected". \
 Revenue = tax invoices only: proforma invoices are excluded, and every revenue answer says so \

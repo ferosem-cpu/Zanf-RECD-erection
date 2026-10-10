@@ -706,10 +706,11 @@ const getRevenueSummary: AgentTool = {
     "'turnover this FY'). Periods use the Indian financial year (Apr-Mar; Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, " +
     "Q4 Jan-Mar) in IST; current periods run to today ('to date'). Use all_time for 'total invoiced'. Returns the " +
     "exact period dates and two server-computed figures, each with its basis: invoiced (issued tax invoices by " +
-    "invoice date, net of credit notes: taxInvoiceCount, netExclGst = taxable value EXCL. GST, netGst, netInclGst = INCL. GST) and " +
-    "collected (cashReceived, tdsDeducted and settledTotal = cash + TDS; quote all three, never cash alone as " +
-    "'collected'). Answer with BOTH excl. and incl. GST " +
-    "invoiced figures, state the period dates, the number of tax invoices and invoiced vs collected. Revenue = tax invoices only; proforma " +
+    "invoice date, net of credit notes: taxInvoiceCount, netExclGst = taxable value EXCL. GST, netGst, netInclGst = INCL. GST). " +
+    "Collections (cashReceived, tdsDeducted and settledTotal = cash + TDS; quote all three, never cash alone) are returned " +
+    "ONLY when include_collections=true - set it only if the user asks about collections / payments received. " +
+    "A revenue question gets revenue only: BOTH excl. and incl. GST " +
+    "invoiced figures, the period dates and the number of tax invoices, with no collections section. Revenue = tax invoices only; proforma " +
     "invoices are excluded - say so briefly. Quote these, never add up invoice/payment rows.",
   inputSchema: {
     type: "object",
@@ -717,6 +718,7 @@ const getRevenueSummary: AgentTool = {
       period: { type: "string", description: "this_quarter (default) | last_quarter | this_month | last_month | this_fy | last_fy | all_time" },
       from: { type: "string", description: "Optional explicit start date YYYY-MM-DD (use with to; overrides period)." },
       to: { type: "string", description: "Optional explicit end date YYYY-MM-DD, inclusive." },
+      include_collections: { type: "boolean", description: "Set true ONLY when the user asks about collections / payments received / cash / TDS. Default false: revenue questions get invoiced figures only." },
     },
   },
   handler: async (input, auth) => {
@@ -724,6 +726,7 @@ const getRevenueSummary: AgentTool = {
     if (auth.customerId || !auth.permissions.has(PERMISSION_KEY.VIEW_FINANCE_DASHBOARD)) return forbidden("revenue figures");
     const period = resolveRevenuePeriod(input, isoDateIST(new Date()));
     if ("error" in period) return period;
+    const includeCollections = input.include_collections === true;
     const range = { gte: istDayStart(period.from)!, lt: new Date(istDayStart(period.to)!.getTime() + DAY_MS) };
 
     const [invoices, creditNotes, payments, proformaCount] = await Promise.all([
@@ -739,7 +742,9 @@ const getRevenueSummary: AgentTool = {
         where: { status: CREDIT_NOTE_STATUS.ISSUED, issueDate: range },
         select: { subtotal: true, cgstAmount: true, sgstAmount: true, igstAmount: true, total: true },
       }),
-      prisma.paymentReceived.findMany({ where: { receivedDate: range }, select: { amount: true, tdsAmount: true, method: true } }),
+      includeCollections
+        ? prisma.paymentReceived.findMany({ where: { receivedDate: range }, select: { amount: true, tdsAmount: true, method: true } })
+        : Promise.resolve([] as { amount: Prisma.Decimal; tdsAmount: Prisma.Decimal; method: string }[]),
       prisma.invoice.count({
         where: { docType: INVOICE_DOC_TYPE.PROFORMA, status: { notIn: [INVOICE_STATUS.DRAFT, INVOICE_STATUS.CANCELLED] }, issueDate: range },
       }),
@@ -749,16 +754,20 @@ const getRevenueSummary: AgentTool = {
       gst: sumMoney([money(d.cgstAmount), money(d.sgstAmount), money(d.igstAmount)]),
       total: money(d.total),
     });
+    const { invoiced, collected } = summarizeRevenue(
+      invoices.map(doc),
+      creditNotes.map(doc),
+      payments.map((p) => ({ amount: money(p.amount), tdsAmount: money(p.tdsAmount), method: p.method })),
+    );
     return {
       period: { ...period, timezone: "IST", financialYearRule: "Indian FY Apr-Mar; Q1 Apr-Jun, Q2 Jul-Sep, Q3 Oct-Dec, Q4 Jan-Mar" },
-      ...summarizeRevenue(
-        invoices.map(doc),
-        creditNotes.map(doc),
-        payments.map((p) => ({ amount: money(p.amount), tdsAmount: money(p.tdsAmount), method: p.method })),
-      ),
+      invoiced,
+      ...(includeCollections ? { collected } : {}),
       revenueRule: REVENUE_RULE,
       proformaInvoicesInPeriod: { count: proformaCount, note: "Proforma invoices are not revenue and are excluded from every figure above." },
-      answerRule: "Quote period.label verbatim (never call a financial year a quarter or the reverse), state the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or collections as cash + TDS = settled total - all three, never cash alone as 'collected'), state the number of tax invoices (invoiced.taxInvoiceCount, e.g. 'from 12 tax invoices'), and say briefly: tax invoices only, proformas excluded.",
+      answerRule: includeCollections
+        ? "Quote period.label verbatim (never call a financial year a quarter or the reverse), state the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and collections as cash + TDS = settled total - all three, never cash alone as 'collected'), state the number of tax invoices (invoiced.taxInvoiceCount, e.g. 'from 12 tax invoices'), and say briefly: tax invoices only, proformas excluded."
+        : "Revenue only: quote period.label verbatim (never call a financial year a quarter or the reverse), the period dates, invoiced excl. and incl. GST with their basis, the number of tax invoices (invoiced.taxInvoiceCount, e.g. 'from 12 tax invoices'), and say briefly: tax invoices only, proformas excluded. Do NOT mention collections, cash received or TDS - they were not asked for.",
     };
   },
 };

@@ -208,7 +208,10 @@ test("get_revenue_summary counts tax invoices only; proformas are excluded and t
     ],
   });
 
-  const res: any = await tool.handler({ period: "this_fy" }, auth);
+  const res: any = await tool.handler({ period: "this_fy", include_collections: true }, auth);
+  const revenueOnly: any = await tool.handler({ period: "this_fy" }, auth);
+  assert.equal(revenueOnly.collected, undefined);
+  assert.equal(revenueOnly.invoiced.taxInvoiceCount, 1);
   assert.deepEqual(
     [res.collected.cashReceived, res.collected.tdsDeducted, res.collected.settledTotal],
     [50000, 3000, 53000],
@@ -237,4 +240,41 @@ test("custom ranges are labelled by what they exactly cover; otherwise dates onl
   assert.deepEqual(r("2026-05-03", "2026-08-10"), { label: "2026-05-03 to 2026-08-10", kind: "custom", from: "2026-05-03", to: "2026-08-10" });
   const fy = resolveRevenuePeriod({ period: "fy to date" }, today) as { label: string };
   assert.ok(!/Q\d/.test(fy.label), "FY label must not mention a quarter");
+});
+
+test("get_revenue_summary: revenue question returns no collections; include_collections adds them", async (t) => {
+  const tool = zanAppFinanceTools.find((x) => x.name === "get_revenue_summary")!;
+  const auth = { userId: "f", roleKey: "finance", permissions: new Set([PERMISSION_KEY.VIEW_FINANCE_DASHBOARD]) };
+  let paymentQueries = 0;
+  const dec = (n: number) => n as any;
+  const fakes: Record<string, unknown> = {
+    invoice: {
+      findMany: async () => [{ subtotal: dec(1000), cgstAmount: dec(90), sgstAmount: dec(90), igstAmount: dec(0), total: dec(1180) }],
+      count: async () => 0,
+    },
+    creditNote: { findMany: async () => [] },
+    paymentReceived: { findMany: async () => { paymentQueries++; return [{ amount: dec(500), tdsAmount: dec(10), method: "bank_transfer" }]; } },
+  };
+  for (const [key, value] of Object.entries(fakes)) {
+    const original = Object.getOwnPropertyDescriptor(prisma, key);
+    Object.defineProperty(prisma, key, { configurable: true, value });
+    t.after(() => {
+      if (original) Object.defineProperty(prisma, key, original);
+      else Reflect.deleteProperty(prisma, key);
+    });
+  }
+  const plain = await tool.handler({ period: "this_fy" }, auth) as any;
+  assert.equal(plain.invoiced.taxInvoiceCount, 1);
+  assert.equal("collected" in plain, false);
+  assert.equal(paymentQueries, 0);
+  assert.match(plain.answerRule, /Do NOT mention collections/);
+  const withCollections = await tool.handler({ period: "this_fy", include_collections: true }, auth) as any;
+  assert.equal(withCollections.collected.cashReceived, 500);
+  assert.equal(paymentQueries, 1);
+});
+
+test("system prompt: revenue answers are revenue only; collections need include_collections", () => {
+  const prompt = buildAgentSystemPrompt(false);
+  assert.match(prompt, /ONLY\s+revenue: period label, tax invoices only, and the invoice count/);
+  assert.match(prompt, /include_collections=true/);
 });
