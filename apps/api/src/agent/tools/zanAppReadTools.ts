@@ -5,6 +5,7 @@
  * numbers (2dp) for the LLM to reason over; this is NOT used for anything that writes back to
  * the DB, so Decimal precision loss here is safe.
  */
+import { formatInrFields } from "../formatInr";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, CREDIT_NOTE_STATUS, STAGE_KEY, PAYMENT_METHOD, PO_STATUS } from "@recd/shared";
 import { prisma } from "../../lib/prisma";
@@ -296,23 +297,26 @@ export function summarizeInvoices<T extends InvoiceSummaryRow>(rows: T[], listLi
     byStatus[status] = { count: group.length, totalAmount: sumMoney(group.map((r) => r.total)), balance: sumMoney(group.map((r) => r.balance)) };
   }
 
+  const totalsNumbers = {
+    count: rows.length,
+    /** Invoice totals INCL. GST. */
+    totalAmount: sumMoney(rows.map((r) => r.total)),
+    /** Taxable value EXCL. GST, and the GST on it (totalAmount = taxableValue + gstAmount). */
+    taxableValue: sumMoney(rows.map((r) => r.taxableValue ?? null)),
+    gstAmount: sumMoney(rows.map((r) => r.gstAmount ?? null)),
+    creditNoteTotal: sumMoney(rows.map((r) => r.creditNoteTotal)),
+    netTotal: sumMoney(rows.map((r) => r.netTotal)),
+    amountPaid: sumMoney(rows.map((r) => r.amountPaid)),
+    outstandingBalance: sumMoney(receivable.map((r) => r.balance)),
+    outstandingBalanceExclGst: sumMoney(receivable.map((r) => r.balanceExclGst ?? r.balance)),
+    overdueCount: overdue.length,
+    overdueBalance: sumMoney(overdue.map((r) => r.balance)),
+  };
+
   return {
     ...listMeta(listed.length, rows.length),
-    totals: {
-      count: rows.length,
-      /** Invoice totals INCL. GST. */
-      totalAmount: sumMoney(rows.map((r) => r.total)),
-      /** Taxable value EXCL. GST, and the GST on it (totalAmount = taxableValue + gstAmount). */
-      taxableValue: sumMoney(rows.map((r) => r.taxableValue ?? null)),
-      gstAmount: sumMoney(rows.map((r) => r.gstAmount ?? null)),
-      creditNoteTotal: sumMoney(rows.map((r) => r.creditNoteTotal)),
-      netTotal: sumMoney(rows.map((r) => r.netTotal)),
-      amountPaid: sumMoney(rows.map((r) => r.amountPaid)),
-      outstandingBalance: sumMoney(receivable.map((r) => r.balance)),
-      outstandingBalanceExclGst: sumMoney(receivable.map((r) => r.balanceExclGst ?? r.balance)),
-      overdueCount: overdue.length,
-      overdueBalance: sumMoney(overdue.map((r) => r.balance)),
-    },
+    totals: totalsNumbers,
+    totalsFormatted: formatInrFields(totalsNumbers, ["totalAmount", "taxableValue", "gstAmount", "creditNoteTotal", "netTotal", "amountPaid", "outstandingBalance", "outstandingBalanceExclGst", "overdueBalance"]),
     byStatus,
     // Kept from the first overdue fix so older prompts/threads still find these fields.
     ...(opts.overdueOnly
