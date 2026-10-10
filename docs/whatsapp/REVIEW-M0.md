@@ -1,28 +1,44 @@
-# Review packet: WhatsApp assistant M0 (for ChatGPT Coder / Codex)
+# Review packet: WhatsApp assistant M0, revision 2 (for ChatGPT Coder / Codex re-review)
 
 | Item | Value |
 |---|---|
-| Repo | `D:\Apps\Zanf-RECD-erection` |
-| Branch | `feat/whatsapp-m0` (from master `cf5e049`), not pushed |
-| Commit to review | `fa6e4b9` (PLAN.md + DISCOVERY.md); this packet is in the following commit |
-| Changed files | `docs/whatsapp/PLAN.md` (added), `docs/whatsapp/DISCOVERY.md` (added), `docs/whatsapp/REVIEW-M0.md` (added). No code, schema, env or deploy changes |
+| Repo / branch | `D:\Apps\Zanf-RECD-erection`, `feat/whatsapp-m0` (from master `cf5e049`), not pushed |
+| Changed files | `docs/whatsapp/DISCOVERY.md` (revised), `docs/whatsapp/PLAN.md` (addendum appended, original text untouched), this file. Docs only: no code, schema, env or deploy change |
 
-## Summary
-Read-only discovery. Findings: the agent has no role-to-tool allowlist (permissions are checked inside each tool handler); WhatsApp needs a new deny-by-default per-group read-only allowlist. WhatsMeow client is a short-lived Windows CLI with auth and send only, no receive/reply loop, no LID handling. Priority 0 means first tried, but FreeLLMAPI is not in code or HANDOVER, so the PLAN claim is unconfirmed. 13 conflicts are flagged in DISCOVERY section 4 (e.g. engineers can call payables tools via `record_vendor_invoice`; Drive tools have no permission check; assigned-site scope is unimplemented; unscoped work-order/complaint detail by id).
+## Review history
+| Rev | Commit | Outcome |
+|---|---|---|
+| 1 | `fa6e4b9` (PLAN + DISCOVERY), `f99ef60` (packet) | Codex: **CHANGES REQUIRED** |
+| 2 | this commit (sha in the git log; no self-reference) | For re-review |
+
+## Findings and how addressed
+| Id | Severity | Finding | Addressed in | Status |
+|---|---|---|---|---|
+| F1 | BLOCKER | Unsafe retrieval scope for WhatsApp (engineer payables, Drive, no assigned-site filter, ID-detail bypass) | DISCOVERY 4.2 (per-group read-only policy), 4.3 (app-wide M1 changes + regression checks), 4.4 (server-side site filters, vendor-engineer rule) | Design done; implementation M1 |
+| F2 | BLOCKER | Policy bypass via global `getToolByName` if only schemas are filtered | DISCOVERY 4.5 (policy-aware resolver at execution; llm.ts:99-107, registry.ts:16-17, toolExecution.ts:76; per-call re-check) | Design done |
+| F3 | BLOCKER | Provider and OCI facts unverified; PLAN priority-0 claim | DISCOVERY 3 (routing rule, FreeLLMAPI unverified, read attempt failed safely), 9 B1/B2; PLAN addendum item 1 | **Open**: provider rows; OCI inspection pending (before M3/M5) |
+| F4 | MEDIUM | Bridge/worker contract incomplete | DISCOVERY 7 (signing, replay window, idempotency, queue/outbox, leases, scoped credential, Vercel duration, chunked turns) | Design done; Vercel plan limit open (B3) |
+| F5 | MEDIUM | Sender identity and history revocation | DISCOVERY 6 (separate verified table, LID reconciliation, fail closed, recycled numbers, channel labels, re-check per tool call and before send, accessEpoch) | Design done |
+| F6 | MEDIUM (report s3) | Confirm route lacks tool permission re-check; WhatsApp must never confirm | DISCOVERY 4.2 (WhatsApp never creates/confirms; confirm route rejects channel=whatsapp), M1 fix noted | Design done |
+| F7 | LOW | Drive wording (old line 103) | DISCOVERY 4 matrix row and C3: denies customers, no permission or document-scope check otherwise | Fixed |
+| F8 | LOW | Pilot targets must be labelled (old line 173) | DISCOVERY 8: now approved by owner (D4) | Fixed |
+| F9 | Gate 2/4 | Verified binding flow; credential cannot choose arbitrary users | DISCOVERY 6, 7 | Design done |
+
+## Owner decisions (10 Oct 2026)
+D1 all groups except Customers see site details; Owner/Admin = Super Admin; settings blocked for all over WhatsApp; Customers silent. D2 Finance/engineer restrictions app-wide via tested M1 change. D3 engineers see assigned sites only. D4 pilot targets approved. D5 OCI hosting confirmed; OCI inspection still required before M3/M5. Details: DISCOVERY 0.
 
 ## Checks run
-- Read PLAN, CLAUDE.md; read-only code survey of `apps/api` (routes, agent, tools, providers, schema, roleDefinitions, tests list) via sub-agent with file:line citations.
-- Read-only listing and source read of both WhatsMeow folders; no session/credential/data file opened, nothing run or built.
-- `git status`/`rev-parse` only. No DB access, no scripts, no tests run (docs-only).
-- OCI console: attempted via Claude in Chrome; extension not connected (2 attempts). **Not inspected.**
+- Re-read REVIEW_REPORT.md; verified citations: `llm.ts:99-107`, `registry.ts:8-17`, `toolExecution.ts:76` (file is `agent/toolExecution.ts`), `AgentLlmProvider` schema, `vercel.json` (no `maxDuration`).
+- One approved read-only provider read attempted via throwaway script `.claude-task/read-providers.ts` (no key columns, host only). It failed with `PrismaClientInitializationError`; nothing printed, nothing improvised, no writes. Rows remain open.
+- No code, migrations, DB writes, deploys, OCI/WhatsApp access, tests or builds (docs-only).
 
-## Blockers
-B1 OCI console/VM facts unverified (browser extension offline); B2 live provider rows / FreeLLMAPI priority 0; B3 SSH or health URL for in-VM facts; B4 group mapping and permission decisions; B5 assigned-site rule; B6 pilot users; B7 pairing approach; B8 Vercel plan duration limit. Details in DISCOVERY section 9.
+## Open items
+1. Live provider rows (read Settings -> AI providers) and whether FreeLLMAPI is the lowest active priority. 2. OCI read-only inspection (pending; before M3/M5). 3. Vercel plan duration limit. 4. Pilot users and verified numbers. 5. Pairing approach. Also for M1: diff production role grants before the role-permission change (prod migration history has drifted).
 
-## Codex gate questions (M0)
-1. Does the proposed design reuse current access controls (per-request permission loading, `isActive`, vendor-block) rather than a second role system?
-2. Can every sender be identified safely, including LID-only senders, with fail-closed silent denial?
-3. Is FreeLLMAPI priority-0 routing preserved? Note it is unconfirmed (B2); is that acceptable to proceed to M1?
-4. Is the outbound-only bridge request/reply path (async ingest, outbox poll, ack, messageId dedupe) implementable within the 55 s turn budget and Vercel limits?
-5. Are the 13 flagged conflicts complete, and is the per-group allowlist (rather than app-wide permission changes) the right resolution?
-6. Is M0 acceptable with the OCI inspection outstanding, or must it be completed first?
+## Gate questions for re-review
+1. Does 4.2 plus 4.4 close F1 (policy table, server-side row filters, Drive excluded, vendor-engineer rule)?
+2. Does 4.5 close F2 (execution-time rejection independent of model output, per-call re-check)?
+3. Is the provider handling in section 3 acceptable for M0, with live rows open until before M1 integration?
+4. Is the section 7 contract implementable once the Vercel limit is confirmed?
+5. Are the identity and history rules in section 6 an executable contract?
+6. Can M0 pass as repo-side discovery with OCI inspection explicitly gated before M3/M5?

@@ -154,3 +154,16 @@ The integration is complete when approved numbers can retrieve their permitted Z
 - [WhatsMeow project and supported messaging capabilities](https://github.com/tulir/whatsmeow). This is a WhatsApp Web library; do not describe it as Meta's official Business API or guarantee permanent connectivity.
 - [Vercel Function limits](https://vercel.com/docs/functions/limitations). Keep persistent WhatsMeow ownership on OCI; verify current limits for the Zan request processing design.
 - [OCI Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm). E2 micro provides 1 GB RAM and fractional baseline CPU; Always Free idle instances may be reclaimed. Include recoverable backups and an honest availability limitation rather than promising uninterrupted hosting.
+
+## ADDENDUM 2026-10-10 (M0 rev2) - notes only; the plan text above is unchanged
+
+Source: `docs/whatsapp/DISCOVERY.md` rev2 and Ferose's decisions of 10 Oct 2026.
+
+1. **Provider routing (corrects line 34).** Active providers are tried in ascending `priority`, 0 first (`agent/providers/factory.ts:32-37`). FreeLLMAPI is not named in code; it is presumably an `openai_compatible` row with a custom `baseUrl` (unverified). Live provider rows are still to be read without keys (Settings -> AI providers); do not assert "priority 0" until then. Fallback order and cooldowns are unchanged.
+2. **Access.** Every group except Customers can see site details; Owner/Admin = Super Admin; settings blocked over WhatsApp for every group incl. Super Admin; Customers get no reply for now.
+3. **Roles are app-wide.** Finance and engineer restrictions are an explicit, tested role-permission change in M1 (not WhatsApp-only), with regression checks for the other roles (DISCOVERY 4.3).
+4. **Engineers** see only their assigned sites (DISCOVERY 4.4).
+5. **Tool policy.** WhatsApp is read-only, deny-by-default per group, enforced at execution by a policy-aware resolver as well as in the schemas sent to the model; Drive excluded from v1; WhatsApp never creates or confirms actions (DISCOVERY 4.2, 4.5).
+6. **Pilot targets approved:** 2 concurrent turns, queue 10, p50 < 15 s, p95 < 45 s, bridge service memory < 100 MB, VM memory < 70%, > 10 GB disk free.
+7. **Hosting confirmed:** the bridge runs on OCI. Fallback only if the capacity check fails: second inspected VM or larger approved instance per M6. The read-only OCI inspection remains required before M3 and M5 (pending).
+8. **Bridge/worker contract, identity binding (separate verified table, LID reconciliation) and channel-labelled history** are specified in DISCOVERY 6-7. Vercel plan duration limit still to be confirmed.
