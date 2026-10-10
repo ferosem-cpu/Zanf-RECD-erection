@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createThreadSwitchGuard } from "../src/lib/threadSwitchGuard";
+import { createThreadSwitchGuard, startNewThread, threadForSend } from "../src/lib/threadSwitchGuard";
 
 test("a late load of the old thread can't overwrite the thread opened by '+ New'", async () => {
   const guard = createThreadSwitchGuard();
@@ -69,4 +69,29 @@ test("assistant text is sanitised at render: token-only replies show a placehold
     { role: "assistant", content: "" },
   ]);
   assert.deepEqual(out.map((m) => m.content), ["<EOS_TOKEN> typed by a user", EMPTY_REPLY_PLACEHOLDER, "Done.", ""]);
+});
+
+test("fix 9: a send with no active id creates a NEW thread, never resumes the latest (old) one", async () => {
+  const calls: string[] = [];
+  let applied = "";
+  const id = await threadForSend(null, async () => { calls.push("create"); return "fresh"; }, (x) => (applied = x));
+  assert.equal(id, "fresh");
+  assert.equal(applied, "fresh");
+  assert.deepEqual(calls, ["create"]);
+  // An existing active id is used untouched (no create).
+  assert.equal(await threadForSend("cur", async () => { throw new Error("no create"); }, () => assert.fail()), "cur");
+});
+
+test("fix 9: a failed or superseded '+ New' leaves Send enabled only for the latest attempt", async () => {
+  const guard = createThreadSwitchGuard();
+  const settled: boolean[] = [];
+  let releaseFirst!: (id: string) => void;
+  const first = startNewThread(guard, () => {}, () => new Promise<string>((r) => (releaseFirst = r)), () => assert.fail("superseded"), (l) => settled.push(l));
+  const second = startNewThread(guard, () => {}, async () => { throw new Error("offline"); }, () => assert.fail(), (l) => settled.push(l));
+  await assert.rejects(second, /offline/);
+  releaseFirst("a");
+  await first;
+  // second (latest) settled as latest even though it failed -> bubble clears "creating";
+  // first was superseded -> it must NOT clear it.
+  assert.deepEqual(settled, [true, false]);
 });

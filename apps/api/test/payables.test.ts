@@ -130,6 +130,8 @@ test("'all platino bills' lists every status incl. Rejected with its status; pay
     assert.equal(res.byStatus.rejected.outstanding, 0); // a rejected bill is never owed
     assert.equal(res.totals.outstanding, 3540);
     assert.match(res.statusFilter, /incl\. rejected/);
+    assert.match(res.statusNote, /Rejected means rejected - it is NOT written off/);
+    assert.doesNotMatch(JSON.stringify(res.bills), /written/i);
   }
   const unpaid: any = await tool.handler({ supplier: "platino", status: "unpaid" }, auth);
   assert.deepEqual(wheres.at(-1).status, { in: ["verified", "approved", "partially_paid"] });

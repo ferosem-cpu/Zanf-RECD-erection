@@ -11,7 +11,7 @@ import { api, NetworkError } from "@/lib/apiClient";
 const AGENT_REPLY_TIMEOUT_MS = 90_000;
 import { useAuth } from "@/components/AuthContext";
 import { captureFile } from "@/lib/fileCapture";
-import { createThreadSwitchGuard, startNewThread } from "@/lib/threadSwitchGuard";
+import { createThreadSwitchGuard, startNewThread, threadForSend } from "@/lib/threadSwitchGuard";
 import { sanitizeMessages } from "@/lib/assistantText";
 
 /**
@@ -303,11 +303,13 @@ export default function AgentChatBubble() {
           setActiveId(id);
           loadConversations();
         },
+        // Only the newest "+ New" attempt may re-enable Send (a superseded one would do it early).
+        (latest) => {
+          if (latest) setCreatingThread(false);
+        },
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCreatingThread(false);
     }
   }
 
@@ -354,7 +356,15 @@ export default function AgentChatBubble() {
     ]);
     setSending(true);
     try {
-      const id = await ensureConversation();
+      // Never ensureConversation() here: with no active id it resumes the most recent (old) thread.
+      const id = await threadForSend(
+        activeId,
+        async () => (await api<{ id: string }>("/agent/conversations", { method: "POST", body: JSON.stringify({}) })).id,
+        (newId) => {
+          setActiveId(newId);
+          loadConversations();
+        },
+      );
       const ticket = threadGuard.current();
       const result = await api<{ reply: string; messages: StoredMessage[] }>(`/agent/conversations/${id}/messages`, {
         method: "POST",

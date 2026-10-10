@@ -328,7 +328,11 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 - Work done from the mobile app lands on unmerged `claude/<slug>` branches — check
   `git branch -a` before rebuilding anything.
 
-## 10. Current open items (as of 2026-10-09)
+## 10. Current open items (as of 2026-10-10)
+
+**Branch `fix/agent-retest-9` (2026-10-10)** - minor leftovers of the fix-8 retest (9/9 pass), see §11.
+After deploy re-run `docs/agent-test-checklist.md` rows 54-57. Rollback target
+`dpl_4U6zE681sfDkQQMCKiHHyrC7Yrde`. No migration needed.
 
 **Branch `fix/agent-retest-8` (2026-10-09)** - fixes the retest of `dpl_JB9NPqWvwp3iDLLHS8EYdkHaEBGx`
 (10 pass / 2 partial / 1 fail), see §11. After deploy, re-run `docs/agent-test-checklist.md` rows
@@ -426,6 +430,18 @@ hiding; revenue tax-invoice count) against production. Rollback target
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-10-10 — Fix 9, branch `fix/agent-retest-9` (retest of fix 8: 9/9 pass).**
+  `ad9ead0` replies no longer leak internals: prompt NO INTERNALS rule (cite app pages) +
+  `stripToolInternals` (assistantText.ts) strips "Source: <tool>" lines and backticked tool names on
+  save and in the returned reply. `d95db85` Rejected vendor bill = "Rejected" only (prompt STATUS
+  WORDS rule + search_vendor_bills `statusNote`; no write-off wording existed in the tools).
+  `f693ccf` "+ New" root cause: `send()` called `ensureConversation()`, which with no active id
+  resumes the MOST RECENT thread (loads its messages, posts into it). No active id remained after a
+  "+ New" whose create failed, or a superseded/double-clicked "+ New" whose `finally` cleared
+  "creating" early and re-enabled Send. Now `threadForSend` creates a fresh thread, and only the
+  latest "+ New" attempt clears the flag. `2d9273a` proposal previews: site = name or "(no site
+  name)", address in `siteAddress`. Tests: API 148, admin-web 31.
 
 - **2026-10-09 — Fix 8, branch `fix/agent-retest-8` (retest of `dpl_JB9NPqWvwp3iDLLHS8EYdkHaEBGx`).**
   `ab9105b` site naming: search_orders_and_sites / search_site_status_updates return

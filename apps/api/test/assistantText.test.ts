@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { stripSpecialTokens, isJunkReply, cleanAssistantResult, sendCleaned } from "../src/agent/assistantText";
+import { stripSpecialTokens, isJunkReply, cleanAssistantResult, sendCleaned, stripToolInternals, sanitizeHistory as sanitizeHistoryFn } from "../src/agent/assistantText";
 import type { SendMessageResult } from "../src/agent/providers/types";
 
 test("special tokens are stripped; token-only replies are junk", () => {
@@ -62,4 +62,21 @@ test("stored threads are sanitised on load/replay/save: old <EOS_TOKEN> replies 
   assert.equal(out[0], stored[0], "untouched messages keep their identity");
   assert.deepEqual(sanitizeHistory(null), []);
   assert.equal(sanitizeAssistantText("Hello </s>"), "Hello");
+});
+
+test("fix 9: leaked tool names / Source lines are stripped on save", () => {
+  const leaked = "9 orders are completed.\n\nSource: search_orders_and_sites (no filters) -> allOrders.completedCount = 9";
+  assert.equal(stripToolInternals(leaked), "9 orders are completed.");
+  assert.equal(stripToolInternals("Total 5,000\n*Source: `get_payables`*\nDone."), "Total 5,000\nDone.");
+  assert.equal(stripToolInternals("Payables are 5,000 (via `get_payables`)."), "Payables are 5,000.");
+  assert.equal(stripToolInternals("I checked `search_vendor_bills` for Selvam."), "I checked the app for Selvam.");
+  for (const ok of ["Source: Sites page", "File `zanapp_report.pdf` found.", "Status: get well soon"]) {
+    assert.equal(stripToolInternals(ok), ok);
+  }
+  const saved = sanitizeHistoryFn<{ role: string; content: string }>([
+    { role: "user", content: "Source: search_orders_and_sites" },
+    { role: "assistant", content: leaked },
+  ]);
+  assert.equal(saved[0].content, "Source: search_orders_and_sites");
+  assert.equal(saved[1].content, "9 orders are completed.");
 });

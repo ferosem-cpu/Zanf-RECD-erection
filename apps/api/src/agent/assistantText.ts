@@ -17,13 +17,37 @@ export function isJunkReply(text: string): boolean {
   return !/[\p{L}\p{N}]/u.test(stripSpecialTokens(text));
 }
 
+/** An agent tool name (search_orders_and_sites, get_payables, propose_create_order, ...). */
+const TOOL_NAME = String.raw`(?:search|get|list|propose|find|lookup|create|update|confirm)_[a-z0-9]+(?:_[a-z0-9]+)*`;
+/** A whole "Source: search_orders_and_sites (...) -> allOrders.completedCount = 9" line (any
+ * bullet/bold/italic decoration, "Source"/"Sources"/"Data source"). */
+const SOURCE_LINE_RE = new RegExp(
+  String.raw`^[ \t>*_\-]*(?:data\s+)?sources?\b[*_]*\s*:[^\n]*\b${TOOL_NAME}\b[^\n]*(?:\n|$)`,
+  "gim",
+);
+/** "(`get_payables`)" / "(via `get_payables`)" asides, then any other backticked tool name. */
+const TOOL_ASIDE_RE = new RegExp(String.raw`\s*\((?:via|from|using)?\s*\x60${TOOL_NAME}\x60[^)\n]*\)`, "g");
+const BACKTICKED_TOOL_RE = new RegExp(String.raw`\x60${TOOL_NAME}\x60`, "g");
+
+/** Strips leaked internal tool names from a reply: "Source: <tool>..." lines, parenthesised
+ * backticked tool names, and other backticked tool names (replaced with "the app"). The prompt
+ * forbids them (NO INTERNALS); this is the safety net on save. */
+export function stripToolInternals(text: string): string {
+  return text
+    .replace(SOURCE_LINE_RE, "")
+    .replace(TOOL_ASIDE_RE, "")
+    .replace(BACKTICKED_TOOL_RE, "the app")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** Shown instead of an assistant message that was nothing but special tokens. */
 export const EMPTY_REPLY_PLACEHOLDER = "(no reply)";
 
 /** Display/replay-safe assistant text: special tokens stripped; token-only text becomes the
  * placeholder (or "" when the message carries tool calls, whose text is optional). */
 export function sanitizeAssistantText(text: string, hasToolCalls = false): string {
-  const clean = stripSpecialTokens(text ?? "");
+  const clean = stripToolInternals(stripSpecialTokens(text ?? ""));
   return isJunkReply(clean) ? (hasToolCalls ? "" : EMPTY_REPLY_PLACEHOLDER) : clean;
 }
 
