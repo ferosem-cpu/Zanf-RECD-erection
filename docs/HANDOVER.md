@@ -341,6 +341,7 @@ A provider that timed out is skipped for the rest of that request; SDK retries a
 Provider order/priorities unchanged. Errors: API 500 body is now `{error: "Sorry - I couldn't finish that, please try again", errorId}`
 (details only in logs); chat shows one friendly bubble + "Copy my message" for server, timeout and network failures (the raw
 quoted \n string path is gone). Prompt keeps the label when quoting document clauses. After deploy re-run checklist rows 66-68. No migration.
+
 **Branch `fix/agent-retest-11` (2026-10-10)** - retest of fix 10 (10 pass / 2 partial), see §11. After deploy re-run
 `docs/agent-test-checklist.md` rows 62-65 and read the `agent_turn_timing` log lines (below). Rollback target
 `dpl_D2EwenRNqD1EZGjEGwWYPmWZFu7h`. No migration needed.
@@ -461,6 +462,11 @@ hiding; revenue tax-invoice count) against production. Rollback target
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
 
+- **2026-10-10 - Fix 12, branch `fix/agent-retest-12`.** `a1df51c` per-round primary cap 25 s + 20 s fallback reserve inside the
+  55 s budget, timed-out provider skipped for the rest of the request, SDK retries off (new `agent/sendWithFallback.ts`,
+  `friendlyError.ts`); single friendly error bubble (API `{error, errorId}` + admin `lib/agentError.ts`); prompt keeps
+  clause labels. Tests: `agentFallback.test.ts` (API), `agentError.test.ts` (admin-web). Rollback target
+  `dpl_2VQda3vCfipZq83Hg6xHShfDSiSb`.
 - **2026-10-10 — Fix 11, branch `fix/agent-retest-11` (retest of fix 10: 10 pass / 2 partial).** `c2b1888` revenue
   period `label` + new `kind` (fy / quarter / month / all_time / custom); custom ranges that are exactly an FY, quarter or
   month get that label, answerRule says quote the label verbatim. `8803f97` search_vendor_bills returns `dueNote`
