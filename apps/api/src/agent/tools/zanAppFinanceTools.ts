@@ -319,7 +319,7 @@ const searchVendorBills: AgentTool = {
     "get_payables for 'all bills' (it is only what is still owed). Returns totalCount and totals {count, totalAmount, " +
     "taxableAmount, gstAmount, paid, outstanding} and byStatus over EVERY matching bill, plus up to 15 bills (overdue " +
     "first when overdueOnly, else newest): billNumber, supplier, status, billDate, dueDate, subtotal, taxAmount, total, " +
-    "paid, balance, dueStatus (overdue / not_due / no_due_date), daysOverdue, rejectedReason. Overdue needs a due date " +
+    "paid, balance, dueStatus (overdue / not_due / no_due_date), daysOverdue, dueNote (e.g. \"TXIN0934 overdue by 12 days\"; null for paid/rejected/cancelled), rejectedReason, plus overdueBills = every overdue bill note even beyond the 15 listed. In an \"all bills\" answer ALWAYS flag each overdue bill using dueNote. Overdue needs a due date " +
     "before today; a bill with no due date is never overdue. Deleted bills only appear when status=deleted.",
   inputSchema: {
     type: "object",
@@ -378,6 +378,7 @@ const searchVendorBills: AgentTool = {
           // Only unpaid bills carry a due status; no due date => "no_due_date", never overdue.
           dueStatus: unpaid ? a.dueStatus : null, overdue, daysOverdue: overdue ? (a.daysPastDue as number) : 0,
           ...(unpaid && a.dueStatus === "no_due_date" ? { ageDays: a.ageDays, ageingBasis: a.ageingBasis } : {}),
+          dueNote: !unpaid ? null : overdue ? `${b.billNumber} overdue by ${a.daysPastDue} day${a.daysPastDue === 1 ? "" : "s"}` : a.dueStatus === "no_due_date" ? "no due date" : "not yet due",
           rejectedReason: b.rejectedReason,
         };
       })
@@ -405,6 +406,7 @@ const searchVendorBills: AgentTool = {
       },
       byStatus,
       overdueCount: rows.filter((r) => r.overdue).length,
+      overdueBills: rows.filter((r) => r.overdue).sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 30).map((r) => r.dueNote),
       noDueDateCount: rows.filter((r) => r.dueStatus === "no_due_date").length,
       statusNote: "Say each bill's status exactly as listed. Rejected means rejected - it is NOT written off, cancelled or paid, and no balance is owed on it.",
       overdueRule: OVERDUE_RULE,
