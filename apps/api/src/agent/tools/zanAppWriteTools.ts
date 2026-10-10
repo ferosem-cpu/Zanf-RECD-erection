@@ -723,7 +723,7 @@ const createComplaintTool: AgentTool = {
     }
 
     const preview = {
-      site: site.companyName ?? site.address,
+      ...sitePreviewFields(site),
       category,
       severity,
       description,
@@ -876,7 +876,7 @@ const createSiteStatusUpdateTool: AgentTool = {
     }
 
     const preview = {
-      site: site.companyName ?? site.address,
+      ...sitePreviewFields(site),
       orderNumber: site.order.orderNumber,
       stage: stage.label,
       status: status.label,
@@ -1231,6 +1231,12 @@ const createCustomerPoTool: AgentTool = {
 
 function hasAny(auth: { permissions: Set<string> }, keys: string[]): boolean {
   return keys.some((k) => auth.permissions.has(k));
+}
+
+/** Confirmation-preview site fields: the site NAME (Site.companyName) as the app shows it, or
+ * "(no site name)" - never the address in the name slot; the address is its own field. */
+export function sitePreviewFields(site: { companyName: string | null; address: string | null }) {
+  return { site: site.companyName?.trim() || "(no site name)", siteAddress: site.address ?? null };
 }
 
 export const zanAppWriteTools: AgentTool[] = [
