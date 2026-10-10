@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createThreadSwitchGuard, startNewThread, threadForSend } from "../src/lib/threadSwitchGuard";
+import { createThreadSwitchGuard, startNewThread, threadForSend, createSendQueue } from "../src/lib/threadSwitchGuard";
 
 test("a late load of the old thread can't overwrite the thread opened by '+ New'", async () => {
   const guard = createThreadSwitchGuard();
@@ -94,4 +94,17 @@ test("fix 9: a failed or superseded '+ New' leaves Send enabled only for the lat
   // second (latest) settled as latest even though it failed -> bubble clears "creating";
   // first was superseded -> it must NOT clear it.
   assert.deepEqual(settled, [true, false]);
+});
+
+test("a send requested during + New is queued once and flushed after, never dropped or doubled", () => {
+  const q = createSendQueue();
+  assert.equal(q.request(false), true);
+  assert.equal(q.take(), false);
+  assert.equal(q.request(true), false);
+  assert.equal(q.request(true), false);
+  assert.equal(q.take(), true);
+  assert.equal(q.take(), false);
+  q.request(true);
+  q.cancel();
+  assert.equal(q.take(), false);
 });
