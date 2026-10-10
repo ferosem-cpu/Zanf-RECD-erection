@@ -238,7 +238,17 @@ Phone -> WhatsApp -> [OCI: whatsmeow bridge, systemd, own session.db]
 
 | Item | Observed | Source |
 |---|---|---|
-| OCI VM (freellmapi-vm) | Hyderabad, Ubuntu 24.04 Minimal, E2.1.Micro, 1 GB, 47 GB boot, ~35-36% memory over 1 h | PLAN.md only. **Not re-verified: read-only OCI inspection pending (required before M3 and M5)** |
+| VM-A (freellmapi-vm), verified 2026-10-10 read-only over SSH | x86_64, Ubuntu 24.04.4 LTS, 2 vCPU, RAM 952 MB total / 337 used / 615 available (about 35% used), swap 2 GB with 220 MB used, root disk 45 GB with 38 GB free (15% used), load 0.14/0.03/0.01, up 11 days, NTP synchronized | Live inspection |
+| VM-A running services | caddy, docker (containerd), snapd, oracle-cloud-agent, unattended-upgrades, ssh, systemd basics. One container: FreeLLMAPI (ghcr.io/tashfeenahmed/freellmapi:latest), Up 4 days, healthy | Live |
+| VM-A top RSS | node 102 MB (FreeLLMAPI), dockerd 41 MB, journald 37 MB, fwupd 29 MB, caddy 27 MB, containerd 21 MB, snapd 19 MB | Live |
+| VM-A listening ports | 22, 80, 443 (caddy), 3001 (FreeLLMAPI), 111 (rpcbind), 2019 (caddy admin, localhost), DNS stubs on localhost | Live |
+| VM-A FreeLLMAPI health (local, no key) | `/` 200 in 3 ms, `/health` 200 in 3 ms, `/v1/models` 401 in 2 ms (up; auth required) | Live |
+| VM-A TLS | Caddy manages certificates (no /etc/letsencrypt). Domain not known without reading the Caddyfile (not allowed), so expiry **not verified** | Not verified |
+| VM-B (Oracle Linux) | **Not inspected**. No tried IP/user answered as Oracle Linux (see B2) | Not verified |
+| Bridge footprint | Go binary 26.7 MB (client exe); pure-Go SQLite; tens of MB RSS idle expected | exe size observed; RSS NV |
+| Agent LLM load | LLM runs at providers, not on the VM; bridge does I/O only | design |
+
+Headroom vs approved targets (VM-A): memory with a bridge under 100 MB would be about (337+100)/952 = 46%, under the 70% target; disk 38 GB free is above 10 GB. Verdict: **OK, with caution**. RAM is only 952 MB (the plan's 1 GB), swap is already in use, and the cheap services (fwupd, snapd, ModemManager, udisks2) could be trimmed later if needed (not done; no changes made). Recommended bridge host: **VM-A (freellmapi-vm)**, outbound-only, no new inbound port. Sustained memory still has to be measured in M6.
 | Bridge footprint | Go binary 26.7 MB (client exe); pure-Go SQLite; tens of MB RSS idle expected | exe size observed; RSS NV |
 | Agent LLM load | LLM runs at providers, not on the VM; bridge does I/O only | design |
 
@@ -253,7 +263,7 @@ Decided and removed: group mapping (D1), Finance/engineer scope (D2), assigned-s
 | # | Open item | Needed |
 |---|---|---|
 | B1 | Live AI provider rows (Blocker 3). Read attempt failed (section 3) | Zan-F Bot or Ferose copies Settings -> AI providers (name, type, priority, active, model, base host; no keys) |
-| B2 | OCI capacity check: read-only inspection of VM shape, memory, disk, services, ports, TLS, FreeLLMAPI health. **Pending; required before M3 and M5** | Agent SSH/console access via Ferose's secure channel |
+| B2 | OCI capacity check. **VM-A done 2026-10-10 (section 8): headroom OK with caution.** Remaining: VM-B (Oracle Linux) not inspected (one tried IP refused the key for users ubuntu and opc; another timed out on port 22 during banner exchange, both attempts), and VM-A TLS expiry not verified (domain unknown). Not blocking if VM-A hosts the bridge | For VM-B only: correct IP, login user, key, and a port-22 ingress rule from this PC's public IP |
 | B3 | Vercel plan function duration limit | Confirm plan (B8 in the contract above) |
 | B4 | Pilot users and verified numbers | List from Ferose |
 | B5 | Pairing approach (fresh pair of Zan-F on OCI vs session migration); owner present at M5 | Approval at M5 |

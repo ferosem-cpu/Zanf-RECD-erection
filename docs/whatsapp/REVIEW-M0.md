@@ -33,7 +33,7 @@ D1 all groups except Customers see site details; Owner/Admin = Super Admin; sett
 - No code, migrations, DB writes, deploys, OCI/WhatsApp access, tests or builds (docs-only).
 
 ## Open items
-1. Live provider rows (read Settings -> AI providers) and whether FreeLLMAPI is the lowest active priority. 2. OCI read-only inspection (pending; before M3/M5). 3. Vercel plan duration limit. 4. Pilot users and verified numbers. 5. Pairing approach. Also for M1: diff production role grants before the role-permission change (prod migration history has drifted).
+1. Live provider rows (read Settings -> AI providers) and whether FreeLLMAPI is the lowest active priority. 2. OCI read-only inspection: VM-A (freellmapi-vm) done 2026-10-10, headroom OK with caution, bridge host recommended (DISCOVERY 8); VM-B not inspected (key refused / port 22 timeout) and VM-A TLS expiry not verified. 3. Vercel plan duration limit. 4. Pilot users and verified numbers. 5. Pairing approach. Also for M1: diff production role grants before the role-permission change (prod migration history has drifted).
 
 ## Gate questions for re-review
 1. Does 4.2 plus 4.4 close F1 (policy table, server-side row filters, Drive excluded, vendor-engineer rule)?
