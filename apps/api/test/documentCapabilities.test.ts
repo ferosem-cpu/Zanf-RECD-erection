@@ -81,3 +81,9 @@ test("'all bills' of a vendor include Rejected; payables never do", () => {
   assert.match(staff, /every status incl\. Rejected, Paid, Cancelled; not Deleted/);
   assert.match(staff, /Payables totals \(get_payables\)\s+never include Rejected/);
 });
+
+test("fix 9: prompt forbids internals in replies and inferring write-off for Rejected bills", () => {
+  const p = buildAgentSystemPrompt(false);
+  assert.match(p, /NO INTERNALS: never name tools, fields, parameters or JSON paths/);
+  assert.match(p, /A Rejected vendor bill is "Rejected" - never call it written off/);
+});

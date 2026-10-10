@@ -404,6 +404,7 @@ const searchVendorBills: AgentTool = {
       byStatus,
       overdueCount: rows.filter((r) => r.overdue).length,
       noDueDateCount: rows.filter((r) => r.dueStatus === "no_due_date").length,
+      statusNote: "Say each bill's status exactly as listed. Rejected means rejected - it is NOT written off, cancelled or paid, and no balance is owed on it.",
       overdueRule: OVERDUE_RULE,
       bills: listed.slice(0, LIST_LIMIT),
     };
