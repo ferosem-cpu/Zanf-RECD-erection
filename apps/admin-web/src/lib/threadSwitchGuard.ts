@@ -79,3 +79,33 @@ export function createSendQueue() {
     },
   };
 }
+
+/** Tracks the one in-flight reply request. "+ New" (or any thread switch) calls `abort()`: the
+ * request is cancelled and detached, so its late result, error or `finally` must be ignored
+ * (`isActive(token)` is false) and must not touch the new thread's sending state. */
+export function createInFlightSend() {
+  let seq = 0;
+  let controller: AbortController | null = null;
+  return {
+    begin(): { token: number; signal: AbortSignal } {
+      controller?.abort();
+      controller = new AbortController();
+      return { token: ++seq, signal: controller.signal };
+    },
+    isActive: (token: number) => token === seq,
+    /** Detaches the in-flight send (if any); returns true when there was one. */
+    abort(): boolean {
+      const had = controller !== null && !controller.signal.aborted;
+      controller?.abort();
+      controller = null;
+      seq++;
+      return had;
+    },
+    /** Marks the send finished; true if it was still the active one. */
+    finish(token: number): boolean {
+      const active = token === seq;
+      if (active) controller = null;
+      return active;
+    },
+  };
+}

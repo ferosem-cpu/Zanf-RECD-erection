@@ -11,7 +11,7 @@ import { api, NetworkError } from "@/lib/apiClient";
 const AGENT_REPLY_TIMEOUT_MS = 90_000;
 import { useAuth } from "@/components/AuthContext";
 import { captureFile } from "@/lib/fileCapture";
-import { createThreadSwitchGuard, createSendQueue, startNewThread, threadForSend } from "@/lib/threadSwitchGuard";
+import { createThreadSwitchGuard, createSendQueue, createInFlightSend, startNewThread, threadForSend } from "@/lib/threadSwitchGuard";
 import { sanitizeMessages } from "@/lib/assistantText";
 
 /**
@@ -147,6 +147,7 @@ export default function AgentChatBubble() {
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [creatingThread, setCreatingThread] = useState(false);
   const sendQueue = useRef(createSendQueue());
+  const inFlight = useRef(createInFlightSend());
   const [pendingSend, setPendingSend] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -266,6 +267,7 @@ export default function AgentChatBubble() {
 
   const loadConversation = useCallback(async (id: string) => {
     const ticket = threadGuard.begin();
+    if (inFlight.current.abort()) setSending(false);
     const data = await api<{ id: string; messages: StoredMessage[] }>(`/agent/conversations/${id}`);
     if (!threadGuard.isCurrent(ticket)) return;
     setActiveId(data.id);
@@ -293,6 +295,8 @@ export default function AgentChatBubble() {
       await startNewThread(
         threadGuard,
         () => {
+          // Detach any reply still being generated for the old thread and unlock the input.
+          if (inFlight.current.abort()) setSending(false);
           // Before any await, so the old thread's text never lingers on screen.
           setMessages([]);
           setError(null);
@@ -369,6 +373,7 @@ export default function AgentChatBubble() {
       { role: "user", content: text || (attachment ? `📎 ${attachment.fileName}` : "") },
     ]);
     setSending(true);
+    const flight = inFlight.current.begin();
     try {
       // Never ensureConversation() here: with no active id it resumes the most recent (old) thread.
       const id = await threadForSend(
@@ -385,6 +390,7 @@ export default function AgentChatBubble() {
         // The server gives up on its own after ~55s and answers with an explanation; this is
         // the safety net so the bubble can never sit on "Thinking…" forever (2026-09-28).
         timeoutMs: AGENT_REPLY_TIMEOUT_MS,
+        signal: flight.signal,
         body: JSON.stringify({
           message: text,
           attachment: attachment
@@ -392,9 +398,11 @@ export default function AgentChatBubble() {
             : undefined,
         }),
       });
-      if (threadGuard.isCurrent(ticket)) setMessages(result.messages ?? []);
+      if (inFlight.current.isActive(flight.token) && threadGuard.isCurrent(ticket)) setMessages(result.messages ?? []);
       loadConversations();
     } catch (err) {
+      // Detached by "+ New" / a thread switch: its error belongs to the old thread, show nothing.
+      if (!inFlight.current.isActive(flight.token)) return;
       setError(
         err instanceof NetworkError && err.timedOut
           ? "The assistant didn't answer in time. Your message may still have been processed - reopen this conversation from History in a moment, or try again with a shorter request."
@@ -403,7 +411,7 @@ export default function AgentChatBubble() {
             : String(err),
       );
     } finally {
-      setSending(false);
+      if (inFlight.current.finish(flight.token)) setSending(false);
     }
   }
 
