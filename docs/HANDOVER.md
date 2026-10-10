@@ -476,6 +476,10 @@ hiding; revenue tax-invoice count) against production. Rollback target
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
 
+- **2026-10-10 - Fix 14, branch `fix/agent-retest-14`.** A revenue question also added an unrequested collections section.
+  Cause: prompt told the model to add "plus collected" and get_revenue_summary always returned `collected`. Now `collected` (and the
+  payments query) is returned only with `include_collections=true`; prompt and answerRule say answer only what was asked. Code only,
+  no migration. Rollback target `dpl_CaYkxaNLkckQZbFBDE5JYmyHVT93`.
 - **2026-10-10 - Fix 13, branch `fix/agent-retest-13` (retest of fix 12: 5 pass / 1 partial).** `ba97785` overdue vendor bills listed
   with vendor, days, balance (dueNote + prompt rule + post-filter test). `ded5740` single-call document read by partial name,
   `focus` excerpts, tree single-flight, 10 min text cache by id + modifiedTime, 5 min name cache; "(Commissioned or later)" wording.
