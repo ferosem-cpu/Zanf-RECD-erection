@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildTextClause, searchTokens, searchDriveDocuments, listDriveDocuments, getFileMetadataWithinFolder, resetFolderTreeCache,
   getFolderTree, FOLDER_TREE_TTL_MS, HIDDEN_FILES_CLAUSE, HIDDEN_FILE_MESSAGE, isHiddenDriveFile, type DriveLike, type DriveFile,
-  buildLooseNameClause, stripExtension, findFileIdByName, getDriveDocumentByRef,
+  buildLooseNameClause, stripExtension, findFileIdByName, getDriveDocumentByRef, resetDocContentCache, DOC_MAX_TEXT_CHARS,
 } from "../src/agent/tools/driveSearch";
 import { driveTools } from "../src/agent/tools/driveTool";
 
@@ -247,4 +247,33 @@ test("get_document_content accepts a fileId or the exact file name; hidden names
   await assert.rejects(getDriveDocumentByRef("AgsarPaint_Quote_TTCRN", { drive, rootId: ROOT }), /No document named "AgsarPaint_Quote_TTCRN"/);
   await assert.rejects(findFileIdByName("zanapp-backup-2026-10-08.json", { drive, rootId: ROOT }), (e: Error) => e.message === HIDDEN_FILE_MESSAGE);
   await assert.rejects(findFileIdByName("nothing here.pdf", { drive, rootId: ROOT }), /No document named "nothing here.pdf"/);
+});
+
+test("get_document_content: repeat reads within 60 s hit memory; long text is cut with a notice", async () => {
+  resetDocContentCache();
+  const long = "x".repeat(DOC_MAX_TEXT_CHARS + 500);
+  const files: FakeFile[] = [...library(), { id: "longDocFileId123", name: "Long.txt", mimeType: "text/plain", parents: [ROOT] }];
+  const base = fakeDrive(files).drive;
+  let downloads = 0;
+  const drive: DriveLike = {
+    files: {
+      ...base.files,
+      get: async (params, options) => {
+        if (params.alt === "media") { downloads++; return { data: new TextEncoder().encode(long).buffer }; }
+        return base.files.get(params, options);
+      },
+    },
+  };
+  const first = await getDriveDocumentByRef("Long.txt", { drive, rootId: ROOT, cache: true });
+  const second = await getDriveDocumentByRef("Long.txt", { drive, rootId: ROOT, cache: true });
+  assert.equal(downloads, 1, "second read served from the cache");
+  assert.equal(second, first);
+  assert.ok(first.text.length < long.length);
+  assert.match(first.text, /text cut at 60000 characters/);
+  resetDocContentCache();
+  await getDriveDocumentByRef("Long.txt", { drive, rootId: ROOT, cache: true });
+  assert.equal(downloads, 2);
+  await getDriveDocumentByRef("Long.txt", { drive, rootId: ROOT });
+  await getDriveDocumentByRef("Long.txt", { drive, rootId: ROOT });
+  assert.equal(downloads, 4, "no caching unless asked when a drive is injected");
 });

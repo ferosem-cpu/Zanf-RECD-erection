@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createThreadSwitchGuard, startNewThread, threadForSend, createSendQueue } from "../src/lib/threadSwitchGuard";
+import { createThreadSwitchGuard, startNewThread, threadForSend, createSendQueue, createInFlightSend } from "../src/lib/threadSwitchGuard";
 
 test("a late load of the old thread can't overwrite the thread opened by '+ New'", async () => {
   const guard = createThreadSwitchGuard();
@@ -107,4 +107,44 @@ test("a send requested during + New is queued once and flushed after, never drop
   q.request(true);
   q.cancel();
   assert.equal(q.take(), false);
+});
+
+test("'+ New' while a reply is in flight: request aborted, input unlocked, late result ignored", async () => {
+  const flight = createInFlightSend();
+  let sending = false;
+  let messages: string[] = [];
+  let error: string | null = null;
+
+  const a = flight.begin();
+  sending = true;
+  let releaseOld!: () => void;
+  const oldReply = new Promise<string[]>((r) => (releaseOld = () => r(["old reply"])));
+  const oldSend = (async () => {
+    try {
+      messages = await oldReply;
+      if (!flight.isActive(a.token)) messages = []; // stale result must not paint
+    } catch {
+      if (!flight.isActive(a.token)) return;
+      error = "boom";
+    } finally {
+      if (flight.finish(a.token)) sending = false;
+    }
+  })();
+
+  // "+ New": abort + unlock synchronously.
+  if (flight.abort()) sending = false;
+  assert.equal(a.signal.aborted, true);
+  assert.equal(sending, false);
+
+  // The new thread starts its own send; the old one finishing late must not clear its state.
+  const b = flight.begin();
+  sending = true;
+  releaseOld();
+  await oldSend;
+  assert.equal(sending, true, "late finally of the old send must not unlock the new send");
+  assert.deepEqual(messages, []);
+  assert.equal(error, null);
+  assert.equal(flight.isActive(b.token), true);
+  assert.equal(flight.finish(b.token), true);
+  assert.equal(flight.abort(), false);
 });

@@ -87,16 +87,16 @@ test("Indian FY quarters: 2026-10-08 is FY 2026-27 Q3 (01 Oct - 31 Dec 2026)", (
 
 test("revenue periods resolve to explicit dates", () => {
   const today = "2026-10-08";
-  assert.deepEqual(resolveRevenuePeriod({}, today), { label: "FY 2026-27 Q3 to date (current quarter)", from: "2026-10-01", to: "2026-10-08" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "last quarter" }, today), { label: "FY 2026-27 Q2 (previous quarter)", from: "2026-07-01", to: "2026-09-30" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "this_month" }, today), { label: "2026-10 to date (current month)", from: "2026-10-01", to: "2026-10-08" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "last_month" }, today), { label: "2026-09 (previous month)", from: "2026-09-01", to: "2026-09-30" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "this_fy" }, today), { label: "FY 2026-27 to date (current financial year)", from: "2026-04-01", to: "2026-10-08" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "FY to date" }, today), { label: "FY 2026-27 to date (current financial year)", from: "2026-04-01", to: "2026-10-08" });
-  assert.deepEqual(resolveRevenuePeriod({ period: "all time" }, today), { label: "All time to date (total invoiced)", from: "2000-01-01", to: "2026-10-08" });
+  assert.deepEqual(resolveRevenuePeriod({}, today), { label: "FY 2026-27 Q3 to date (current quarter)", kind: "quarter", from: "2026-10-01", to: "2026-10-08" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "last quarter" }, today), { label: "FY 2026-27 Q2 (previous quarter)", kind: "quarter", from: "2026-07-01", to: "2026-09-30" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "this_month" }, today), { label: "2026-10 to date (current month)", kind: "month", from: "2026-10-01", to: "2026-10-08" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "last_month" }, today), { label: "2026-09 (previous month)", kind: "month", from: "2026-09-01", to: "2026-09-30" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "this_fy" }, today), { label: "FY 2026-27 to date (current financial year)", kind: "fy", from: "2026-04-01", to: "2026-10-08" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "FY to date" }, today), { label: "FY 2026-27 to date (current financial year)", kind: "fy", from: "2026-04-01", to: "2026-10-08" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "all time" }, today), { label: "All time to date (total invoiced)", kind: "all_time", from: "2000-01-01", to: "2026-10-08" });
   assert.equal(resolveRevenuePeriod({ period: "last_quarter" }, "2026-05-10").hasOwnProperty("error"), false);
-  assert.deepEqual(resolveRevenuePeriod({ period: "last_quarter" }, "2026-05-10"), { label: "FY 2025-26 Q4 (previous quarter)", from: "2026-01-01", to: "2026-03-31" });
-  assert.deepEqual(resolveRevenuePeriod({ from: "2026-07-01", to: "2026-09-30" }, today), { label: "2026-07-01 to 2026-09-30", from: "2026-07-01", to: "2026-09-30" });
+  assert.deepEqual(resolveRevenuePeriod({ period: "last_quarter" }, "2026-05-10"), { label: "FY 2025-26 Q4 (previous quarter)", kind: "quarter", from: "2026-01-01", to: "2026-03-31" });
+  assert.deepEqual(resolveRevenuePeriod({ from: "2026-07-01", to: "2026-09-30" }, today), { label: "FY 2026-27 Q2", kind: "quarter", from: "2026-07-01", to: "2026-09-30" });
   assert.ok("error" in resolveRevenuePeriod({ from: "2026-07-01" }, today));
   assert.ok("error" in resolveRevenuePeriod({ period: "fortnight" }, today));
 });
@@ -225,4 +225,16 @@ test("get_revenue_summary counts tax invoices only; proformas are excluded and t
   assert.match(res.revenueRule, /tax invoices only; proforma invoices are excluded/);
   assert.match(res.answerRule, /tax invoices only, proformas excluded/);
   assert.match(tool.description, /proforma/);
+});
+
+test("custom ranges are labelled by what they exactly cover; otherwise dates only", () => {
+  const today = "2026-10-08";
+  const r = (from: string, to: string) => resolveRevenuePeriod({ from, to }, today);
+  assert.deepEqual(r("2026-04-01", "2026-10-08"), { label: "FY 2026-27 to date", kind: "fy", from: "2026-04-01", to: "2026-10-08" });
+  assert.deepEqual(r("2025-04-01", "2026-03-31"), { label: "FY 2025-26", kind: "fy", from: "2025-04-01", to: "2026-03-31" });
+  assert.deepEqual(r("2026-10-01", "2026-10-08"), { label: "FY 2026-27 Q3 to date", kind: "quarter", from: "2026-10-01", to: "2026-10-08" });
+  assert.deepEqual(r("2026-09-01", "2026-09-30"), { label: "2026-09", kind: "month", from: "2026-09-01", to: "2026-09-30" });
+  assert.deepEqual(r("2026-05-03", "2026-08-10"), { label: "2026-05-03 to 2026-08-10", kind: "custom", from: "2026-05-03", to: "2026-08-10" });
+  const fy = resolveRevenuePeriod({ period: "fy to date" }, today) as { label: string };
+  assert.ok(!/Q\d/.test(fy.label), "FY label must not mention a quarter");
 });

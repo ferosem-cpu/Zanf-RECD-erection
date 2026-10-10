@@ -316,8 +316,22 @@ export async function getDriveDocumentContent(
   }
   const exportMime = GOOGLE_EXPORT_MIME[meta.mimeType];
   const buffer = exportMime ? await downloadExport(drive, fileId, exportMime) : await downloadRaw(drive, fileId);
-  const text = await extractText(buffer, exportMime ?? meta.mimeType);
+  const raw = await extractText(buffer, exportMime ?? meta.mimeType, { maxPages: DOC_MAX_PDF_PAGES });
+  const text = raw.length > DOC_MAX_TEXT_CHARS ? `${raw.slice(0, DOC_MAX_TEXT_CHARS)}
+[... text cut at ${DOC_MAX_TEXT_CHARS} characters; open the file from its Drive link for the rest]` : raw;
   return { name: meta.name, mimeType: meta.mimeType, folderPath: meta.folderPath, webViewLink: meta.webViewLink, text };
+}
+
+/** Reading a document: only the first pages of a PDF are parsed and the text sent to the model is capped, so a long file can't eat the turn. */
+export const DOC_MAX_PDF_PAGES = 20;
+export const DOC_MAX_TEXT_CHARS = 60_000;
+/** Same document asked for again within this window (follow-up questions) is served from memory. */
+export const DOC_CACHE_TTL_MS = 60_000;
+const DOC_CACHE_MAX = 5;
+type DocContent = Awaited<ReturnType<typeof getDriveDocumentContent>>;
+const docCache = new Map<string, { at: number; value: DocContent }>();
+export function resetDocContentCache(): void {
+  docCache.clear();
 }
 
 /** Drive file ids are 10+ chars of letters, digits, "-" and "_" (no spaces or dots). */
@@ -352,9 +366,22 @@ export async function findFileIdByName(name: string, deps: { drive?: DriveLike; 
 
 /** get_document_content input: a Drive fileId OR the file's exact name. An id-shaped value that
  * Drive doesn't know (e.g. "AgsarPaint_Quote_TTCRN") is retried as a name. */
-export async function getDriveDocumentByRef(ref: string, deps: { drive?: DriveLike; rootId?: string } = {}) {
+export async function getDriveDocumentByRef(ref: string, deps: { drive?: DriveLike; rootId?: string; cache?: boolean } = {}) {
   const r = ref.trim();
   if (!r) throw new ExtractionError("Give the fileId from search_documents/list_documents, or the file's exact name.");
+  const cacheable = !deps.drive || deps.cache === true;
+  const hit = cacheable ? docCache.get(r) : undefined;
+  if (hit && Date.now() - hit.at < DOC_CACHE_TTL_MS) return hit.value;
+  const value = await readDocumentByRef(r, deps);
+  if (cacheable) {
+    docCache.set(r, { at: Date.now(), value });
+    while (docCache.size > DOC_CACHE_MAX) docCache.delete(docCache.keys().next().value as string);
+  }
+  return value;
+}
+
+async function readDocumentByRef(r: string, deps: { drive?: DriveLike; rootId?: string; cache?: boolean }) {
+
   if (DRIVE_ID_RE.test(r)) {
     try {
       return await getDriveDocumentContent(r, deps);

@@ -83,3 +83,35 @@ test("search_vendor_bills overdueOnly: bills without a due date are excluded and
   const overdue = (await tool.handler({ overdueOnly: true }, auth)) as any;
   assert.deepEqual(overdue.bills.map((b: any) => b.billNumber), ["TXIN0934"]);
 });
+
+test("search_vendor_bills 'all bills': overdue bills carry a dueNote; no-due-date, rejected and paid never do", async (t) => {
+  const tool = zanAppFinanceTools.find((x) => x.name === "search_vendor_bills")!;
+  const auth = { userId: "f", roleKey: "finance", permissions: new Set([PERMISSION_KEY.VIEW_FINANCE_DASHBOARD]) };
+  const original = Object.getOwnPropertyDescriptor(prisma, "bill");
+  t.after(() => (original ? Object.defineProperty(prisma, "bill", original) : Reflect.deleteProperty(prisma, "bill")));
+  const bill = (billNumber: string, status: string, dueDate: Date | null) => ({
+    id: billNumber, billNumber, supplier: { name: "Platino" }, status, billDate: d("2020-01-01T00:00:00Z"),
+    dueDate, subtotal: "1000", taxAmount: "180", total: "1180", payments: [], rejectedReason: null,
+  });
+  Object.defineProperty(prisma, "bill", {
+    configurable: true,
+    value: {
+      findMany: async () => [
+        bill("TXIN0934", "approved", d("2020-01-01T00:00:00Z")),
+        bill("R/1", "rejected", d("2020-01-01T00:00:00Z")),
+        bill("P/1", "paid", d("2020-01-01T00:00:00Z")),
+        bill("N/1", "approved", null),
+        bill("F/1", "approved", d("2999-01-01T00:00:00Z")),
+      ],
+    },
+  });
+  const out = (await tool.handler({}, auth)) as any;
+  const note = (n: string) => out.bills.find((b: any) => b.billNumber === n).dueNote;
+  assert.match(note("TXIN0934"), /^TXIN0934 overdue by \d+ days$/);
+  assert.equal(note("R/1"), null);
+  assert.equal(note("P/1"), null);
+  assert.equal(note("N/1"), "no due date");
+  assert.equal(note("F/1"), "not yet due");
+  assert.equal(out.overdueBills.length, 1);
+  assert.equal(out.overdueBills[0], note("TXIN0934"));
+});

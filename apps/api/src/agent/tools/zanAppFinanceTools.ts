@@ -319,7 +319,7 @@ const searchVendorBills: AgentTool = {
     "get_payables for 'all bills' (it is only what is still owed). Returns totalCount and totals {count, totalAmount, " +
     "taxableAmount, gstAmount, paid, outstanding} and byStatus over EVERY matching bill, plus up to 15 bills (overdue " +
     "first when overdueOnly, else newest): billNumber, supplier, status, billDate, dueDate, subtotal, taxAmount, total, " +
-    "paid, balance, dueStatus (overdue / not_due / no_due_date), daysOverdue, rejectedReason. Overdue needs a due date " +
+    "paid, balance, dueStatus (overdue / not_due / no_due_date), daysOverdue, dueNote (e.g. \"TXIN0934 overdue by 12 days\"; null for paid/rejected/cancelled), rejectedReason, plus overdueBills = every overdue bill note even beyond the 15 listed. In an \"all bills\" answer ALWAYS flag each overdue bill using dueNote. Overdue needs a due date " +
     "before today; a bill with no due date is never overdue. Deleted bills only appear when status=deleted.",
   inputSchema: {
     type: "object",
@@ -378,6 +378,7 @@ const searchVendorBills: AgentTool = {
           // Only unpaid bills carry a due status; no due date => "no_due_date", never overdue.
           dueStatus: unpaid ? a.dueStatus : null, overdue, daysOverdue: overdue ? (a.daysPastDue as number) : 0,
           ...(unpaid && a.dueStatus === "no_due_date" ? { ageDays: a.ageDays, ageingBasis: a.ageingBasis } : {}),
+          dueNote: !unpaid ? null : overdue ? `${b.billNumber} overdue by ${a.daysPastDue} day${a.daysPastDue === 1 ? "" : "s"}` : a.dueStatus === "no_due_date" ? "no due date" : "not yet due",
           rejectedReason: b.rejectedReason,
         };
       })
@@ -405,6 +406,7 @@ const searchVendorBills: AgentTool = {
       },
       byStatus,
       overdueCount: rows.filter((r) => r.overdue).length,
+      overdueBills: rows.filter((r) => r.overdue).sort((a, b) => b.daysOverdue - a.daysOverdue).slice(0, 30).map((r) => r.dueNote),
       noDueDateCount: rows.filter((r) => r.dueStatus === "no_due_date").length,
       statusNote: "Say each bill's status exactly as listed. Rejected means rejected - it is NOT written off, cancelled or paid, and no balance is owed on it.",
       overdueRule: OVERDUE_RULE,
@@ -577,12 +579,35 @@ export function indianFyQuarter(ymd: string): { fy: string; quarter: 1 | 2 | 3 |
   };
 }
 
-export type RevenuePeriod = { label: string; from: string; to: string };
+export type RevenuePeriodKind = "quarter" | "month" | "fy" | "all_time" | "custom";
+export type RevenuePeriod = { label: string; kind: RevenuePeriodKind; from: string; to: string };
 
 /** Start of the "all_time" period - earlier than any document in the app. */
 const ALL_TIME_FROM = "2000-01-01";
 
 const shiftDays =(ymd: string, days: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+
+/** A custom range that is exactly a financial year, quarter or month (or that period up to today) gets that period's label; anything else shows dates only. */
+function labelCustomRange(from: string, to: string, todayIST: string): RevenuePeriod {
+  const upToToday = to === todayIST;
+  const q = indianFyQuarter(from);
+  const now = indianFyQuarter(todayIST);
+  if (from === `${from.slice(0, 4)}-04-01`) {
+    const fyStart = Number(from.slice(0, 4));
+    if (to === `${fyStart + 1}-03-31`) return { label: `FY ${q.fy}`, kind: "fy", from, to };
+    if (upToToday && now.fy === q.fy) return { label: `FY ${q.fy} to date`, kind: "fy", from, to };
+  }
+  if (from === q.from) {
+    if (to === q.to) return { label: `FY ${q.fy} Q${q.quarter}`, kind: "quarter", from, to };
+    if (upToToday && now.from === q.from) return { label: `FY ${q.fy} Q${q.quarter} to date`, kind: "quarter", from, to };
+  }
+  if (from.endsWith("-01") && from.slice(0, 7) === to.slice(0, 7)) {
+    const last = new Date(Date.UTC(Number(from.slice(0, 4)), Number(from.slice(5, 7)), 0)).getUTCDate();
+    if (to === `${to.slice(0, 7)}-${String(last).padStart(2, "0")}`) return { label: from.slice(0, 7), kind: "month", from, to };
+    if (upToToday) return { label: `${from.slice(0, 7)} to date`, kind: "month", from, to };
+  }
+  return { label: `${from} to ${to}`, kind: "custom", from, to };
+}
 
 /** Resolves a named period (IST calendar) or an explicit from/to to inclusive yyyy-mm-dd dates. */
 export function resolveRevenuePeriod(input: { period?: unknown; from?: unknown; to?: unknown }, todayIST: string): RevenuePeriod | { error: string } {
@@ -591,7 +616,7 @@ export function resolveRevenuePeriod(input: { period?: unknown; from?: unknown; 
   if (from || to) {
     if (!istDayStart(from) || !istDayStart(to)) return { error: "from and to must both be dates in YYYY-MM-DD format." };
     if (from > to) return { error: "from must be on or before to." };
-    return { label: `${from} to ${to}`, from, to };
+    return labelCustomRange(from, to, todayIST);
   }
   const period = String(input.period ?? "this_quarter").trim().toLowerCase().replace(/[\s-]+/g, "_");
   const q = indianFyQuarter(todayIST);
@@ -601,33 +626,33 @@ export function resolveRevenuePeriod(input: { period?: unknown; from?: unknown; 
   switch (period) {
     case "this_quarter":
     case "current_quarter":
-      return { label: `FY ${q.fy} Q${q.quarter} to date (current quarter)`, from: q.from, to: todayIST };
+      return { label: `FY ${q.fy} Q${q.quarter} to date (current quarter)`, kind: "quarter", from: q.from, to: todayIST };
     case "last_quarter":
     case "previous_quarter": {
       const p = indianFyQuarter(shiftDays(q.from, -1));
-      return { label: `FY ${p.fy} Q${p.quarter} (previous quarter)`, from: p.from, to: p.to };
+      return { label: `FY ${p.fy} Q${p.quarter} (previous quarter)`, kind: "quarter", from: p.from, to: p.to };
     }
     case "this_month":
     case "current_month":
-      return { label: `${todayIST.slice(0, 7)} to date (current month)`, from: `${todayIST.slice(0, 7)}-01`, to: todayIST };
+      return { label: `${todayIST.slice(0, 7)} to date (current month)`, kind: "month", from: `${todayIST.slice(0, 7)}-01`, to: todayIST };
     case "last_month":
     case "previous_month": {
       const end = shiftDays(`${todayIST.slice(0, 7)}-01`, -1);
-      return { label: `${end.slice(0, 7)} (previous month)`, from: `${end.slice(0, 7)}-01`, to: end };
+      return { label: `${end.slice(0, 7)} (previous month)`, kind: "month", from: `${end.slice(0, 7)}-01`, to: end };
     }
     case "this_fy":
     case "this_year":
     case "current_fy":
     case "fy_to_date":
     case "ytd":
-      return { label: `FY ${q.fy} to date (current financial year)`, from: `${fyStartYear}-04-01`, to: todayIST };
+      return { label: `FY ${q.fy} to date (current financial year)`, kind: "fy", from: `${fyStartYear}-04-01`, to: todayIST };
     case "all_time":
     case "total":
     case "total_invoiced":
-      return { label: "All time to date (total invoiced)", from: ALL_TIME_FROM, to: todayIST };
+      return { label: "All time to date (total invoiced)", kind: "all_time", from: ALL_TIME_FROM, to: todayIST };
     case "last_fy":
     case "previous_fy":
-      return { label: `FY ${fyStartYear - 1}-${String(fyStartYear).slice(-2)} (previous financial year)`, from: `${fyStartYear - 1}-04-01`, to: `${fyStartYear}-03-31` };
+      return { label: `FY ${fyStartYear - 1}-${String(fyStartYear).slice(-2)} (previous financial year)`, kind: "fy", from: `${fyStartYear - 1}-04-01`, to: `${fyStartYear}-03-31` };
     default:
       return { error: `Unknown period "${input.period}". Use this_quarter, last_quarter, this_month, last_month, this_fy, last_fy, all_time, or from/to dates.` };
   }
@@ -733,7 +758,7 @@ const getRevenueSummary: AgentTool = {
       ),
       revenueRule: REVENUE_RULE,
       proformaInvoicesInPeriod: { count: proformaCount, note: "Proforma invoices are not revenue and are excluded from every figure above." },
-      answerRule: "State the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or collections as cash + TDS = settled total - all three, never cash alone as 'collected'), state the number of tax invoices (invoiced.taxInvoiceCount, e.g. 'from 12 tax invoices'), and say briefly: tax invoices only, proformas excluded.",
+      answerRule: "Quote period.label verbatim (never call a financial year a quarter or the reverse), state the period dates and the basis of every figure you quote (invoiced excl. GST net of credit notes, and/or collections as cash + TDS = settled total - all three, never cash alone as 'collected'), state the number of tax invoices (invoiced.taxInvoiceCount, e.g. 'from 12 tax invoices'), and say briefly: tax invoices only, proformas excluded.",
     };
   },
 };

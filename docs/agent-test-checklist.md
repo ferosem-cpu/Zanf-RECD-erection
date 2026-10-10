@@ -140,6 +140,10 @@ General pass criteria for every row:
 | 58 | Ask for open orders by status, receivables overdue, and a customer's outstanding. | get_receivables, search_orders_and_sites | Chat reply | No tool/field/parameter names, no "figures come from..." narration, no "the the" | |
 | 59 | Ask for total receivables / revenue for a quarter. | get_receivables, get_revenue_summary | Chat reply | Rupees in lakh/crore grouping (₹12,53,514.00), never 1,253,514 | |
 | 60 | Click "+ New" and immediately type and send a message (repeat several times). | - | Assistant bubble | Message is sent once the new thread exists; never dropped or merged into the next one | |
+| 62 | Ask "revenue FY to date" and "revenue this quarter". | - | Chat reply | Label says "FY 2026-27 to date" (no Q3) for the FY; "FY 2026-27 Q3 to date" for the quarter | |
+| 63 | Ask "all <vendor> bills" for a vendor with an overdue bill (e.g. TXIN0934). | - | Chat reply | Every bill listed with status; overdue ones flagged "overdue by N days"; no due date stays "no due date"; Rejected/Paid never overdue | |
+| 64 | Send a long question, click "+ New" while the reply is still being generated, then type in the new thread. | - | Assistant bubble | Input is enabled at once; the old reply never appears in the new thread | |
+| 65 | Time K1 (receivables), K2 (overdue vendor bills), D1 (read a PDF) and note the agent_turn_timing log lines. | - | Chat + Vercel logs | One line per turn; K1/K2 one tool call; D1 repeat read within 60 s is faster | |
 | 61 | Mention document numbers and ALL-CAPS names (TXIN0934, PO/2026-27/0001, BOSTIK) in a question. | - | Chat reply | They appear intact in the reply | |
 
 ## Run summary

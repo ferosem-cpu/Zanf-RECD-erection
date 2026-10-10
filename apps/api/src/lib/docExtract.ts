@@ -83,7 +83,7 @@ export function isExtractable(mimeType: string): boolean {
 export async function extractText(
   buffer: Buffer,
   mimeType: string,
-  opts: { timeoutMs?: number } = {},
+  opts: { timeoutMs?: number; maxPages?: number } = {},
 ): Promise<string> {
   if (mimeType === "application/pdf") {
     let PDFParse: typeof import("pdf-parse").PDFParse;
@@ -100,7 +100,7 @@ export async function extractText(
     try {
       const timeoutMs = opts.timeoutMs ?? PDF_EXTRACT_TIMEOUT_MS;
       const result = await withTimeout(
-        parser.getText(),
+        parser.getText(opts.maxPages ? { first: opts.maxPages } : undefined),
         timeoutMs,
         `PDF text extraction timed out after ${Math.round(timeoutMs / 1000)} s - the file may be very large; open it from its Drive link instead.`,
       );
