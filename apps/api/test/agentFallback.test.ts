@@ -71,3 +71,20 @@ test("error response body has no provider names or internals", () => {
   assert.match(body.errorId, /^[0-9a-f]{8}$/);
   assert.ok(!/Free LLM|OpenAI|provider|\n/.test(JSON.stringify(body)));
 });
+
+test("every provider failing: the thrown error becomes only the friendly bubble text plus an error id", async () => {
+  const providers = [row("a", "Free LLM API", 0), row("b", "OpenAI", 1)];
+  const adapters = new Map<string, LlmAdapter>([["a", fake("timeout", [])], ["b", fake("timeout", [])]]);
+  let thrown: unknown;
+  try {
+    await sendWithFallback(providers, adapters, params, new AgentDeadline(55_000, () => 0), new Set());
+  } catch (err) {
+    thrown = err;
+  }
+  assert.ok(thrown instanceof Error, "sendWithFallback must throw when all providers fail");
+  const body = agentErrorBody(thrown);
+  assert.deepEqual(Object.keys(body).sort(), ["error", "errorId"]);
+  assert.equal(body.error, AGENT_FRIENDLY_ERROR);
+  assert.match(body.errorId, /^[0-9a-f]{8}$/);
+  assert.ok(!/Free LLM|OpenAI|timed out/i.test(JSON.stringify(body)));
+});
