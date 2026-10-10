@@ -25,7 +25,7 @@ import { send as sendNotification } from "../services/notifications/notification
 import { extractGenericDocument } from "../agent/documentExtraction";
 import { ExtractionUnavailableError } from "../agent/billExtraction";
 import type { UnifiedMessage } from "../agent/providers/types";
-import { sanitizeHistory } from "../agent/assistantText";
+import { sanitizeAssistantText, sanitizeHistory } from "../agent/assistantText";
 
 export const agentConversationsRouter = Router();
 
@@ -160,7 +160,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
       },
     });
 
-    res.json({ reply: result.reply, id: updated.id, title: updated.title, messages: sanitizeHistory(updated.messages) });
+    res.json({ reply: sanitizeAssistantText(result.reply ?? ""), id: updated.id, title: updated.title, messages: sanitizeHistory(updated.messages) });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
