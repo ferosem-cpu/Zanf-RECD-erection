@@ -113,3 +113,9 @@ test("document numbers, ALL-CAPS names, amounts, dates and links are untouched",
   ];
   for (const k of keep) assert.equal(stripToolInternals(k), k);
 });
+
+test("overdue list lines naming bill, vendor and days survive the internals filter", () => {
+  const reply = "There is one overdue vendor bill:\n- TXIN0934 (Platino), 11 days overdue, balance Rs 1,18,000\nTotal overdue: Rs 1,18,000.";
+  assert.equal(stripToolInternals(reply), reply);
+  assert.equal(stripToolInternals("TXIN0934 (Platino), 11 days"), "TXIN0934 (Platino), 11 days");
+});

@@ -107,7 +107,7 @@ test("search_vendor_bills 'all bills': overdue bills carry a dueNote; no-due-dat
   });
   const out = (await tool.handler({}, auth)) as any;
   const note = (n: string) => out.bills.find((b: any) => b.billNumber === n).dueNote;
-  assert.match(note("TXIN0934"), /^TXIN0934 overdue by \d+ days$/);
+  assert.match(note("TXIN0934"), /^TXIN0934 \(Platino\) overdue by \d+ days, balance 1180$/);
   assert.equal(note("R/1"), null);
   assert.equal(note("P/1"), null);
   assert.equal(note("N/1"), "no due date");
