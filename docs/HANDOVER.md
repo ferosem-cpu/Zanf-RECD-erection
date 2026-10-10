@@ -330,6 +330,19 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 10. Current open items (as of 2026-10-10)
 
+**Branch `fix/agent-retest-11` (2026-10-10)** - retest of fix 10 (10 pass / 2 partial), see §11. After deploy re-run
+`docs/agent-test-checklist.md` rows 62-65 and read the `agent_turn_timing` log lines (below). Rollback target
+`dpl_D2EwenRNqD1EZGjEGwWYPmWZFu7h`. No migration needed.
+- **Reading the timing log:** `npx vercel logs <url>` lines starting `agent_turn_timing {json}`: `rounds` = LLM calls in the
+  turn, `llmMs` = ms per round, `tools` = `name:ms[:err]` per tool call, `toolTotalMs`, `totalMs`, `outcome`
+  (reply / deadline / llm_error / max_steps). Names and ms only, no inputs, amounts or text. Time per turn ~ sum(llmMs) +
+  toolTotalMs; a slow K1/K2 with `rounds` > 2 means the model made extra tool calls.
+- **Where time goes (local, fixtures; not verified against production):** with 3000 fixture rows the finance tool handlers take
+  12-36 ms (get_receivables 31 ms / 25k chars, search_vendor_bills 12 ms), so slow answers are LLM rounds and DB/Drive network,
+  not compute. Receivables, payables and vendor bills were already single-call tools; the new prompt rule forbids a second call.
+  Drive: folder tree was already cached 10 min; added a 60 s in-memory document cache (by file ref) and PDF limited to the first
+  20 pages / 60k characters. Before/after for D1 and the K-questions is only measurable in production via the new log line.
+
 **Branch `fix/agent-retest-10` (2026-10-10)** - wording leftovers of the fix-9 retest (11 pass / 2 partial /
 3 fail), see §11. After deploy re-run `docs/agent-test-checklist.md` rows 58-61. Rollback target
 `dpl_E5UAEjjWvT49rRMa1rJARv13fMV1`. No migration needed. Item 4 (one network error after ~26 s): logs for
@@ -436,6 +449,14 @@ hiding; revenue tax-invoice count) against production. Rollback target
   (needs a real Drive OAuth round-trip test).
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
+
+- **2026-10-10 — Fix 11, branch `fix/agent-retest-11` (retest of fix 10: 10 pass / 2 partial).** `c2b1888` revenue
+  period `label` + new `kind` (fy / quarter / month / all_time / custom); custom ranges that are exactly an FY, quarter or
+  month get that label, answerRule says quote the label verbatim. `8803f97` search_vendor_bills returns `dueNote`
+  ("TXIN0934 overdue by N days") per unpaid bill and `overdueBills` (all overdue, even beyond the 15 listed). `abbef40`
+  "+ New" during a reply: `createInFlightSend` aborts the request (AbortController), unlocks Send, and ignores the old
+  thread's late result/error. `f4d662c` speed: `agent/turnTiming.ts` log line, 60 s document cache, PDF first 20 pages,
+  60k char cap, ONE CALL prompt rule. Tests: API 159, admin-web 32.
 
 - **2026-10-10 — Fix 10, branch `fix/agent-retest-10`.** `e915d94` replies: post-filter
   (`stripToolInternals`) now drops sentences/parentheticals that name a snake_case/camelCase
