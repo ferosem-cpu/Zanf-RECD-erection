@@ -456,7 +456,7 @@ hiding; revenue tax-invoice count) against production. Rollback target
   ("TXIN0934 overdue by N days") per unpaid bill and `overdueBills` (all overdue, even beyond the 15 listed). `abbef40`
   "+ New" during a reply: `createInFlightSend` aborts the request (AbortController), unlocks Send, and ignores the old
   thread's late result/error. `f4d662c` speed: `agent/turnTiming.ts` log line, 60 s document cache, PDF first 20 pages,
-  60k char cap, ONE CALL prompt rule. Tests: API 159, admin-web 32.
+  60k char cap, ONE CALL prompt rule. Tests: API 159, admin-web 33.
 
 - **2026-10-10 — Fix 10, branch `fix/agent-retest-10`.** `e915d94` replies: post-filter
   (`stripToolInternals`) now drops sentences/parentheticals that name a snake_case/camelCase
