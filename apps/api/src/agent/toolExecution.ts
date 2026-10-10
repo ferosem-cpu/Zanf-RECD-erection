@@ -45,6 +45,8 @@ export interface ExecuteToolCallsParams {
   onToolCall?: OnToolCall;
   deadline?: AgentDeadline;
   toolTimeoutMs?: number;
+  /** Receives {tool, ms, error} per call for the per-turn timing log. */
+  onTiming?: (timings: { tool: string; ms: number; error: boolean }[]) => void;
 }
 
 export function canRunInParallel(calls: ToolCallLike[], isWriteTool: (name: string) => boolean): boolean {
@@ -63,8 +65,9 @@ async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Prom
   }
 }
 
-async function runOne(call: ToolCallLike, p: ExecuteToolCallsParams): Promise<ToolResultMessage> {
+async function runOne(call: ToolCallLike, p: ExecuteToolCallsParams, timings?: { tool: string; ms: number; error: boolean }[]): Promise<ToolResultMessage> {
   let resultValue: unknown;
+  const started = Date.now();
   try {
     const intercepted = await p.onToolCall?.(call.name, call.input);
     if (intercepted?.intercepted) {
@@ -84,16 +87,22 @@ async function runOne(call: ToolCallLike, p: ExecuteToolCallsParams): Promise<To
   } catch (err) {
     resultValue = { error: (err as Error).message };
   }
+  timings?.push({ tool: call.name, ms: Date.now() - started, error: !!resultValue && typeof resultValue === "object" && "error" in (resultValue as object) });
   // Dates go to the model in IST (as admin-web shows them), never as UTC ISO strings.
   return { role: "tool", toolCallId: call.id, toolName: call.name, content: JSON.stringify(datesToIST(resultValue)) };
 }
 
 export async function executeToolCalls(p: ExecuteToolCallsParams): Promise<ToolResultMessage[]> {
-  if (canRunInParallel(p.calls, p.isWriteTool)) {
-    // Promise.all keeps input order; runOne never rejects (errors become results).
-    return Promise.all(p.calls.map((call) => runOne(call, p)));
+  const timings: { tool: string; ms: number; error: boolean }[] = [];
+  try {
+    if (canRunInParallel(p.calls, p.isWriteTool)) {
+      // Promise.all keeps input order; runOne never rejects (errors become results).
+      return await Promise.all(p.calls.map((call) => runOne(call, p, timings)));
+    }
+    const out: ToolResultMessage[] = [];
+    for (const call of p.calls) out.push(await runOne(call, p, timings));
+    return out;
+  } finally {
+    p.onTiming?.(timings);
   }
-  const out: ToolResultMessage[] = [];
-  for (const call of p.calls) out.push(await runOne(call, p));
-  return out;
 }

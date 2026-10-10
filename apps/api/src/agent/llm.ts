@@ -11,6 +11,7 @@ import { formatProviderFailures, providersToAttempt, recordProviderFailure, type
 import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
 import { AgentDeadline, LLM_CALL_TIMEOUT_MS } from "./timeouts";
 import { executeToolCalls } from "./toolExecution";
+import { createTurnTimer } from "./turnTiming";
 import { sendCleaned, sanitizeHistory } from "./assistantText";
 
 const MAX_TOOL_TURNS = 8;
@@ -95,17 +96,23 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
   // Old assistant turns are replayed sanitised (a stored "<EOS_TOKEN>" reply must not re-prime the model).
   let history = sanitizeHistory<UnifiedMessage>(params.history);
   const deadline = params.deadline ?? new AgentDeadline();
+  const timer = createTurnTimer();
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     if (deadline.expired()) {
       // Answer (and let the caller persist whatever tool results / pending confirm cards
       // were already produced) instead of letting the request run until the platform kills it.
+      timer.log("deadline");
       return { reply: TIMEOUT_REPLY, history: [...history, { role: "assistant", content: TIMEOUT_REPLY }] };
     }
     let response: SendMessageResult;
+    const llmStarted = Date.now();
     try {
       response = await sendWithFallback(providers, adapters, { systemPrompt, messages: history, tools: unifiedTools }, deadline);
+      timer.llm(Date.now() - llmStarted);
     } catch (err) {
+      timer.llm(Date.now() - llmStarted);
+      timer.log("llm_error");
       // First call failed: nothing useful happened yet, surface the real error (route -> 500).
       if (turn === 0) throw err;
       // A later call failed after tools already ran (possibly creating a pending confirm
@@ -117,6 +124,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
     history = [...history, { role: "assistant", content: response.text, toolCalls: response.toolCalls }];
 
     if (response.toolCalls.length === 0) {
+      timer.log("reply");
       return { reply: response.text, history };
     }
 
@@ -128,10 +136,12 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
       isWriteTool,
       onToolCall,
       deadline,
+      onTiming: timer.tools,
     });
     history = [...history, ...results];
   }
 
+  timer.log("max_steps");
   return {
     reply: "I wasn't able to finish that within the allowed number of steps - could you rephrase or simplify the request?",
     history,
