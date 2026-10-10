@@ -133,6 +133,10 @@ General pass criteria for every row:
 | 51 | What is the warranty in "AgsarPaint_Quote_TTCRN v1.2.pdf"? (also "AgsarPaint warranty") | search_documents and/or get_document_content (by id or exact name) | Google Drive (ZanF_DropBox top level) | Finds the file and quotes the warranty text; never "couldn't find the file in the shared document folder" | |
 | 52 | Search Drive for "backup". | search_documents | Google Drive | `zanapp-backup-*` and .json files never listed; a normal document with "backup" in its name IS listed | |
 | 53 | What was our revenue this quarter? | get_revenue_summary | /finance (dashboard), /invoices | Period dates, excl. + incl. GST, collected (cash + TDS = settled) AND the number of tax invoices; proformas excluded | |
+| 54 | How many orders are completed? (any count question) | search_orders_and_sites | /sites, /orders | Reply never names a tool, field or JSON path and has no "Source: <tool>" line; cites an app page (e.g. "Sites page") at most | |
+| 55 | Show Platino rejected bill(s). | search_vendor_bills | /finance/vendor-invoices (Rejected) | Status said as "Rejected" only - never "written off", cancelled or paid; no balance owed | |
+| 56 | Click "+ New", type a message, send (repeat a few times, also right after a failed/slow "+ New" and double-clicking it). | - | Assistant bubble | Only the new message and its reply appear; no earlier thread messages ever shown above the reply | |
+| 57 | Ask the agent to log a status update / raise a complaint for a site with no name. | create_site_status_update / create_complaint | Confirmation card | Site shows the name, or "(no site name)" with the address as a separate field - never the address in the name slot | |
 
 ## Run summary
 
