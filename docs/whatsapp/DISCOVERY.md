@@ -1,6 +1,6 @@
 # Zan WhatsApp assistant - M0 discovery (read-only)
 
-Date: 2026-10-10. Revision 2 (after Codex review: CHANGES REQUIRED on `fa6e4b9`/`f99ef60`). Scope: M0 of `docs/whatsapp/PLAN.md`. Docs only: no code, schema or deploy change. One approved read-only provider-row read was attempted (section 3). "NV" = not verified (production data / live systems not accessible in M0).
+Date: 2026-10-10. Revision 3 (rev1 `fa6e4b9`/`f99ef60` and rev2 `4e909da` (+`61618cd` OCI facts) were both CHANGES REQUIRED; finding ids B1, B2, M1-M4, L1 in this file's section 4/6/7 refer to the rev2 re-review, see `REVIEW-M0.md`). Scope: M0 of `docs/whatsapp/PLAN.md`. Docs only: no code, schema or deploy change. "NV" = not verified (production data / live systems not accessible in M0). Everything below marked "proposed" is a contract for M1+ implementation, not current behaviour.
 
 ## 0. Owner decisions (Ferose, 2026-10-10)
 
@@ -71,11 +71,21 @@ Client folder also holds its own `session.db` (393,216 B, 2026-10-09 19:38), 4 e
 | Fallback | Healthy providers in order; failure -> next; empty reply retried once (sendWithFallback.ts:22-51) |
 | Time caps | Request budget 55 s; per LLM call 30 s; attempt cap 25 s when a fallback exists; 8 max tool turns; tool call 25 s; no new LLM call with <4 s left (timeouts.ts:20-59; llm.ts:18-73) |
 | Shared limits | None in code: no token/quota counter, no per-user or per-channel budget, no concurrency cap. Cooldown (410 -> 60 min, quota 429 -> 15 min) is **in-memory per serverless instance** (providerHealth.ts:23-35) |
-| FreeLLMAPI | **Not named anywhere in code or docs except PLAN.md:34.** Likely an `openai_compatible` row with a custom `baseUrl` (factory.ts:21-27); unverified |
-| Priority-0 claim | **NOT CONFIRMED.** HANDOVER s6 lists Gemini 1, NVIDIA 2 (410), OpenAI fallback, no priority 0. PLAN.md:34 ("FreeLLMAPI remains the existing priority-0 provider") is superseded by this section and the PLAN addendum; it is not edited in place |
-| Live rows (Blocker 3) | **Read attempted 2026-10-10, failed safely:** throwaway read-only script (`.claude-task/read-providers.ts`, selects name/type/priority/isActive/model/baseUrl host only, never the key) ended in `PrismaClientInitializationError` (no usable DB env or DB unreachable from this machine). Nothing printed or improvised. DB identity: unknown. **Open:** Zan-F Bot (or Ferose) reads Settings -> AI providers (Super Admin `GET /agent/providers`, no key; agentProviders.ts:15-45) and records priority, name, type, active, model, base host here; then confirm whether FreeLLMAPI is the lowest active priority, ties, fallback health, and its externally configured quota/concurrency limits, before M1 integration |
-| Row table | priority / name / type / active / model / base host: _pending (see above)_ |
+| FreeLLMAPI | Not named in code (only as a DB row). It is an `openai_compatible` row with a custom `baseUrl` (factory.ts:21-27) |
+| Priority-0 claim | **VERIFIED (rev3), with one inferred link.** Live rows (below) show the row named "Free LLM API" at priority 0, active, so it is tried first, matching the code rule. The link "this row is the FreeLLMAPI container on VM-A" is inferred from the name and `openai_compatible` type; its base host was not recorded (NV). PLAN.md:34 is now true as to ordering; the PLAN addendum records this. HANDOVER s6's list (Gemini 1, NVIDIA 2) is **stale**; to be corrected on master later, not on this branch |
+| Live rows | **Resolved 2026-10-10.** Source: Ferose's screenshots of Settings -> AI providers at 23:39 and 23:41 IST (UI text: tries providers lowest priority first, falls back to the next if a call fails). All four rows active; no rows below Gemini. Base URLs and keys were not recorded. The earlier direct read from the PC (throwaway script selecting name/type/priority/isActive/model/base host only) ended in `PrismaClientInitializationError`; the pulled production env likely has sensitive values blanked. Nothing was improvised |
+| Ties | None: priorities 0-3 are distinct, so order is deterministic (the "ties are unordered" caveat does not apply today) |
+| Still open (M1 integration) | FreeLLMAPI base host (confirm it equals the VM-A instance), its externally configured quota/concurrency limits, and fallback health. Cooldown state is in-memory per serverless instance (providerHealth.ts:23-35), so health is not observable from rows. Concurrency of WhatsApp turns (2) must be set against those limits |
 | Cooldown | 410/429 cooldowns are in-memory per serverless instance (providerHealth.ts:23-38,62-68); WhatsApp turns reuse the same routing and fallback unchanged |
+
+Live provider rows (screenshots, 2026-10-10 23:39/23:41 IST; base host and keys not recorded):
+
+| Priority | Name | Type | Model | Active |
+|---|---|---|---|---|
+| 0 | Free LLM API | openai_compatible | auto | yes |
+| 1 | OpenAI | openai_compatible | gpt-5.6-luna | yes |
+| 2 | NVIDIA | openai_compatible | nvidia/nemotron-3-super-120b-a12b | yes |
+| 3 | Gemini | openai_compatible | models/gemini-3.5-flash-lite | yes |
 
 ## 4. Permission / tool matrix (as enforced today)
 
@@ -103,8 +113,8 @@ Settings, provider, credential or permission-admin exposure through any tool: **
 | Plan group | Existing role(s) | WhatsApp access |
 |---|---|---|
 | Admin / Management | `super_admin`, `owner_admin`, `management` (Owner/Admin = Super Admin) | Full read policy; settings tools never exposed (D1) |
-| Finance | `finance` | Finance read tools + site details; after M1: no work-order detail, no customer contacts, no write tools |
-| Engineers | `erection_engineer`, `service_engineer`, `commissioning_engineer` | Site details for **assigned sites only** (D3); no payables/vendor bills after M1 |
+| Finance | `finance` | Finance read tools + site details; after M1: no work-order detail, no customer contact fields in tool output. In-app finance writes are **kept** (4.3); WhatsApp has no writes for anyone |
+| Engineers | `erection_engineer`, `commissioning_engineer`, **`service_team`** (seed key; there is no `service_engineer` role, earlier text was wrong: roleDefinitions.ts:94-120) | Site details for **assigned sites only** (D3); no payables/vendor bills after M1. `service_team` is placed in the engineer-scoped group (stricter default; it holds `VIEW_SITE_STATUS`, `MANAGE_COMPLAINTS`, `ACT_ASSIGNED_WORK_ORDERS`, roleDefinitions.ts:116-119). **Owner to confirm**; if not confirmed it stays in the pilot excluded list (silent) |
 | Sales, Ops/PM | `sales`, `ops_pm` | Site details plus the read tools their permissions already grant (V1 default; Ops/PM payables unchanged unless Ferose says otherwise) |
 | Customers | `customer` (`customerId` set) | **Silent** (no reply) |
 | Unknown | no match / inactive / blocked / unsupported role | Silent drop |
@@ -131,9 +141,9 @@ Settings, provider, credential or permission-admin exposure through any tool: **
 
 A tool runs on WhatsApp only if it is listed for the sender's group **and** the user's current permissions allow it **and** the row filter passes. Writes are absent for every group. `Y*` = also row-filtered server-side (4.4).
 
-| Tool family | Admin/Mgmt | Finance | Sales | Ops/PM | Engineers (3 roles) | Customer |
+| Tool family | Admin/Mgmt | Finance | Sales | Ops/PM | Engineers (erection, commissioning, service_team) | Customer |
 |---|---|---|---|---|---|---|
-| Site / order / site-status search and detail | Y | Y | Y | Y | Y* (assigned sites) | silent |
+| Site / order / site-status search and detail (scoped read, 4.4) | Y | Y | Y | Y | Y* (assigned sites) | silent |
 | Work orders / complaints (list, detail) | Y | - (after M1) | - | Y | Y* (assigned sites) | silent |
 | Receivables, revenue, invoices, quotations, POs, expenses, ledger, credit notes, advances, payments/TDS | Y | Y | quotations | - | - | silent |
 | Payables, vendor bills | Y | Y | - | Y | - (after M1) | silent |
@@ -143,20 +153,37 @@ A tool runs on WhatsApp only if it is listed for the sender's group **and** the 
 | 9 write tools, confirm/reject | **absent for all** | - | - | - | - | - |
 | Settings, providers, credentials, permission admin | blocked for all incl. Super Admin (D1); no such tool exists today (C10) | - | - | - | - | - |
 
-WhatsApp never creates or confirms a pending action: write tools are not in any WhatsApp policy, and the confirm/reject route rejects `channel=whatsapp`. Separate M1 fix: the confirm route re-checks role allowlist and ownership but not the originating tool's permission (agentConversations.ts:537-565).
+WhatsApp never creates or confirms a pending action: write tools are not in any WhatsApp policy, and the confirm/reject route rejects `channel=whatsapp`.
+
+Confirm-route fix (M1, concrete). Today `confirmOrReject` checks conversation ownership and pending status only, then calls `executeConfirmedAction(action.toolName, ...)` (agentConversations.ts:537-565). Change: before executing, (1) reload the caller's permissions (as `authenticate` does, middleware/auth.ts:22-45), (2) look up `getToolByName(action.toolName)` and require the same permission predicate that the tool's own write handler applies (e.g. `RECORD_VENDOR_INVOICE` for vendor invoices, zanAppWriteTools.ts:958; `MANAGE_ORDERS` for customer POs, zanAppWriteTools.ts:1116), exported as one `canRunWrite(auth, toolName)` helper used by both the tool handler and the confirm route, (3) reject with 403 and leave the action `pending` on failure, and (4) reject when the conversation's `channel` is `whatsapp`. Tests: `agentConfirmPermission.test.ts` (permission revoked between propose and confirm -> 403, nothing written; each of the 9 write tools has an allowed and a denied role; whatsapp-channel conversation -> rejected).
 
 ### 4.3 App-wide M1 role changes (D2) and regression checks
 
-One explicit, reviewed M1 change (seed `roleDefinitions.ts` + migration written, not applied; prod grants NV and must be diffed first):
+Correction to rev2: rev2 said Finance "loses write tools". That is **withdrawn**. Finance's seeded grants are finance-document work: `MANAGE_QUOTATIONS, MANAGE_INVOICES, RECORD_PAYMENTS, MANAGE_PURCHASE_ORDERS, MANAGE_EXPENSES, VIEW_FINANCE_DASHBOARD, RECORD_VENDOR_INVOICE, APPROVE_VENDOR_INVOICE, VIEW_LEDGERS, MANAGE_CREDIT_NOTES, VIEW_ORDERS` (roleDefinitions.ts:121-138), and the plan requires in-app capabilities and confirmation rules to be preserved (PLAN.md:28; OWNER-HANDOFF.md:28). **Principle: M1 revokes no role grant for Finance or engineers.** The D2 restrictions are implemented by (a) tightening read gates in tool handlers and (b) row/field scoping, so rollback never needs a data change.
 
-| Change | Effect |
-|---|---|
-| Engineers (erection, commissioning, service) lose payables / vendor-bill read | `get_payables`, `search_vendor_bills` no longer accept `RECORD_VENDOR_INVOICE` alone (roleDefinitions.ts:83-113; zanAppFinanceTools.ts:164-169,333-337). Decide whether vendor-invoice **recording** stays (separate permission) so engineers can still record bills |
-| Finance loses work-order detail, customer contacts and write tools | Removes any `manage_work_orders` path for finance (C6, C7) |
-| Drive tools get a permission check | New required permission for Drive; customers still denied (driveTool.ts:9-15,37-80) |
-| Engineers scoped to assigned sites in tools **and** REST detail paths | See 4.4 |
+**Change list (proposed M1, seed `roleDefinitions.ts` + an idempotent upsert migration, written not applied; prod grants NV and diffed by the owner first):**
 
-Regression checks (tests with fakes, plus the HANDOVER role matrix): for super_admin, owner_admin, management, sales, ops_pm, finance, each engineer role, service, customer and vendor user: (a) every tool's allow/deny result before vs after, listing only intended deltas; (b) in-app agent still works for each role; (c) REST endpoints unchanged except intended ones; (d) seeded roles and an upgrade over a drifted prod grant set both end in the intended state; (e) customer/vendor tenant scoping unchanged.
+| # | Role(s) | Permission / handler change | Files | Effect and what is explicitly kept |
+|---|---|---|---|---|
+| R1 | Finance | **No grant removed.** Keeps all 9-tool finance writes and the in-app create -> confirm flow for quotation, invoice, PO, expense, vendor invoice | roleDefinitions.ts:121-138 (unchanged) | Kept. Denial test only (below) |
+| R2 | Finance | `get_document_detail` work_order / complaint branches require `MANAGE_WORK_ORDERS` / `MANAGE_COMPLAINTS` / `ACT_ASSIGNED_*` and the scope predicate (4.4); Finance holds none of these in the seed, so seeded behaviour is unchanged. A **drifted prod grant** of `MANAGE_WORK_ORDERS` to finance is reported by the grant diff; revoking it is an owner-approved data step, with its inverse SQL recorded in the diff report | zanAppDetailTool.ts:139-168 | Closes C6 |
+| R3 | Finance | Customer-contact fields (phone, email, address contacts) are omitted from the **agent tool** output for roles without `MANAGE_ORDERS`; GST/billing identity, name and outstanding stay. REST `/customers` is unchanged because quotation/invoice forms need it (customers.ts:32) | zanAppReadTools.ts:81 | Closes C7. **Owner to confirm** the contact-field omission |
+| R4 | erection, commissioning (hold `RECORD_VENDOR_INVOICE`) | Read gate of `get_payables` and `search_vendor_bills` no longer accepts `RECORD_VENDOR_INVOICE` alone: it becomes `VIEW_FINANCE_DASHBOARD` or `APPROVE_VENDOR_INVOICE` or new `VIEW_PAYABLES`. `VIEW_PAYABLES` is granted to `ops_pm` (keeps Ops/PM payables as today) and to the admin trio via ALL | zanAppFinanceTools.ts:168,336; new permission row | Engineers lose the agent payables/bills read only. **Kept:** `RECORD_VENDOR_INVOICE` grant and `create_vendor_invoice` (zanAppWriteTools.ts:958), and REST capture routes (bills.ts:33,140,210). The REST payables report already needs `VIEW_FINANCE_DASHBOARD` (financeDashboard.ts:111), so engineers never had it there: the tool is being aligned to REST |
+| R5 | erection, commissioning | REST `GET /bills` and `GET /bills/:id` (bills.ts:116,254, gated by CAPTURE = record or approve) return, for callers holding `RECORD_VENDOR_INVOICE` but none of `APPROVE_VENDOR_INVOICE`, `VIEW_FINANCE_DASHBOARD`, `VIEW_LEDGERS`, only bills they recorded (recorder field to be confirmed against the schema in M1). Ops/PM unchanged | bills.ts:116,254 | Engineers still see and edit their own bills. **Owner to confirm**: this narrows the in-app Bills page for engineers |
+| R6 | all non-customer | Site read scoping: new shared predicate `siteScope(auth)` and gate change in `search_orders_and_sites` (4.4). Internal engineers/service_team narrowed to assigned sites in the tool **and** REST `GET /sites`, `GET /sites/:id` (sites.ts:28,57) | zanAppReadTools.ts:843-851; sites.ts:28-66 | **Owner to confirm** impact: engineers lose the all-sites list in admin-web/mobile (D3 applied app-wide, per D2) |
+| R7 | all non-customer | Drive: new permission `USE_DRIVE_ASSISTANT` required by the 3 Drive tools. Granted to super_admin, owner_admin, management, sales, ops_pm. **Not** granted to finance, erection, commissioning, service_team (Drive has no per-user/document classification, driveTool.ts:9-15,37-80, so a role that must not see company-wide files cannot be given a generic Drive permission). Customers still denied | driveTool.ts:9-15,37-80; new permission row | Finance/engineers lose in-app Drive search (D2 app-wide). **Owner to confirm** this specific delta. WhatsApp: Drive excluded for everyone regardless |
+
+**Sequencing:** (1) migration step A (additive, idempotent upsert of `VIEW_PAYABLES`, `USE_DRIVE_ASSISTANT` Permission rows and their role grants; grants are a superset of what the new gates need, so no behaviour changes), applied by the owner after the prod grant diff; (2) deploy API with the handler/REST changes (R2-R7), API first then admin-web per HANDOVER s5; (3) only afterwards enable the WhatsApp channel (M3+). No step revokes a grant.
+
+**Rollback:** redeploy the previous API build. Because step A only adds rows and no grant was removed, the previous code still works against the new data; the extra permission rows are harmless and may stay. The one data-changing item is the optional R2 drift revoke, which has recorded inverse SQL.
+
+**Named tests (fakes only; each listed in `apps/api/package.json` "test"):**
+- `agentRoleMatrix.test.ts`: for super_admin, owner_admin, management, sales, ops_pm, finance, erection, commissioning, service_team, customer and a vendor-engineer user, every tool's allow/deny before vs after; only the deltas R2-R7 may differ.
+- `agentFinanceWrites.test.ts`: finance in-app propose -> confirm still succeeds for quotation, invoice, PO, expense, vendor invoice; same for engineers' `create_vendor_invoice`.
+- `restPermissionsUnchanged.test.ts`: direct REST access per role for `/customers`, `/bills`, `/orders`, `/sites`, `/purchase-orders`, `/quotations`; only R5 and R6 deltas differ; customer/vendor tenant scoping unchanged.
+- `whatsappPolicy.test.ts`: WhatsApp denial for every write tool, settings, Drive and out-of-group tools, for each role, including Super Admin.
+- `roleDrift.test.ts`: seeded roles, and an upgrade over a drifted grant set (extra/missing grants), both end in the intended state; `VIEW_PAYABLES` / `USE_DRIVE_ASSISTANT` present after step A.
+- `routeInventory.test.ts`: fails if a route under `routes/` that reads site-, work-order-, complaint- or bill-keyed data for non-customer roles is not registered as scoped or explicitly exempt, so REST coverage is enumerated rather than assumed.
 
 ### 4.4 Row and site filters (server-side, in the retrieval path, not the model)
 
@@ -166,7 +193,20 @@ Regression checks (tests with fakes, plus the HANDOVER role matrix): for super_a
 | Vendor engineer (`vendorId` set) | Stricter: site visible iff `Site.vendorId = user.vendorId` **and** `assignedEngineerId = userId`. Vendor scope alone is insufficient; unassigned sites are invisible (D3) |
 | Other groups | Existing permission and customer/vendor tenant checks (zanAppReadTools.ts:1008-1062) |
 | Detail by ID | `get_document_detail` work-order and complaint branches use `findUnique({where:{id}})` after a broad permission check (zanAppDetailTool.ts:139-168). Fix: scoped predicate in the query, or authorise the returned row; a miss and a denial are indistinguishable to the caller |
-| Search | Engineers cannot list sites today (needs `manage_orders`, zanAppReadTools.ts:843-850): add a scoped assigned-sites search (C4, C5) |
+| Search | Engineers cannot list sites today, and neither can Finance or Ops/PM: `search_orders_and_sites` requires `MANAGE_ORDERS` for every non-customer (zanAppReadTools.ts:843-851); Finance holds only `VIEW_ORDERS` and no `VIEW_SITE_STATUS` (roleDefinitions.ts:121-138), Ops/PM and engineers hold `VIEW_SITE_STATUS` (roleDefinitions.ts:87,98,109,119). See "Scoped site read" below |
+
+**Scoped site read (closes B2).** One shared `services/siteScope.ts` exports `siteScope(auth)` returning a Prisma `Site` predicate (and the equivalent relation filter for `Order`), used by the agent tools **and** REST so the two cannot drift:
+
+| Caller | `siteScope` |
+|---|---|
+| customer | existing `order.customerId` scope (sites.ts:32), unchanged |
+| vendor engineer (`vendorId` set) | `vendorId = user.vendorId AND assignedEngineerId = userId` |
+| erection, commissioning, service_team (internal) | `assignedEngineerId = userId` |
+| super_admin, owner_admin, management, sales, ops_pm, finance | no row restriction (D1: site details for all non-Customer groups) |
+
+Gate: `search_orders_and_sites` and the site/order branches of `get_document_detail` accept `hasAny(MANAGE_ORDERS, VIEW_ORDERS, VIEW_SITE_STATUS)` (every non-customer role holds at least one; no new permission is needed for site reads), then **always** apply `siteScope`. REST `GET /sites`, `GET /sites/:id` (sites.ts:28,57) and the order-by-site paths apply the same predicate (R6). Finance gets site/order details through `VIEW_ORDERS`, not by being granted `VIEW_SITE_STATUS`, so REST `/sites` stays closed to Finance.
+
+Coverage required (each a named test in `agentSiteScope.test.ts`, for every role in the table plus a vendor engineer and an unassigned site): list results; detail by id (miss and denial indistinguishable); whole-set counts (`scope` at zanAppReadTools.ts:841-848 includes `siteScope`, so counts never reveal other sites); text snippets and timeline/stage-event rows (search term matching an unassigned site's customer name returns nothing and does not change counts); follow-up IDs. Drive is not a retrieval path for WhatsApp (excluded) and is denied to finance/engineers in-app (R7), so document snippets cannot bypass site scope.
 
 ### 4.5 Enforcement at execution (Blocker 2)
 
@@ -176,6 +216,8 @@ Regression checks (tests with fakes, plus the HANDOVER role matrix): for super_a
 | Tool resolution at execution | `runAgentTurn` passes global `getToolByName` into `executeToolCalls` (llm.ts:99-107; registry.ts:16-17); executed at toolExecution.ts:76 via `p.getTool(call.name)` | `runAgentTurn` takes a policy-aware resolver built from (channel, group, user). It returns undefined for any tool not allowed, so a disallowed or hallucinated call is rejected whatever the model requests. `isWriteTool` stays as a second guard |
 | Re-check | `authenticate` per request only (auth.ts:22-45) | Before **each** tool call: re-load user, role, permissions, active flag, vendor block, identity status and `accessEpoch`; fail closed and abort the turn silently on change |
 | Channel | no channel concept | `channel` is a server-set field in the auth context, never from message text |
+
+Test for 4.5: `whatsappResolver.test.ts` (disallowed and hallucinated tool names return undefined and produce a rejected result; schema list equals the policy list; app channel list unchanged).
 
 Paths verified to exist: `apps/api/src/agent/llm.ts`, `agent/tools/registry.ts`, `agent/toolExecution.ts` (the latter lives at `agent/`, not `agent/tools/`).
 
@@ -209,7 +251,9 @@ Checklist (docs/agent-test-checklist.md): 73 rows, none for work orders, complai
 | Collisions | 0 or >1 matches, e164 and lid pointing at different users, inactive user, blocked vendor, non-active identity, lookup error -> silent drop (no reply, read receipt, typing or reaction). Unique constraints make collisions an error, not a choice |
 | Reassigned / recycled numbers | Identity carries `verifiedAt`; Super Admin re-verifies on staff exit or number change and periodically (suggest 90 days, owner to confirm). Any observed change of the LID/JID behind an e164, or a user role/active change, sets status `disabled` and bumps `accessEpoch` until re-verified. Pilot users re-verified manually |
 | Management | Super Admin only, authenticated settings UI + REST (`manage_settings`); no WhatsApp-side management tools even for Super Admin (D1); no auto-enrolment |
-| Revocation | Re-check identity + permissions + `accessEpoch` at ingest, before each tool call (4.5) and before releasing a reply; on change discard queued work and outbox rows for that identity |
+| Revocation | Re-check identity + permissions + `accessEpoch` at ingest, before each tool call (4.5), at outbox lease and at the pre-send claim (section 7); on change discard queued work and outbox rows for that identity |
+| Trust model (closes M2) | The bridge is a **trusted identity-asserting component**. The HMAC proves the request came from a holder of the bridge key, not that the JID/LID was really sent by WhatsApp: a stolen or abused key can submit the mapped JID of any active user and be treated as that user. No independent sender attestation exists in WhatsApp Web protocol terms that Zan can verify, so this is an **accepted residual risk, to be signed off by Ferose before activation (M5)**. Containment: (1) read-only, deny-by-default policy means an impersonated user yields at most that user's read data, never writes, settings or Drive (4.2); (2) key custody: one key, readable only by the bridge service user on VM-A (file mode 0600, never in the repo, logs or review packets), two-key rotation overlap, immediate revoke, rotation on any VM access by a person outside the owner's agents; (3) audit: every ingest stores key id, claimed JID/LID, resolved identity, decision and timestamps in `WhatsappInbound`; (4) limits: per-identity rate limit and daily cap, pilot restricted to the listed numbers, `aiPaused` kill switch, alert when one key id resolves more than N distinct identities in an hour |
+| Tests (M2) | `whatsappBridgeTrust.test.ts`: forged sender for an **unmapped** JID -> silent drop; forged JID of a **mapped** user under a valid key -> processed only under that user's policy (no write tool, no settings, no Drive) and the audit row records key id and claimed sender; revoked/rotated-out key -> 401 and no row; replayed nonce and out-of-window timestamp -> rejected; rate limit and daily cap trip; distinct-identity alert fires |
 | Conversation history | `AgentConversation` gains `channel` (`app`/`whatsapp`) and every stored message and tool result is labelled with its channel (messages is a JSON blob, schema.prisma:1326-1337, replayed whole at agentConversations.ts:130-159). Shared context is retained but each item is re-authorised against the user's **current** role and policy for the replaying channel; items from tools no longer allowed (or from before an `accessEpoch` bump) are dropped from the context |
 
 ## 7. Bridge <-> API contract and worker (Medium: bridge/worker)
@@ -218,7 +262,7 @@ Checklist (docs/agent-test-checklist.md): 73 rows, none for work orders, complai
 Phone -> WhatsApp -> [OCI: whatsmeow bridge, systemd, own session.db]
   -- HTTPS POST /wa/ingest (signed) --> [Vercel API] store inbound row (unique message id) -> 202
   [worker] claims job (lease) -> resolve identity -> policy-limited agent turn -> outbox row
-  <-- HTTPS GET /wa/outbox (lease) -- bridge sends -> POST /wa/ack
+  <-- HTTPS GET /wa/outbox (lease, no text) -- POST /wa/outbox/:id/claim (re-authorise, text) -- bridge sends -> POST /wa/ack
 ```
 
 | Point | Design |
@@ -227,12 +271,16 @@ Phone -> WhatsApp -> [OCI: whatsmeow bridge, systemd, own session.db]
 | Bridge credential | Dedicated bridge-only secret, scoped to ingest / outbox / ack. No access to Zan data routes, cannot name a user or role, cannot read other users' outbox rows beyond leased ones. Stored hashed server-side; rotation supports two valid keys during overlap; revocable immediately |
 | Signing + replay | HMAC-SHA256 over method, path, timestamp, nonce, body (including immutable protocol sender fields and message id). Reject timestamp outside +/-5 min or a reused nonce (nonce kept 10 min) |
 | Idempotency | `WhatsappInbound.waMessageId` UNIQUE; a duplicate ingest returns 202 without a second job. Outbox row carries its own unique key; ack is idempotent |
-| Durable queue | `WhatsappInbound` (status `received`/`leased`/`done`/`dropped`/`failed`, leaseUntil, attempts, checkpoint) and `WhatsappOutbox` (status `pending`/`leased`/`sent`/`expired`, leaseUntil, expiresAt). Persist before returning 202 |
-| Leases | Worker and bridge each take a lease with expiry (e.g. 60 s / 30 s); an expired lease returns the row to the queue (bounded attempts, then `failed`, silent). Per-sender serial order; queue cap 10, 2 concurrent turns (D4) |
-| Reply expiry | Outbox rows expire (e.g. 10 min) and are re-authorised (identity, permissions, `accessEpoch`) at lease time and before send. Crash after WhatsApp accepts but before ack can duplicate once: exactly-once is not available; delivery tracking limits it |
-| Vercel duration | `apps/api/vercel.json` sets no `maxDuration`, region `bom1`, crons only for cleanup (03:00 UTC daily) and backup. Turn budget is 55 s (timeouts.ts:23-30), run inline today (agentConversations.ts:115-164). **The Vercel plan's function limit must be confirmed (B3) before choosing the worker mechanism** |
-| Worker mechanism (proposal) | Ingest enqueues and triggers a worker invocation (chained invocation of a worker route authenticated by an internal secret); a frequent cron (or the bridge's own outbox poll hitting a "kick" route) is the backstop for orphaned jobs. Each invocation runs one turn within the confirmed limit |
-| Chunked turns / timeout | Turn state checkpointed after each tool step (history so far + step count in `checkpoint`). If an invocation nears its limit it saves the checkpoint and the lease lapses; the next invocation resumes. Hard-fail after N attempts or total age (e.g. 3 min): silent drop, or one neutral failure reply only if the identity is verified (owner to decide in M2) |
+| Durable queue | `WhatsappInbound` (status `received`/`leased`/`done`/`dropped`/`failed`, leaseUntil, attempts, checkpoint) and `WhatsappOutbox` (status `pending`/`leased`/`sending`/`sent`/`uncertain`/`discarded`/`expired`, leaseUntil, sendBy, expiresAt, accessEpoch). Persist before returning 202 |
+| Leases | Job lease 90 s, outbox lease 30 s, `sendBy` 15 s; an expired lease returns the row to the queue (bounded attempts, then `failed`). Per-sender serial order; queue cap 10, 2 concurrent turns (D4) |
+| Reply expiry | Outbox rows expire (10 min). Delivery semantics are **at-most-once after claim**: see the pre-send claim below. Exactly-once is not available |
+| Pre-send claim (closes M3) | Leasing an outbox row (`GET /wa/outbox`, lease 30 s) returns only `{outboxId, recipient}`, **no text**. Immediately before sending, the bridge calls `POST /wa/outbox/:id/claim`. The server re-authorises right then (identity `active`, user active/not blocked, role/permissions unchanged, `accessEpoch` equal to the row's) and only on success returns the text, sets `sending` and a `sendBy` of now+15 s. On failure it returns 410, marks the row `discarded`, and the bridge sends nothing. Bridge acks with `POST /wa/ack` after WhatsApp accepts. A row left `sending` past `sendBy` becomes `uncertain` (never auto-resent, silent). Residual window: revocation after the claim response and before WhatsApp accepts (at most 15 s) cannot be recalled; content was already authorised at claim time. Tests: `whatsappOutbox.test.ts` (disable identity between lease and claim -> 410, no text released; between claim and ack -> delivered once, documented; crash after claim -> `uncertain`, no resend; expired lease and expired row; duplicate claim/ack idempotent) |
+| Vercel duration (closes the B3 blocker) | Verified read-only on 2026-10-10 ~23:40 IST via Vercel CLI/API: team plan **Hobby**; project `zan-app-api` has Fluid compute **enabled**, no project-level default max duration, `apps/api/vercel.json` has no `functions.maxDuration`, regions `["bom1"]` in vercel.json (project default regions iad1, overridden). Per Vercel docs (functions / configuring-functions / duration), with Fluid compute Hobby default is 300 s and maximum is 300 s. **Effective limit: 300 s per invocation.** The agent turn budget is 55 s (`AGENT_REQUEST_BUDGET_MS`, timeouts.ts:26; run inline today, agentConversations.ts:115-164), well inside it |
+| Cron on Hobby | Per Vercel docs, Hobby cron jobs run at most once per day; current crons are daily (cleanup 03:00 UTC, backup). A minute-level cron worker is **not available** on this plan, so the design below does not use one (and a plan upgrade is not assumed) |
+| Worker contract (closes M4) | **Trigger: bridge-driven, no cron dependency.** (1) `POST /wa/ingest` verifies, inserts the `received` row (unique `waMessageId`), returns 202, then continues in the same invocation via Vercel `waitUntil` (`@vercel/functions`, dependency and Fluid behaviour to be proven by an M2 spike on a preview deployment) to claim and run that job's turn inside the 300 s limit. (2) **Backstop:** the bridge polls `GET /wa/outbox` (every 5 s while jobs/replies are pending, 30 s idle). Each poll first reaps expired leases (`leased` with `leaseUntil < now` -> back to `received`, `attempts + 1`), then claims at most one runnable job via `waitUntil`, then returns leased outbox rows. A crashed or timed-out invocation is therefore retried by the next poll, with no cron. (3) The daily Vercel cron only sweeps terminal rows (cleanup), never drives work |
+| Lease / checkpoint / resume | Claim is one atomic conditional update (`updateMany` where `id` and (`status=received` or (`status=leased` and `leaseUntil<now`)) and sender has no earlier non-terminal row and fewer than 2 rows `leased`; claim succeeds iff count = 1). Job lease 90 s (turn budget 55 s + slack). After each tool step the invocation writes `checkpoint` (history so far, step count, tool results) and extends the lease. A re-lease resumes from the checkpoint with a fresh 55 s budget. Bounds: max 3 attempts and total job age 3 min, whichever first -> `failed` |
+| Failure reply | On `failed`, a verified `active` identity gets **one** neutral reply ("Sorry, I couldn't complete that. Please try again."), sent through the normal outbox/claim path; any other case is silent. Owner may veto in M2 |
+| Tests (M1/M3 prerequisite) | `whatsappWorker.test.ts` with fake clock and fake agent: a 55 s turn completes inside the lease; a turn that exceeds budget times out and is retried from checkpoint; crash (invocation dies, lease lapses) is recovered by the next poll; duplicate ingest creates one job; concurrency cap 2 and per-sender order hold under contention; attempts/age bounds -> `failed` + single neutral reply; no code path requires a cron; two concurrent claimers never both win |
 
 ## 8. Capacity assumptions
 
@@ -243,14 +291,18 @@ Phone -> WhatsApp -> [OCI: whatsmeow bridge, systemd, own session.db]
 | VM-A top RSS | node 102 MB (FreeLLMAPI), dockerd 41 MB, journald 37 MB, fwupd 29 MB, caddy 27 MB, containerd 21 MB, snapd 19 MB | Live |
 | VM-A listening ports | 22, 80, 443 (caddy), 3001 (FreeLLMAPI), 111 (rpcbind), 2019 (caddy admin, localhost), DNS stubs on localhost | Live |
 | VM-A FreeLLMAPI health (local, no key) | `/` 200 in 3 ms, `/health` 200 in 3 ms, `/v1/models` 401 in 2 ms (up; auth required) | Live |
-| VM-A TLS | Caddy manages certificates (no /etc/letsencrypt). Domain not known without reading the Caddyfile (not allowed), so expiry **not verified** | Not verified |
-| VM-B (Oracle Linux) | **Not inspected**. No tried IP/user answered as Oracle Linux (see B2) | Not verified |
+| VM-A TLS | Caddy manages certificates (auto-renews; no /etc/letsencrypt). Expiry **not verified** (see read-only check below) | Not verified |
+| VM-B (Oracle Linux) | **Not inspected** (key refused for one IP; timeout on port 22 for another). Needs correct IP, login user, key and a port-22 rule; only needed if VM-A fails the M6 check | Not verified |
 | Bridge footprint | Go binary 26.7 MB (client exe); pure-Go SQLite; tens of MB RSS idle expected | exe size observed; RSS NV |
 | Agent LLM load | LLM runs at providers, not on the VM; bridge does I/O only | design |
 
-Headroom vs approved targets (VM-A): memory with a bridge under 100 MB would be about (337+100)/952 = 46%, under the 70% target; disk 38 GB free is above 10 GB. Verdict: **OK, with caution**. RAM is only 952 MB (the plan's 1 GB), swap is already in use, and the cheap services (fwupd, snapd, ModemManager, udisks2) could be trimmed later if needed (not done; no changes made). Recommended bridge host: **VM-A (freellmapi-vm)**, outbound-only, no new inbound port. Sustained memory still has to be measured in M6.
-| Bridge footprint | Go binary 26.7 MB (client exe); pure-Go SQLite; tens of MB RSS idle expected | exe size observed; RSS NV |
-| Agent LLM load | LLM runs at providers, not on the VM; bridge does I/O only | design |
+Headroom vs approved targets (VM-A): memory with a bridge under 100 MB would be about (337+100)/952 = 46%, under the 70% target; disk 38 GB free is above 10 GB. Verdict: **OK, with caution**. RAM is only 952 MB (the plan's 1 GB), and swap is in use: 220 MB of 2 GB at inspection (10 Oct ~22:39 IST). The cheap services (fwupd, snapd, ModemManager, udisks2) could be trimmed later if needed (not done; no changes made). Recommended bridge host: **VM-A (freellmapi-vm)**, outbound-only, no new inbound port.
+
+**M6 swap/memory monitoring plan.** During the pilot load test and a 24 h soak, sample `free -m`, `vmstat 1` (si/so) and the bridge process RSS every minute to a log. Pass thresholds: no sustained swap-in (`si` > 0) under load; VM memory < 70%; bridge RSS < 100 MB. If any is breached, propose the second VM or a larger approved instance (owner approval first).
+
+**TLS expiry (unchecked).** Read-only check later, without reading Caddy config, from any machine: `echo | openssl s_client -connect <public-domain>:443 -servername <public-domain> 2>/dev/null | openssl x509 -noout -enddate -subject`. The domain comes from the owner or from the provider base-URL host in Settings -> AI providers, not from server config. Caddy auto-renews.
+
+**Second VM (Oracle Linux).** Not inspected; needs correct IP, user, key and a port-22 rule. Only required if VM-A fails the M6 check.
 
 Hosting: OCI confirmed (D5). Fallback note only: if the capacity check fails, propose the second inspected VM or a larger approved instance per PLAN M6.
 
@@ -262,8 +314,25 @@ Decided and removed: group mapping (D1), Finance/engineer scope (D2), assigned-s
 
 | # | Open item | Needed |
 |---|---|---|
-| B1 | Live AI provider rows (Blocker 3). Read attempt failed (section 3) | Zan-F Bot or Ferose copies Settings -> AI providers (name, type, priority, active, model, base host; no keys) |
-| B2 | OCI capacity check. **VM-A done 2026-10-10 (section 8): headroom OK with caution.** Remaining: VM-B (Oracle Linux) not inspected (one tried IP refused the key for users ubuntu and opc; another timed out on port 22 during banner exchange, both attempts), and VM-A TLS expiry not verified (domain unknown). Not blocking if VM-A hosts the bridge | For VM-B only: correct IP, login user, key, and a port-22 ingress rule from this PC's public IP |
-| B3 | Vercel plan function duration limit | Confirm plan (B8 in the contract above) |
-| B4 | Pilot users and verified numbers | List from Ferose |
-| B5 | Pairing approach (fresh pair of Zan-F on OCI vs session migration); owner present at M5 | Approval at M5 |
+(Ids renamed O1-O9 in rev3 so they do not collide with the re-review's finding ids B1/B2.)
+
+| # | Open item | Status / needed |
+|---|---|---|
+| O1 | Live AI provider rows | **RESOLVED rev3** (section 3). Residual, before M1 integration: FreeLLMAPI base host, external quota/concurrency limits, fallback health |
+| O2 | OCI capacity check | **VM-A done (section 8), headroom OK with caution; M6 monitoring plan recorded.** Required before M3/M5 is satisfied for VM-A |
+| O3 | Vercel function limit | **RESOLVED rev3** (section 7): Hobby + Fluid, 300 s; no minute-level cron; bridge-driven worker |
+| O4 | Pilot users and verified numbers | Open: list from Ferose |
+| O5 | Pairing approach (fresh pair of Zan-F on OCI vs session migration); owner present at M5 | Open: approval at M5 |
+| O6 | TLS expiry check | Open: read-only `openssl s_client` check (section 8); needs the public domain from the owner or provider base-URL host |
+| O7 | Second VM (Oracle Linux) | Open, **conditional** on VM-A failing the M6 check: correct IP, user, key, port-22 rule |
+| O8 | HANDOVER provider list is stale (says Gemini 1, NVIDIA 2) | Fix on master later, not on this branch |
+| O9 | Owner confirmations for M1 deltas | Open: `service_team` in engineer-scoped group; R3 contact-field omission; R5 engineer Bills page; R6 engineers lose all-sites list; R7 Finance/engineers lose in-app Drive; production role-grant diff; accepted residual risk of the trusted bridge (section 6) before M5 |
+
+## 10. Gate re-score for rev3 (proposed; the reviewer decides)
+
+| Gate | Proposed score | Basis |
+|---|---|---|
+| 1 Reuse existing access controls | CONDITIONAL | Roles/permissions stay the only source; no Finance/engineer grant revoked; explicit change list R1-R7, sequencing, rollback and named tests (4.3, 4.4). Not implemented; prod grants NV |
+| 2 Safe sender identity, fail-closed, silent | CONDITIONAL | Verified identity table and LID reconciliation (6); bridge named as trusted identity-asserting component with accepted residual risk and tests; pre-send claim closes the lease-to-send gap except a documented <=15 s window (7) |
+| 3 Preserve FreeLLMAPI routing | CONDITIONAL (was FAIL) | Live rows verified: "Free LLM API" is priority 0, active, tried first, then OpenAI 1, NVIDIA 2, Gemini 3, no ties (3). Base host, external limits and fallback health still to record before M1 integration |
+| 4 Implementable request/reply path | CONDITIONAL | Limit confirmed (300 s, Hobby + Fluid); bridge-driven worker with atomic lease/checkpoint/resume/bounds and named tests (7). `waitUntil` behaviour to be proven by an M2 spike |
