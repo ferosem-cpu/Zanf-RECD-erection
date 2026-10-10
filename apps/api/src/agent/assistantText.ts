@@ -29,14 +29,54 @@ const SOURCE_LINE_RE = new RegExp(
 const TOOL_ASIDE_RE = new RegExp(String.raw`\s*\((?:via|from|using)?\s*\x60${TOOL_NAME}\x60[^)\n]*\)`, "g");
 const BACKTICKED_TOOL_RE = new RegExp(String.raw`\x60${TOOL_NAME}\x60`, "g");
 
-/** Strips leaked internal tool names from a reply: "Source: <tool>..." lines, parenthesised
- * backticked tool names, and other backticked tool names (replaced with "the app"). The prompt
- * forbids them (NO INTERNALS); this is the safety net on save. */
-export function stripToolInternals(text: string): string {
+/** True when the text holds an internal identifier: a snake_case or camelCase name (every tool
+ * name is snake_case), a key=value parameter or a dotted JSON path. Document numbers (TXIN0934,
+ * PO/2026-27/0001), ALL-CAPS names, amounts, dates, URLs and ordinary words do not match. */
+export function hasInternalIdentifier(text: string): boolean {
+  const t = text
+    .replace(/\]\([^)\s]*\)/g, "]")
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, " ")
+    .replace(/\b[\w-]+(?:\.[\w-]+)*\.(?:org|com|in|net|io|app|pdf|xlsx?|docx?|png|jpe?g)\b/gi, " ");
+  return (
+    /\b[a-z][a-z0-9]*_[a-z0-9_]+\b/.test(t) ||
+    /\b[a-z]+[A-Z][A-Za-z0-9]*\b/.test(t) ||
+    /\b[A-Za-z_]\w*=[\w"'.-]+/.test(t) ||
+    /\b[a-z][A-Za-z0-9]{2,}(?:\.[a-z][A-Za-z0-9]{2,})+\b/.test(t)
+  );
+}
+
+/** Removes parentheticals and sentences that expose internal names. Works line by line so list
+ * items and table rows keep their own lines. */
+function dropInternalNarration(text: string): string {
   return text
+    .split("\n")
+    .map((line) => {
+      if (!hasInternalIdentifier(line)) return line;
+      const noParens = line.replace(/\s*\([^()\n]*\)/g, (m) => (hasInternalIdentifier(m) ? "" : m));
+      if (!hasInternalIdentifier(noParens)) return noParens;
+      const indent = /^\s*(?:[-*>]\s+|\d+[.)]\s+)?/.exec(noParens)?.[0] ?? "";
+      const body = noParens.slice(indent.length);
+      const kept = body.split(/(?<=[.!?])\s+(?=[A-Z0-9*_(\[])/).filter((sentence) => !hasInternalIdentifier(sentence));
+      return kept.length ? indent + kept.join(" ") : "";
+    })
+    .join("\n");
+}
+
+/** Collapses a word doubled by a substitution ("the the app"). */
+function collapseDoubledWords(text: string): string {
+  return text.replace(/\b(the|a|an|of|in|to|app)(\s+\1\b)+/gi, "$1");
+}
+
+/** Strips leaked internal names from a reply: "Source: <tool>..." lines, backticked tool names
+ * (replaced with "the app"), then any sentence or parenthetical that still names a tool, field,
+ * parameter or JSON path. The prompt forbids them (NO INTERNALS); this is the safety net. */
+export function stripToolInternals(text: string): string {
+  const cleaned = text
     .replace(SOURCE_LINE_RE, "")
     .replace(TOOL_ASIDE_RE, "")
-    .replace(BACKTICKED_TOOL_RE, "the app")
+    .replace(new RegExp(String.raw`\b(the|a|an)\s+\x60${TOOL_NAME}\x60`, "gi"), "$1 app")
+    .replace(BACKTICKED_TOOL_RE, "the app");
+  return collapseDoubledWords(dropInternalNarration(collapseDoubledWords(cleaned)))
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
