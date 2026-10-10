@@ -1,50 +1,61 @@
-# Review packet: WhatsApp assistant M0, revision 3 (for ChatGPT Coder / Codex re-review)
+# Review packet: WhatsApp assistant M0, revision 4 (for ChatGPT Coder / Codex re-review)
 
 | Item | Value |
 |---|---|
 | Repo / branch | `D:\Apps\Zanf-RECD-erection`, `feat/whatsapp-m0` (from master `cf5e049`), not pushed |
-| Changed files (rev3) | `docs/whatsapp/DISCOVERY.md` (revised), `docs/whatsapp/PLAN.md` (addendum only), this file. Docs only: no code, schema, env, migration or deploy change |
+| Changed files (rev4) | `docs/whatsapp/DISCOVERY.md` (revised), `docs/whatsapp/PLAN.md` (dated addendum only), this file. Docs only: no code, schema, env, migration or deploy change |
 
 ## Review history
 | Rev | Commit | Outcome |
 |---|---|---|
 | 1 | `fa6e4b9` (PLAN + DISCOVERY), `f99ef60` (packet) | Codex: **CHANGES REQUIRED** (F1-F9 below) |
-| 2 | `4e909da` (+ `61618cd` read-only OCI facts) | Codex re-review of `4e909da`: **CHANGES REQUIRED** (B1, B2, M1-M4, L1) |
-| 3 | this commit (sha in the git log; no self-reference) | For re-review |
+| 2 | `4e909da` (+ `61618cd` read-only OCI facts) | Codex: **CHANGES REQUIRED** (B1, B2, M1-M4, L1) |
+| 3 | `58ec86b` (rev3), `ef380ca` (rev3b, D6/D7); Codex reviewed `ef380ca` | Codex: **CHANGES REQUIRED** (three MEDIUM, three LOW; table below) |
+| 3c | `abb0b73` | Owner decisions D8 recorded (docs only); item 2 now superseded |
+| 4 | this commit (sha in the git log; no self-reference) | For re-review |
 
-## Rev2 -> rev3 findings
-| Id | Severity | Finding | Fix (rev3) | DISCOVERY ref | Status |
+## Rev3 -> rev4 findings
+| Id | Severity | Finding | Fix (rev4) | DISCOVERY ref | Status |
 |---|---|---|---|---|---|
-| B1 | BLOCKER | App-wide role change could remove legitimate Finance work | Withdrew "Finance loses write tools". No Finance grant revoked (engineers lose only `RECORD_VENDOR_INVOICE`, D7/R8); change list R1-R8 separates read-gate tightening from kept finance writes (roleDefinitions.ts:121-138); sequencing (additive migration -> API deploy -> channel), rollback (redeploy previous API), named tests (role matrix, finance writes, REST unchanged, WhatsApp denial, role drift, route inventory) | 4.3 | Design done; implementation M1 |
-| B2 | BLOCKER | Scoped site read and all-groups access not closed; generic Drive permission cannot enforce scope | Shared `siteScope(auth)` for tools and REST; gate `hasAny(MANAGE_ORDERS, VIEW_ORDERS, VIEW_SITE_STATUS)` covers Finance and Ops/PM (zanAppReadTools.ts:843-851); list/detail/counts/snippets tests; Drive excluded from WhatsApp; in-app Drive unchanged in M1 (R7 withdrawn, D8-4; role-scoped Drive is a later phase) | 4.3 R6-R7, 4.4 | Design done; implementation M1 |
-| M1 | MEDIUM | `service_team` omitted | Added to engineer-scoped group in mapping and policy; wrong `service_engineer` key corrected; **owner confirmed (D6, 23:43 IST)** | 4.1, 4.2, 4.4, O9 | Design done; owner confirmed |
-| M2 | MEDIUM | Signed bridge data can select a mapped user | Bridge named a trusted identity-asserting component; key custody, audit, limits; residual risk to be accepted by owner before M5; forged-sender tests | 6 (Trust model, Tests) | Design done; owner acceptance open |
-| M3 | MEDIUM | Reply authorisation ends before the actual send | Lease returns no text; pre-send `claim` re-authorises and releases text; 30 s lease, 15 s `sendBy`; at-most-once after claim; residual <=15 s window documented; tests | 7 (Pre-send claim) | Design done |
-| M4 | MEDIUM | Worker trigger/recovery was a choice | Vercel limit verified (300 s); Hobby cron is daily so bridge-driven worker (`waitUntil` + poll reaping expired leases); atomic lease, checkpoint, resume, bounds, failure reply; tests | 7 | Design done; `waitUntil` spike in M2 |
-| L1 | LOW | PLAN.md:34 false priority-0 assertion | Live rows now verify the ordering, so the sentence is true; the PLAN addendum states this and the original line is untouched because the instruction for this revision restricts PLAN edits to the addendum | PLAN addendum 1; 3 | Closed by verification; reviewer may still ask for an in-line edit |
+| R3-1 | MEDIUM | R8 removed engineers' `RECORD_VENDOR_INVOICE` (their only Bills gate) while R5 still had them viewing/editing own bills | Resolved by owner decision D9: engineers get **no Bills and no finance at all**; R5 superseded, no read-only bills permission added, no recorder filter. D10 widens R8 to Ops/PM and subsumes it. Routes, tools, role x key table, tests, rollback listed with file:line | 0 (D8, D9, D10), 4.3.1-4.3.11 (R5, R8, R-all) | Design done; implementation M1 |
+| R3-2 | MEDIUM | R3 "app-wide" contact removal only filtered agent output and left REST `/customers` | Contacts omitted for every role without `manage_orders` in 12 enumerated paths (REST list/detail, invoice/quotation/order embeds, agent `search_customers`, print pages), billing fields kept (name, gstin, state, billingAddress, address, openingBalance), one test per path; no separate customer search/export route exists | 4.3.5 R3, 4.3.6 (P1-P12) | Design done; implementation M1 |
+| R3-3 | MEDIUM | Worker claim: single-row conditional update cannot enforce the global cap of 2 or sender order across different rows | Single atomic statement: 2-row slot table (structural cap), earliest-non-terminal eligibility per sender, partial unique index on in-flight sender, `FOR UPDATE SKIP LOCKED`, lease expiry/reclaim, fenced writes; seven race tests on a fake store; SQL itself only provable in an M2 disposable-DB spike (needs owner approval as an exception to fakes-only) | 7 (Atomic claim, Lease expiry / reclaim / fencing, Tests) | Design done; SQL proof open (O10) |
+| R3-4 | LOW | VM-A inspection called pending in D5 and PLAN; second VM called "inspected" | D5 row, DISCOVERY 8 and PLAN addendum now: VM-A inspected, TLS expiry open, VM-B conditional and uninspected | 0 (D5), 8, 9 (O2, O7) | Closed |
+| R3-5 | LOW | `PLAN.md:34` still states FreeLLMAPI as the priority-0 provider while the addendum calls the link inferred | PLAN allows addendum edits only on this branch, so the canonical corrected sentence is PLAN addendum 2026-10-11 item 1 (verified row name/order; VM-A link pending base-host verification). **Deviation: line 34 itself is not edited; reviewer may require an in-line edit** | PLAN addendum item 1; 3 | Closed by addendum; reviewer may still ask |
+| R3-6 | LOW | "As enforced today" matrix already showed the erection engineer's vendor-invoice write removed | Matrix restored (erection: "status update, vendor invoice"); removal appears only in the proposed policy (4.3) | 4 (matrix), 4.3.5 R8 | Closed |
+| D10-1 | owner | Finance only for Management, Finance, Owner/Admin, Super Admin; all other roles incl. Customers lose it, REST and assistant | Role x removed keys table with roleDefinitions.ts lines (ops_pm :91, erection :102, commissioning :113; sales/service_team/customer none in the seed, drift cleanup only); 10 keys with every gated REST route and assistant tool mapped; migration + seed `revoke:`; leak closures R9 (`/sites/:id/costs`) and R10 (order value) | 4.3.1-4.3.5 | Design done; F1-F7 open |
+| D9-1 | owner | Engineers: assigned-site details only, no finance | R6 (`siteScope`) plus D10 removal; test `engineerSiteOnly.test.ts` | 4.3.5 R6, 4.4 | Design done |
+| D8-4 | owner | Role-scoped Drive search deferred | Marked "deferred, later phase, not M1" in D8, R7, 4.2; in-app Drive unchanged; WhatsApp v1 excludes Drive | 0, 4.2, 4.3.5 R7 | Recorded |
 
-Report's "Conditions for a new M0 review": B1/B2/M1-M4 resolved as above; live provider metadata recorded (base host, external limits and fallback health still open before M1 integration); Vercel duration confirmed before selecting the worker; OCI VM-A inspection complete (DISCOVERY 8); gates re-scored in DISCOVERY 10.
+## Rev2 -> rev3 findings (history)
+B1 Finance writes: no Finance grant revoked, finance writes kept (rev4: still true for the four allowed roles). B2 scoped site read: `siteScope(auth)` for tools and REST, Drive excluded. M1 `service_team` added (D6). M2 trusted bridge with accepted residual risk before M5. M3 pre-send claim (at-most-once after claim). M4 bridge-driven worker (Hobby, 300 s, daily cron only). L1 priority-0 claim verified by screenshots (row name/order only).
 
 ## Rev1 findings (history)
-F1 unsafe retrieval scope -> 4.2-4.4; F2 policy bypass via global `getToolByName` -> 4.5; F3 provider/OCI facts -> section 3 (now resolved) and 8; F4 bridge/worker contract -> section 7; F5 sender identity/history -> section 6; F6 confirm route -> 4.2 (concrete fix in rev3); F7 Drive wording and F8 pilot labels -> fixed in rev2; F9 verified binding, scoped credential -> 6, 7.
+F1 unsafe retrieval scope -> 4.2-4.4; F2 policy bypass via global `getToolByName` -> 4.5; F3 provider/OCI facts -> sections 3 and 8; F4 bridge/worker contract -> section 7; F5 sender identity/history -> section 6; F6 confirm route -> 4.2; F7 Drive wording and F8 pilot labels -> fixed in rev2; F9 verified binding, scoped credential -> 6, 7.
 
-## Owner decisions (10 Oct 2026)
-D1 all groups except Customers see site details; Owner/Admin = Super Admin; settings blocked for all over WhatsApp; Customers silent. D2 Finance/engineer restrictions app-wide via tested M1 change. D3 engineers see assigned sites only. D4 pilot targets approved. D5 OCI hosting confirmed; OCI inspection required before M3/M5. D6 (23:43 IST) Service team (`service_team`) gets the same read-only, assigned-sites, no-finance WhatsApp access as engineers. D7 (23:43 IST) engineers can no longer record vendor invoices in the app (M1 role change R8: `RECORD_VENDOR_INVOICE` removed from erection and commissioning, regression tests; also removes their payables/vendor-bill tool path). Both replace the 23:42 answer. Details: DISCOVERY 0.
+## Owner decisions
+D1-D4 (10 Oct): site details for all groups but Customers; Owner/Admin = Super Admin; settings blocked; app-wide restrictions; engineers assigned sites; pilot targets. D5 OCI hosting. D6 (23:43 IST) `service_team` read-only, assigned sites, no finance. D7 (23:43 IST) engineers cannot record vendor invoices (**its "Ops/PM and Finance keep it" clause is superseded by D10**).
 
-**Decisions confirmed by Ferose 11 Oct 00:01 IST (D8, app-wide M1 items):** (1) Finance stops seeing customer contact details: YES (R3). (2) Engineers' Bills page narrowed to their own sites: YES (R5). (3) Engineers lose the all-sites list: YES (R6). (4) Finance and engineers keep in-app Drive: NO revocation (R7 withdrawn); role-scoped Drive (Finance: finance documents; engineers: engineering documents and photos) is a later phase, not M1; WhatsApp v1 still excludes Drive.
+**D8 (Ferose, 11 Oct 00:01 IST):** (1) Finance stops seeing customer contact details: YES (R3, app-wide). (2) ~~Engineers' Bills page narrowed to their own sites~~ **SUPERSEDED by D9.** (3) Engineers lose the all-sites list: YES (R6). (4) Finance and engineers keep in-app Drive; role-scoped Drive search is **deferred** to a later phase, not M1; WhatsApp v1 excludes Drive.
 
-## Checks run (rev3)
-- Evidence: Ferose's screenshots of Settings -> AI providers (23:39, 23:41 IST); Vercel CLI/API read-only checks (23:40 IST); Vercel docs for Fluid duration and Hobby cron.
-- Scoped source reads for citations: `roleDefinitions.ts:56-150`, `zanAppReadTools.ts:838-854`, `agentConversations.ts:534-570`, `sites.ts:26-66`, `bills.ts` route list, `financeDashboard.ts:111`, `timeouts.ts:26`.
-- The earlier direct DB read from the PC failed (`PrismaClientInitializationError`; the pulled production env likely has sensitive values blanked). No code, migrations, DB access, deploys, OCI/SSH, WhatsApp access, tests or builds in this revision.
+**D9 (00:05 IST, replaces D8 item 2):** engineers (erection, commissioning, service_team) access only site details, only for assigned sites; no finance of any kind (Bills, payables, receivables, invoices, vendor bills, expenses, payments, ledger, revenue). No read-only bills permission is added.
+
+**D10 (00:07 IST, broadest):** finance details only for Management, Finance, Owner/Admin and Super Admin. Sales, Ops/PM, erection, commissioning, service_team and Customers lose finance app-wide in REST and the assistant. "Finance" here includes invoices (proforma/tax), bills and vendor-invoice recording, payables, receivables, payments and advances, revenue and collections, ledger, TDS/GST exports, credit/debit notes, expenses, purchase orders and suppliers, and order value (DISCOVERY 4.3.1). Quotations are not included pending F1.
+
+## Checks run (rev4)
+- Read: Codex rev3 `REVIEW_REPORT.md`, DISCOVERY, REVIEW-M0, PLAN addendum, owner decisions.
+- Scoped source reads for citations only: `roleDefinitions.ts:1-150`, `constants.ts:162-191`, `middleware/auth.ts:53-65`, route gate greps in `routes/` (bills, invoices, payments, customers, credit-notes, expenses, ledgers, purchase-orders, quotations, customer-purchase-orders, customerPricing, savedItems, orders, sites, financeDashboard, products, vendors, dashboard), agent tool gates (`zanAppFinanceTools.ts`, `zanAppReadTools.ts`, `zanAppDetailTool.ts`, `zanAppWriteTools.ts`), `admin-web/src/lib/routeAccess.ts`.
+- No code change, migration, DB access, deploy, OCI/SSH, secrets, build or test run in this revision. Production grants and UI behaviour not verified against production.
 
 ## Open items
-1. Pilot users and verified numbers. 2. Pairing approach (owner present at M5). 3. TLS expiry check (read-only `openssl s_client`, domain from owner/provider base host). 4. Second VM: conditional on VM-A failing the M6 check. 5. HANDOVER provider list fix on master (not on this branch). 6. FreeLLMAPI base host, external limits, fallback health before M1 integration. 7. Remaining owner confirmation in DISCOVERY O9: acceptance of the trusted-bridge residual risk (the `service_team` confirmation is no longer open: D6). 8. M1: diff production role grants before the role-permission change (prod migration history has drifted).
+1. **F1-F7 for Ferose (DISCOVERY 4.3.8):** F1 quotations as finance (default no); F2 Sales "create invoice from quotation" (quotations.ts:316-318, any-of gate) removed by default; F3 Ops/PM vendor-bill workflow lost (roleDefinitions.ts:91; Bills pages, 3 tools, purchase-orders.ts:103); F4 order value hidden from engineers/service/Ops/PM; F5 Sales money views (order value, embedded customer orders); F6 customer portal: no customer invoice/balance path found in REST or the assistant, possible existing `/sites/:id/costs` leak (sites.ts:528, no customer check seen), UI not exercised; F7 purchase orders/suppliers treated as finance.
+2. Production role-grant diff before the migration (prod migration history has drifted); save the pre-change grant set for the inverse SQL.
+3. M2 disposable-DB spike for the atomic claim SQL (O10) and `waitUntil` spike; needs approval as an exception to fakes-only.
+4. Pilot users and verified numbers; pairing approach (owner present at M5); TLS expiry check; VM-B only if VM-A fails headroom; FreeLLMAPI base host, limits and fallback health before M1 integration; HANDOVER provider list fix on master; trusted-bridge residual-risk acceptance before M5.
 
 ## Gate questions for re-review
-1. Do 4.3 (R1-R8, sequencing, rollback, tests) and 4.4 (`siteScope`, gate, coverage tests) close B1 and B2, including Finance and Ops/PM site access and Drive treatment?
-2. Is `service_team` handled acceptably (engineer-scoped group, owner-confirmed D6) and is the R8 vendor-invoice removal (D7) with `vendorInvoiceRoles.test.ts` adequate?
-3. Is the trusted-bridge model plus tests an acceptable closure of M2 given the residual risk needs owner sign-off before M5?
-4. Does the lease -> claim -> ack flow close M3, and is the <=15 s post-claim window acceptable?
-5. Is the bridge-driven worker (Hobby, 300 s, daily cron only) a complete contract for M4, with the `waitUntil` spike deferred to M2?
-6. Are gates 1-4 as re-scored in DISCOVERY 10 supportable, in particular gate 3 now that "Free LLM API" is verified at priority 0?
+1. Do 4.3.1-4.3.11 (key set, role x key table, route and tool inventories with file:line, R-items, tests per route/tool, rollback) fully implement D9 and D10, including closing the non-key leaks R9/R10, without touching the four finance roles?
+2. Does 4.3.6 (P1-P12) enumerate every in-app path that returns customer contacts, with Finance keeping the billing fields it needs and a test per path?
+3. Is the atomic claim (slot table + earliest-per-sender eligibility + partial unique index + fencing) sufficient for global cap 2 and sender order, given the SQL is proven only in an M2 disposable-DB spike?
+4. Is the PLAN line-34 handling (addendum only, canonical statement in item 1) acceptable, or must line 34 be edited in place?
+5. Are the open F1-F7 owner confirmations correctly framed, and are gates 1-4 as re-scored in DISCOVERY 10 supportable?

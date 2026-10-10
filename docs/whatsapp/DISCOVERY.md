@@ -1,6 +1,6 @@
 # Zan WhatsApp assistant - M0 discovery (read-only)
 
-Date: 2026-10-10. Revision 3 (rev1 `fa6e4b9`/`f99ef60` and rev2 `4e909da` (+`61618cd` OCI facts) were both CHANGES REQUIRED; finding ids B1, B2, M1-M4, L1 in this file's section 4/6/7 refer to the rev2 re-review, see `REVIEW-M0.md`). Scope: M0 of `docs/whatsapp/PLAN.md`. Docs only: no code, schema or deploy change. "NV" = not verified (production data / live systems not accessible in M0). Everything below marked "proposed" is a contract for M1+ implementation, not current behaviour.
+Date: 2026-10-10; revised 2026-10-11 (rev4, on top of rev3c `abb0b73`; rev3 `ef380ca` was CHANGES REQUIRED, see `REVIEW-M0.md`). Revision 4 (rev1 `fa6e4b9`/`f99ef60` and rev2 `4e909da` (+`61618cd` OCI facts) were both CHANGES REQUIRED; finding ids B1, B2, M1-M4, L1 in this file's section 4/6/7 refer to the rev2 re-review, see `REVIEW-M0.md`). Scope: M0 of `docs/whatsapp/PLAN.md`. Docs only: no code, schema or deploy change. "NV" = not verified (production data / live systems not accessible in M0). Everything below marked "proposed" is a contract for M1+ implementation, not current behaviour.
 
 ## 0. Owner decisions (Ferose, 2026-10-10)
 
@@ -11,9 +11,11 @@ Date: 2026-10-10. Revision 3 (rev1 `fa6e4b9`/`f99ef60` and rev2 `4e909da` (+`616
 | D3 | Engineers see only their assigned sites |
 | D4 | Pilot targets approved: 2 concurrent turns, queue 10, p50 < 15 s, p95 < 45 s, bridge service memory < 100 MB, VM memory < 70%, > 10 GB disk free |
 | D6 | **Service team gets WhatsApp access** (confirmed 10 Oct 2026, 23:43 IST; supersedes the 23:42 answer): the `service_team` role (the "service engineer" of the owner's wording; there is no `service_engineer` key) has the same read-only access as engineers: assigned sites only, no finance |
-| D7 | **Engineers can no longer record vendor invoices in the app** (confirmed 10 Oct 2026, 23:43 IST): app-wide M1 role change removing `RECORD_VENDOR_INVOICE` from `erection_engineer` and `commissioning_engineer` (roleDefinitions.ts:102,113); `service_team` does not hold it today; Ops/PM (:91) and Finance (:131) keep it. Regression tests for the other roles (4.3 R8). This also removes the engineers' path to payables / vendor-bill tools |
-| D8 | **Confirmed by Ferose 11 Oct 00:01 IST** (app-wide M1 items): (1) Finance stops seeing customer contact details: YES (R3). (2) Engineers' Bills page narrowed to their own sites: YES (R5). (3) Engineers lose the all-sites list: YES (R6). (4) Finance and engineers do **not** lose in-app Drive (R7 withdrawn). Role-scoped Drive search (Finance: finance documents; engineers: engineering documents and photos) is a **later phase, not M1**; existing in-app Drive access is unchanged in M1; WhatsApp v1 still excludes Drive |
-| D5 | Hosting confirmed (10:26 PM IST): the bridge runs on OCI as in PLAN. Zan app users never touch OCI; they only use WhatsApp. The agents (Claude/Grok) may access the OCI servers. Fallback only: if the OCI capacity check fails, propose the second inspected VM or a larger approved instance per PLAN M6. The read-only OCI inspection stays REQUIRED before M3 and M5 (status: **pending**) |
+| D7 | **Engineers can no longer record vendor invoices in the app** (confirmed 10 Oct 2026, 23:43 IST): app-wide M1 role change removing `RECORD_VENDOR_INVOICE` from `erection_engineer` and `commissioning_engineer` (roleDefinitions.ts:102,113); `service_team` does not hold it today. Regression tests for the other roles (4.3 R8). This also removes the engineers' path to payables / vendor-bill tools. **Rev4: the clause "Ops/PM (:91) and Finance (:131) keep it" is superseded by D10** (Ops/PM loses it; only Finance and the admin trio keep it; flagged F3 for Ferose) |
+| D8 | **Confirmed by Ferose 11 Oct 00:01 IST** (app-wide M1 items): (1) Finance stops seeing customer contact details: YES (R3). (2) ~~Engineers' Bills page narrowed to their own sites: YES (R5)~~ **SUPERSEDED by D9 (00:05 IST): engineers get no Bills at all, nothing is narrowed to "own sites".** (3) Engineers lose the all-sites list: YES (R6). (4) Finance and engineers do **not** lose in-app Drive (R7 withdrawn). Role-scoped Drive search (Finance: finance documents; engineers: engineering documents and photos) is a **later phase, not M1**; existing in-app Drive access is unchanged in M1; WhatsApp v1 still excludes Drive |
+| D5 | Hosting confirmed (10:26 PM IST): the bridge runs on OCI as in PLAN. Zan app users never touch OCI; they only use WhatsApp. The agents (Claude/Grok) may access the OCI servers. Fallback only: if the OCI capacity check fails, propose the second VM (Oracle Linux, **uninspected**, conditional) or a larger approved instance per PLAN M6. Read-only OCI inspection: **VM-A inspected** (section 8; headroom OK with caution), TLS expiry still open, VM-B not inspected. Headroom is re-checked at M5 and measured at M6 |
+| D9 | **Ferose 11 Oct 00:05 IST (replaces his 00:01 answer 2):** engineers (`erection_engineer`, `commissioning_engineer`, `service_team`) can access **only site details, only for sites assigned to them**. **No finance at all:** no Bills page, payables, receivables, invoices, vendor bills, expenses, payments, ledger or revenue. The read-only bills permission suggested by Codex is **not** added. Implemented as removal of Bills and finance access app-wide (4.3: R5 superseded, R6, R8, R9, R10) |
+| D10 | **Ferose 11 Oct 00:07 IST (broadest; supersedes narrower finance wording and rev3's "Ops/PM and Finance keep vendor invoice recording"):** finance details are ONLY for Management, Finance, Owner/Admin and Super Admin. EVERY other role loses finance access app-wide, REST and assistant: Sales, Ops/PM, erection_engineer, commissioning_engineer, service_team, and Customers. Role x key table, routes, tools, tests, rollback: 4.3.1-4.3.11. Items for Ferose to confirm (Ops/PM, Sales, customer portal): 4.3.8 |
 
 ## 1. Verified paths and revisions
 
@@ -107,7 +109,7 @@ Live provider rows (screenshots, 2026-10-10 23:39/23:41 IST; base host and keys 
 | get_receivables / get_revenue_summary | Y | - | - | - | - | - | Y |
 | get_payables / search_vendor_bills | Y | - | **Y** | **Y** | **Y** | - | Y |
 | get_document_detail | all types | by type | work_order | work_order, complaint | same | same | quotation, invoice, PO, expense |
-| 9 write tools (as seeded today) | by perm | quotation, saved item, customer PO | status update, vendor invoice | status update (vendor invoice removed by D7/R8) | same | - | expense, PO, invoice, quotation, vendor invoice |
+| 9 write tools (as seeded today) | by perm | quotation, saved item, customer PO | status update, vendor invoice | status update, vendor invoice (removal is proposed only: D10/R8, 4.3) | same | - | expense, PO, invoice, quotation, vendor invoice |
 
 Settings, provider, credential or permission-admin exposure through any tool: **none today** (settings are REST-only).
 
@@ -116,9 +118,9 @@ Settings, provider, credential or permission-admin exposure through any tool: **
 | Plan group | Existing role(s) | WhatsApp access |
 |---|---|---|
 | Admin / Management | `super_admin`, `owner_admin`, `management` (Owner/Admin = Super Admin) | Full read policy; settings tools never exposed (D1) |
-| Finance | `finance` | Finance read tools + site details; after M1: no work-order detail, no customer contact fields in tool output. In-app finance writes are **kept** (4.3); WhatsApp has no writes for anyone |
-| Engineers | `erection_engineer`, `commissioning_engineer`, **`service_team`** (seed key; there is no `service_engineer` role, earlier text was wrong: roleDefinitions.ts:94-120) | Site details for **assigned sites only** (D3); no finance, no payables/vendor bills (after M1, D7 removes `RECORD_VENDOR_INVOICE` from erection and commissioning, R8). `service_team` is in the engineer-scoped group **by owner decision D6** (10 Oct 2026, 23:43 IST); it holds `VIEW_SITE_STATUS`, `MANAGE_COMPLAINTS`, `ACT_ASSIGNED_WORK_ORDERS` (roleDefinitions.ts:116-119) and no finance permission. Same read-only WhatsApp policy and the same assigned-site rule (4.4) as engineers |
-| Sales, Ops/PM | `sales`, `ops_pm` | Site details plus the read tools their permissions already grant (V1 default; Ops/PM payables unchanged unless Ferose says otherwise) |
+| Finance | `finance` | Finance read tools + site details; after M1: no work-order detail, **no customer contact fields in any REST or tool output (R3, 4.3.6)**. In-app finance writes are **kept** (4.3); WhatsApp has no writes for anyone |
+| Engineers | `erection_engineer`, `commissioning_engineer`, **`service_team`** (seed key; there is no `service_engineer` role: roleDefinitions.ts:94-120) | **Site details for assigned sites only** (D9, D3) and nothing else financial: after M1 no Bills, payables, receivables, invoices, vendor bills, expenses, payments, ledger or revenue, in REST or the assistant (D9/D10; `RECORD_VENDOR_INVOICE` removed from erection and commissioning, R8; `/sites/:id/costs` and order value closed, R9/R10). `service_team` is in this group **by owner decision D6**; it holds `VIEW_SITE_STATUS`, `MANAGE_COMPLAINTS`, `ACT_ASSIGNED_WORK_ORDERS` (roleDefinitions.ts:116-119) and no finance permission. Same read-only WhatsApp policy and assigned-site rule (4.4) as engineers |
+| Sales, Ops/PM | `sales`, `ops_pm` | Site details plus the read tools their permissions grant **after D10**: no finance (Ops/PM loses `RECORD_VENDOR_INVOICE`, so no payables or vendor bills; Sales keeps quotations pending F1/F2, 4.3.8) |
 | Customers | `customer` (`customerId` set) | **Silent** (no reply) |
 | Unknown | no match / inactive / blocked / unsupported role | Silent drop |
 
@@ -127,7 +129,7 @@ Settings, provider, credential or permission-admin exposure through any tool: **
 | # | Conflict | Evidence |
 |---|---|---|
 | C1 | No role-to-tool allowlist exists; one `allTools` array is passed unchanged (registry.ts:8-17; agentConversations.ts:148-153); WhatsApp policy needs a new deny-by-default per-group allowlist on top of permissions | registry.ts; types.ts:5-16 |
-| C2 | Engineers and Ops/PM hold `record_vendor_invoice` (engineers' grant removed by D7/R8) -> can call `get_payables`, `search_vendor_bills`, `create_vendor_invoice` (engineers seeing finance) | roleDefinitions.ts:91,102,113; zanAppFinanceTools.ts:168,336 |
+| C2 | Engineers and Ops/PM hold `record_vendor_invoice` -> can call `get_payables`, `search_vendor_bills`, `create_vendor_invoice` (engineers and Ops/PM seeing finance). Resolved by D10: the key is removed from all three roles (R8) | roleDefinitions.ts:91,102,113; zanAppFinanceTools.ts:168,336 |
 | C3 | Drive tools deny `customerId` users but have no permission or document-level scope check for any other user: Finance can read non-finance files and engineers can read finance files | driveTool.ts:9-15,37-40,50-52,74-80 |
 | C4 | Assigned-site scope not implemented: internal engineers see all sites' timelines; vendor engineers scoped by vendor, not `assignedEngineerId`; results include company-wide counts | zanAppReadTools.ts:1018,1038-1062 |
 | C5 | Engineers cannot list sites (search needs `manage_orders`); "assigned-site details" unachievable today | zanAppReadTools.ts:850,1014 |
@@ -148,11 +150,12 @@ A tool runs on WhatsApp only if it is listed for the sender's group **and** the 
 |---|---|---|---|---|---|---|
 | Site / order / site-status search and detail (scoped read, 4.4) | Y | Y | Y | Y | Y* (assigned sites) | silent |
 | Work orders / complaints (list, detail) | Y | - (after M1) | - | Y | Y* (assigned sites) | silent |
-| Receivables, revenue, invoices, quotations, POs, expenses, ledger, credit notes, advances, payments/TDS | Y | Y | quotations | - | - | silent |
-| Payables, vendor bills | Y | Y | - | Y | - (after M1) | silent |
-| Customer / supplier / vendor search | Y | suppliers only (after M1) | customers | - | - | silent |
+| Receivables, revenue, invoices, POs, expenses, ledger, credit notes, advances, payments/TDS | Y | Y | - (D10) | - | - | silent |
+| Quotations (not finance: F1) | Y | Y | Y | - | - | silent |
+| Payables, vendor bills | Y | Y | - | - (D10; was Y) | - (D9/D10) | silent |
+| Customer / supplier / vendor search | Y | suppliers only (after M1) | customers (contacts included) | - | - | silent |
 | `get_document_detail` | dispatched by document type; each branch rechecks permission + row scope | finance types only | quotation | work_order | work_order, complaint, assigned only | silent |
-| Drive x3 | **excluded from v1** (no per-user/site classification at retrieval or read time; name or prompt filtering is not enough) | - | - | - | - | - |
+| Drive x3 | **excluded from v1**; role-scoped Drive search is **deferred to a later phase, not M1** (D8-4). In-app Drive unchanged in M1. No per-user/site classification at retrieval or read time exists; name or prompt filtering is not enough | - | - | - | - | - |
 | 9 write tools, confirm/reject | **absent for all** | - | - | - | - | - |
 | Settings, providers, credentials, permission admin | blocked for all incl. Super Admin (D1); no such tool exists today (C10) | - | - | - | - | - |
 
@@ -160,35 +163,162 @@ WhatsApp never creates or confirms a pending action: write tools are not in any 
 
 Confirm-route fix (M1, concrete). Today `confirmOrReject` checks conversation ownership and pending status only, then calls `executeConfirmedAction(action.toolName, ...)` (agentConversations.ts:537-565). Change: before executing, (1) reload the caller's permissions (as `authenticate` does, middleware/auth.ts:22-45), (2) look up `getToolByName(action.toolName)` and require the same permission predicate that the tool's own write handler applies (e.g. `RECORD_VENDOR_INVOICE` for vendor invoices, zanAppWriteTools.ts:958; `MANAGE_ORDERS` for customer POs, zanAppWriteTools.ts:1116), exported as one `canRunWrite(auth, toolName)` helper used by both the tool handler and the confirm route, (3) reject with 403 and leave the action `pending` on failure, and (4) reject when the conversation's `channel` is `whatsapp`. Tests: `agentConfirmPermission.test.ts` (permission revoked between propose and confirm -> 403, nothing written; each of the 9 write tools has an allowed and a denied role; whatsapp-channel conversation -> rejected).
 
-### 4.3 App-wide M1 role changes (D2) and regression checks
+### 4.3 App-wide M1 role changes (D2, D9, D10) and regression checks
 
-Correction to rev2: rev2 said Finance "loses write tools". That is **withdrawn**. Finance's seeded grants are finance-document work: `MANAGE_QUOTATIONS, MANAGE_INVOICES, RECORD_PAYMENTS, MANAGE_PURCHASE_ORDERS, MANAGE_EXPENSES, VIEW_FINANCE_DASHBOARD, RECORD_VENDOR_INVOICE, APPROVE_VENDOR_INVOICE, VIEW_LEDGERS, MANAGE_CREDIT_NOTES, VIEW_ORDERS` (roleDefinitions.ts:121-138), and the plan requires in-app capabilities and confirmation rules to be preserved (PLAN.md:28; OWNER-HANDOFF.md:28). **Principle: M1 revokes no role grant for Finance, and the only engineer grant it revokes is `RECORD_VENDOR_INVOICE` from erection and commissioning (R8, owner decision D7).** The other D2 restrictions are implemented by (a) tightening read gates in tool handlers and (b) row/field scoping.
+Correction history: rev2 said Finance "loses write tools"; withdrawn in rev3. Rev3/rev3c let Ops/PM keep vendor-invoice recording (D7) and narrowed engineers' Bills to own sites (D8-2). **Both are superseded in rev4 by D10 (00:07 IST) and D9 (00:05 IST).** Current principle:
 
-**Change list (proposed M1, seed `roleDefinitions.ts` + an idempotent upsert migration, written not applied; prod grants NV and diffed by the owner first):**
+- **Finance details (everything in 4.3.1) belong ONLY to `super_admin`, `owner_admin`, `management` and `finance`.** Every other role loses finance access app-wide, in REST **and** in the assistant: `sales`, `ops_pm`, `erection_engineer`, `commissioning_engineer`, `service_team`, `customer` (D10).
+- Engineers (`erection_engineer`, `commissioning_engineer`, `service_team`) additionally see **site details only, only for sites assigned to them** (D9, D3, R6).
+- The four finance-allowed roles keep every grant and every write flow (R1). No new permission is added (rev3's `VIEW_PAYABLES` is withdrawn: after D10 no non-finance role needs a payables read, so the existing gate is simply narrowed, R4). Codex's suggested read-only bills permission is **not** added (D9).
+- Mechanism (permissions are DB rows, "data not code"): idempotent migration deleting the finance keys from the six losing roles + `revoke:` entries in the seed (roleDefinitions.ts:17-20 supports this) + handler fixes only where a route/tool leaks finance data through a **non-finance** key (R9, R10, R3). Tool handlers already mirror their REST route's key, so revoking the key closes both.
 
-| # | Role(s) | Permission / handler change | Files | Effect and what is explicitly kept |
+#### 4.3.1 What "finance" includes (the key set)
+
+Nine keys by the app's own definitions (constants.ts:162-175, labels roleDefinitions.ts:49-57), plus one read key:
+
+| Key | Covers (app's own label) |
+|---|---|
+| `manage_invoices` | invoices incl. proforma and tax invoices; also gates payment lists and customer-pricing reads |
+| `record_payments` | payments received and made, advances, allocations (collections) |
+| `manage_purchase_orders` | suppliers, purchase orders (cost documents; not payables per the money rule, but finance-keyed, so included) |
+| `manage_expenses` | expense book |
+| `view_finance_dashboard` | finance dashboard, receivables, payables, GST summary, monthly revenue reports |
+| `record_vendor_invoice` | vendor invoice (bill) capture; read gate of Bills list/detail |
+| `approve_vendor_invoice` | verify/approve/reject/cancel vendor invoices; vendor payments list |
+| `view_ledgers` | party ledgers, TDS register, GST returns exports |
+| `manage_credit_notes` | credit notes and debit notes |
+| `view_orders` | read-only order value (held only by Finance in the seed, roleDefinitions.ts:137) |
+
+**Not included, pending Ferose (F1):** `manage_quotations`. Quotations are pre-sales documents and are not in D10's list; they stay with Sales unless Ferose says otherwise.
+
+#### 4.3.2 Role x removed keys (seed lines in roleDefinitions.ts)
+
+| Role (seed lines) | Finance keys seeded today | Removed by D10 in M1 | Allowed roles: unchanged |
+|---|---|---|---|
+| `sales` (:78-82) | none (`manage_quotations` :81, see F1/F2) | none by default; defensive revoke of the 10 keys against prod drift | |
+| `ops_pm` (:83-93) | `record_vendor_invoice` (:91) | `record_vendor_invoice` | |
+| `erection_engineer` (:94-104) | `record_vendor_invoice` (:102) | `record_vendor_invoice` | |
+| `commissioning_engineer` (:105-115) | `record_vendor_invoice` (:113) | `record_vendor_invoice` | |
+| `service_team` (:116-120) | none | none by default; defensive revoke | |
+| `customer` (:140-149) | none (but holds `view_site_status` :144, a leak path, R9) | none; defensive revoke | |
+| `super_admin` (:61-65), `owner_admin` (:66-71), `management` (:72-77) | all (ALL / ALL_EXCEPT_SETTINGS, :25-29) | **unchanged** | yes |
+| `finance` (:121-139) | all ten | **unchanged** | yes |
+
+The migration deletes all ten keys of 4.3.1 from the six losing roles (idempotent `DELETE ... WHERE role.key IN (...) AND permission.key IN (...)`), so drifted production grants are also cleaned. Prod grants are NV: M1 first diffs production role grants and saves the pre-change grant set; the inverse SQL is generated from that saved set (Rollback).
+
+#### 4.3.3 REST routes each key gates (apps/api/src/routes, `requirePermission` is any-of: middleware/auth.ts:53-60)
+
+| Key | Routes (file:line) |
+|---|---|
+| `manage_invoices` | invoices.ts:65,111,162,207,345,375,403,505; payments.ts:80; quotations.ts:316-318 (create-invoice, see F2); customers.ts:15-20,32,168; customerPricing.ts:9; savedItems.ts:12-16 (read) |
+| `record_payments` | invoices.ts:422,505,521,606; payments.ts:21,80,104-106; bills.ts:237,452,506,604; customers.ts:168; purchase-orders.ts:85 |
+| `manage_purchase_orders` | purchase-orders.ts:32,37,47,61,103,156,232,251,267,330; sites.ts:528 (`/costs`) |
+| `manage_expenses` | expenses.ts:11,30,53,81 |
+| `view_finance_dashboard` | financeDashboard.ts:24,79,111,136,176; sites.ts:528 |
+| `record_vendor_invoice` | bills.ts:116,140,210,254,262 (CAPTURE, bills.ts:33); purchase-orders.ts:103; admin-web nav routeAccess.ts:33 |
+| `approve_vendor_invoice` | bills.ts:237,254,262,346,360,374,432 (APPROVE, bills.ts:34); purchase-orders.ts:85 |
+| `view_ledgers` | ledgers.ts:14 (all `/ledgers/*`: customer, supplier, tds, gst); bills.ts:237; customers.ts:19,168; purchase-orders.ts:32,37,85 |
+| `manage_credit_notes` | credit-notes.ts:47,69,130,147,219,253,283; debit notes :302,318,347,357,381 |
+| `view_orders` | orders.ts:13,23 |
+| not key-gated (leaks, R9/R10) | sites.ts:28-52,57-88 (Site list/detail include `order.value`, nulled only for customers, :49-52,:88); sites.ts:524-560 (`/costs`: bill allocations, expenses, POs, totals, gated by `view_site_status` which every non-finance role and the customer role hold, :528; no customer or assignment check seen in :530-560, to verify in M1); orders.ts:13-28 (order value; needs `manage_orders`/`view_orders`); customers.ts:30-52 (customer detail embeds orders with value) |
+
+Other routes unaffected: bills.ts:395 delete uses `requireRole(super_admin, owner_admin)`.
+
+#### 4.3.4 Assistant tools each key gates (apps/api/src/agent/tools)
+
+| Key(s) | Tools (definition : permission check) |
+|---|---|
+| `view_finance_dashboard`, `approve_vendor_invoice`, `record_vendor_invoice` | `get_payables` (zanAppFinanceTools.ts:144,168), `search_vendor_bills` (:312,336): the check accepts `record_vendor_invoice` alone, which is how engineers and Ops/PM reach them (C2) |
+| `view_finance_dashboard`, `manage_invoices` | `get_receivables` (:509,526) |
+| `view_finance_dashboard` | `get_revenue_summary` (:703,726) |
+| `manage_invoices` | `search_invoices` (zanAppReadTools.ts:330,358); `create_invoice` (zanAppWriteTools.ts:508,553); `get_document_detail` invoice (zanAppDetailTool.ts:55) |
+| `manage_purchase_orders`, `view_ledgers` | `search_purchase_orders` (readTools:430,445); `search_suppliers` (:148,161); `create_purchase_order` (writeTools:121,188); detail PO (detailTool:102) |
+| `manage_expenses` | `search_expenses` (readTools:489,506); `create_expense` (writeTools:29,51); detail expense (detailTool:112) |
+| `view_ledgers` | `get_customer_ledger` (readTools:1298,1316) |
+| `manage_credit_notes` | `search_credit_notes` (readTools:1330,1345) |
+| `record_payments`, `manage_invoices`, `view_ledgers` | `get_customer_advances` (readTools:1385,1397); `search_payments` (:1497,1521) |
+| `record_vendor_invoice` | `create_vendor_invoice` (writeTools:914,958) |
+| quotation/invoice/PO keys | `search_saved_items` (readTools:1184,1196), `get_customer_pricing` (:1217,1230), `create_saved_item` (writeTools:752,770): stay available to Sales through `manage_quotations` (F1); they lose the `manage_invoices` / `manage_purchase_orders` alternatives automatically |
+
+Every handler already checks the same key as its REST route, so the migration closes REST and tools together; the only handler edits are R3, R4, R9, R10.
+
+#### 4.3.5 Change list (proposed M1; seed + idempotent migration written, not applied; prod grants NV and diffed first)
+
+| # | Role(s) | Change | Files | Status |
 |---|---|---|---|---|
-| R1 | Finance | **No grant removed.** Keeps all 9-tool finance writes and the in-app create -> confirm flow for quotation, invoice, PO, expense, vendor invoice | roleDefinitions.ts:121-138 (unchanged) | Kept. Denial test only (below) |
-| R2 | Finance | `get_document_detail` work_order / complaint branches require `MANAGE_WORK_ORDERS` / `MANAGE_COMPLAINTS` / `ACT_ASSIGNED_*` and the scope predicate (4.4); Finance holds none of these in the seed, so seeded behaviour is unchanged. A **drifted prod grant** of `MANAGE_WORK_ORDERS` to finance is reported by the grant diff; revoking it is an owner-approved data step, with its inverse SQL recorded in the diff report | zanAppDetailTool.ts:139-168 | Closes C6 |
-| R3 | Finance | Customer-contact fields (phone, email, address contacts) are omitted from the **agent tool** output for roles without `MANAGE_ORDERS`; GST/billing identity, name and outstanding stay. REST `/customers` is unchanged because quotation/invoice forms need it (customers.ts:32) | zanAppReadTools.ts:81 | Closes C7. **Confirmed by Ferose 11 Oct 00:01 IST (D8-1)** |
-| R4 | erection, commissioning (hold `RECORD_VENDOR_INVOICE`) | Read gate of `get_payables` and `search_vendor_bills` no longer accepts `RECORD_VENDOR_INVOICE` alone: it becomes `VIEW_FINANCE_DASHBOARD` or `APPROVE_VENDOR_INVOICE` or new `VIEW_PAYABLES`. `VIEW_PAYABLES` is granted to `ops_pm` (keeps Ops/PM payables as today) and to the admin trio via ALL | zanAppFinanceTools.ts:168,336; new permission row | For Ops/PM and others the gate is aligned; engineers lose the payables/bills read (and, per R8/D7, the vendor-invoice grant itself, so `create_vendor_invoice` and the REST capture routes (bills.ts:33,140,210) are also denied to them). The REST payables report already needs `VIEW_FINANCE_DASHBOARD` (financeDashboard.ts:111), so engineers never had it there: the tool is being aligned to REST |
-| R8 | erection, commissioning (`service_team` does not hold it, roleDefinitions.ts:94-120) | **Owner decision D7.** Remove `RECORD_VENDOR_INVOICE` from `erection_engineer` and `commissioning_engineer` in the seed (roleDefinitions.ts:102,113) plus an idempotent migration deleting those two role grants (written, not applied; prod grants NV, diffed first). `create_vendor_invoice` and the REST capture routes then deny these roles through their existing permission checks | roleDefinitions.ts:102,113; zanAppWriteTools.ts:958; bills.ts:33,140,210 | Engineers can no longer record vendor invoices in the app or via the agent. **This also removes their path to `get_payables` / `search_vendor_bills`** (the old `RECORD_VENDOR_INVOICE` read gate, C2), so R4 is subsumed for these roles and stays as the gate alignment for everyone else. **Kept:** Ops/PM (:91) and Finance (:131) hold the permission, including Finance's write flow (R1). Data-changing: inverse SQL recorded (Rollback) |
-| R5 | erection, commissioning | REST `GET /bills` and `GET /bills/:id` (bills.ts:116,254, gated by CAPTURE = record or approve) return, for callers holding `RECORD_VENDOR_INVOICE` but none of `APPROVE_VENDOR_INVOICE`, `VIEW_FINANCE_DASHBOARD`, `VIEW_LEDGERS`, only bills they recorded (recorder field to be confirmed against the schema in M1). Ops/PM unchanged | bills.ts:116,254 | Engineers still see and edit their own bills. **Confirmed by Ferose 11 Oct 00:01 IST (D8-2)**: this narrows the in-app Bills page for engineers |
-| R6 | all non-customer | Site read scoping: new shared predicate `siteScope(auth)` and gate change in `search_orders_and_sites` (4.4). Internal engineers/service_team narrowed to assigned sites in the tool **and** REST `GET /sites`, `GET /sites/:id` (sites.ts:28,57) | zanAppReadTools.ts:843-851; sites.ts:28-66 | **Confirmed by Ferose 11 Oct 00:01 IST (D8-3)**, impact: engineers lose the all-sites list in admin-web/mobile (D3 applied app-wide, per D2) |
-| R7 | Finance, engineers | **Withdrawn (D8-4, Ferose 11 Oct 00:01 IST).** No `USE_DRIVE_ASSISTANT` permission and no change to the 3 Drive tools in M1: Finance and engineers keep their existing in-app Drive access. Role-scoped Drive search (Finance: finance documents; engineers: engineering documents and photos) is a **later phase, not M1**, and needs per-document classification first (driveTool.ts:9-15,37-80). WhatsApp: Drive excluded for everyone regardless (v1) | - | No file change in M1. Customers still denied as today |
+| R1 | the four finance-allowed roles | **No grant removed.** Finance keeps all finance writes and the create -> confirm flow (quotation, invoice, PO, expense, vendor invoice) | roleDefinitions.ts:61-77,121-139 (unchanged) | Kept |
+| R2 | Finance | `get_document_detail` work_order / complaint branches require `MANAGE_WORK_ORDERS` / `MANAGE_COMPLAINTS` / `ACT_ASSIGNED_*` plus the scope predicate (4.4); Finance holds none in the seed. A drifted prod grant is reported by the grant diff; revoking it is owner-approved with inverse SQL | zanAppDetailTool.ts:139-168 | Closes C6 |
+| R3 | Finance (and every role without `manage_orders`) | **Customer contact details are removed everywhere a customer is returned**, app-wide, REST and assistant. Contacts (`contacts[]`: name, phone, email of the customer's login users, schema `Customer.contacts`) are returned only to holders of `manage_orders` (Sales and the admin trio). **Kept for Finance:** name, `gstin`, `state`, `billingAddress`, `address`, `openingBalance` (the billing identity needed to raise and read finance documents). Path inventory and per-path tests in 4.3.6. Confirmed by Ferose 11 Oct 00:01 IST (D8-1); a "customer outstanding" field is **not** returned by `search_customers` today (zanAppReadTools.ts:92-98), so rev3's "outstanding stays" is withdrawn | see 4.3.6 | Confirmed |
+| R4 | all | `get_payables` / `search_vendor_bills` read gate narrowed to `VIEW_FINANCE_DASHBOARD` or `APPROVE_VENDOR_INVOICE` (drop `RECORD_VENDOR_INVOICE` alone). With D10 the only non-finance holders lose the key anyway; this is defence in depth against drift. `VIEW_PAYABLES` (rev3) **withdrawn** | zanAppFinanceTools.ts:168,336 | Replaces rev3 R4 |
+| R5 | erection, commissioning | **SUPERSEDED by D9/D10 (rev4).** The rev3c "Bills narrowed to own sites" is dropped: engineers get **no Bills at all** (no list, detail, capture, edit). Their access to `GET /bills`, `GET /bills/:id` (bills.ts:116,254) ends because `RECORD_VENDOR_INVOICE` is removed (R8). No recorder-field filter and no read-only bills permission is added | bills.ts:33,116,254 | Superseded |
+| R6 | erection, commissioning, service_team (+ all site readers) | Site read scoping: shared `siteScope(auth)` (4.4); engineers see **assigned sites only**, in tool and REST `GET /sites`, `GET /sites/:id` and every other site-keyed read they can reach (D9, D3). Engineers lose the all-sites list (D8-3, confirmed) | zanAppReadTools.ts:843-851; sites.ts:28-66 | Confirmed |
+| R7 | Finance, engineers | **Withdrawn (D8-4).** Drive tools and in-app Drive unchanged in M1. Role-scoped Drive search is **deferred to a later phase, not M1**. WhatsApp v1 excludes Drive | - | Deferred |
+| R8 | ops_pm, erection, commissioning (not `service_team`) | **Subsumed by D10.** Remove `RECORD_VENDOR_INVOICE` from `ops_pm` (roleDefinitions.ts:91), `erection_engineer` (:102), `commissioning_engineer` (:113). Rev3's "Ops/PM and Finance keep vendor invoice recording" is **superseded**: only Finance and the admin trio record vendor invoices. Seed `revoke:` + idempotent migration (R-all below) | roleDefinitions.ts:91,102,113; bills.ts:33,116,140,210,254,262; purchase-orders.ts:103; zanAppWriteTools.ts:958; zanAppFinanceTools.ts:168,336 | Ops/PM impact: F3 |
+| R-all | sales, ops_pm, erection, commissioning, service_team, customer | Idempotent migration deleting the ten finance keys (4.3.1) from these six roles; seed `revoke:` lists for the five staff roles | roleDefinitions.ts (new `revoke` entries), migration (new, not applied) | New (D10) |
+| R9 | customer, service_team, ops_pm, engineers, sales | `GET /sites/:id/costs` is gated by `view_site_status` (sites.ts:528), which these roles hold, and returns bill allocations, expenses, POs and totals. Change the gate to `MANAGE_PURCHASE_ORDERS` or `VIEW_FINANCE_DASHBOARD` (finance keys) and drop `VIEW_SITE_STATUS`; hide `SiteCostsSection.tsx` in admin-web for roles without them. Verify in M1 whether customers could reach it today (no customer check seen) | sites.ts:524-560; admin-web components/SiteCostsSection.tsx | New (D10); possible existing leak |
+| R10 | engineers, service_team, ops_pm, customer | `order.value` (contract value) is nulled in `GET /sites` and `GET /sites/:id` for every caller **without `MANAGE_ORDERS` or `VIEW_ORDERS`** (today only customers, sites.ts:49-52,88); same in agent site/order output | sites.ts:49-52,88; zanAppReadTools.ts (orders/sites output) | New (D10); F4 |
 
-**Sequencing:** (1) migration step A (additive, idempotent upsert of the `VIEW_PAYABLES` Permission row and its role grants; no Drive permission, R7 withdrawn; grants are a superset of what the new gates need, so no behaviour changes), applied by the owner after the prod grant diff; (2) deploy API with the handler/REST changes (R2-R7), API first then admin-web per HANDOVER s5; (3) R8 migration step B (idempotent delete of the two engineer `RECORD_VENDOR_INVOICE` grants, written not applied, owner-approved after the grant diff; the only revoking step); (4) only afterwards enable the WhatsApp channel (M3+).
+Items needing Ferose's confirmation (flagged, not decided): see 4.3.8.
 
-**Rollback:** redeploy the previous API build. Step A only adds rows, so the previous code still works against the new data; the extra permission rows are harmless and may stay. The data-changing items are step B (R8) and the optional R2 drift revoke; each has recorded inverse SQL (R8: re-insert the two `RECORD_VENDOR_INVOICE` role grants for `erection_engineer` and `commissioning_engineer`).
+#### 4.3.6 Customer contact paths (R3): every in-app path that returns customer contacts
 
-**Named tests (fakes only; each listed in `apps/api/package.json` "test"):**
-- `agentRoleMatrix.test.ts`: for super_admin, owner_admin, management, sales, ops_pm, finance, erection, commissioning, service_team, customer and a vendor-engineer user, every tool's allow/deny before vs after; only the deltas R2-R6 and R8 may differ (R7 withdrawn: Drive tool allow/deny unchanged for every role).
-- `agentFinanceWrites.test.ts`: finance in-app propose -> confirm still succeeds for quotation, invoice, PO, expense, vendor invoice; Ops/PM `create_vendor_invoice` still succeeds; erection and commissioning `create_vendor_invoice` is denied (R8), `service_team` stays denied.
-- `vendorInvoiceRoles.test.ts` (R8 regression): `RECORD_VENDOR_INVOICE` absent from erection and commissioning seeds, present for ops_pm, finance and the admin trio; REST `/bills` capture routes deny the two engineer roles and allow ops_pm, finance, admin; engineers' `get_payables` / `search_vendor_bills` denied; no other role's permission set changes.
-- `restPermissionsUnchanged.test.ts`: direct REST access per role for `/customers`, `/bills`, `/orders`, `/sites`, `/purchase-orders`, `/quotations`; only R5, R6 and R8 deltas differ; customer/vendor tenant scoping unchanged.
-- `whatsappPolicy.test.ts`: WhatsApp denial for every write tool, settings, Drive and out-of-group tools, for each role, including Super Admin.
-- `roleDrift.test.ts`: seeded roles, and an upgrade over a drifted grant set (extra/missing grants), both end in the intended state; `VIEW_PAYABLES` present after step A; Finance and engineer Drive tool access unchanged (R7 withdrawn).
-- `routeInventory.test.ts`: fails if a route under `routes/` that reads site-, work-order-, complaint- or bill-keyed data for non-customer roles is not registered as scoped or explicitly exempt, so REST coverage is enumerated rather than assumed.
+Billing fields Finance keeps (never stripped): `id`, `name`, `gstin`, `state`, `billingAddress`, `address`, `openingBalance`, `openingBalanceDate`. A shared helper `stripCustomerContacts(auth, customer)` (`contacts` removed unless `MANAGE_ORDERS`) is used by every path below; server-side notifications that read contacts internally (invoices.ts:359-363,486; quotations.ts:251-255) are **not** responses and are unchanged.
+
+| # | Path | Returns contacts today | Finance reaches it via | Fix | Test |
+|---|---|---|---|---|---|
+| P1 | `GET /customers` customers.ts:12-27 (contacts :21) | name, phone, email | `manage_invoices`, `manage_quotations`, `view_ledgers` (:15-20) | strip unless `manage_orders` | `customerContacts.rest.test.ts`: finance gets customers without `contacts`, with name/gstin/state/billing fields; sales/admin still get contacts |
+| P2 | `GET /customers/:id` customers.ts:30-52 (contacts :42; also embeds orders/site) | name, phone, email | `manage_invoices`, `manage_quotations` (:32) | strip contacts; embedded `orders[].value` per R10 | same file: detail |
+| P3 | search/export: no separate customers search or export route exists (verified: customers.ts has list, detail, create, update, delete, advances) | - | - | none; test asserts no new route returns contacts (routeInventory) | `routeInventory.test.ts` |
+| P4 | `GET /invoices/:id` invoices.ts:31-34 (`contacts take 1`) | name, phone, email | `manage_invoices` | drop the `contacts` select from the response include | `customerContacts.rest.test.ts`: invoice detail |
+| P5 | `GET /quotations/:id` quotations.ts:129-132 (`contacts take 1`); list `customer: true` :81 (scalars only) | name, phone, email | `manage_quotations` (Finance seeded) | strip unless `manage_orders` | same file |
+| P6 | `GET /orders/:id` orders.ts:28 (customer.contacts :28); list `customer: true` :17 | name, phone, email | `view_orders` (Finance) | strip unless `manage_orders` | same file |
+| P7 | credit notes (credit-notes.ts:40,56), ledgers (ledgers.ts:63), payments (payments.ts:87), financeDashboard (:86), customer POs (customer-purchase-orders.ts:59,78), gstExport (services/gstExport.ts:74,102) | no contacts (customer select name/gstin/state/address only) | - | none; regression test pins these shapes | `customerContacts.rest.test.ts` shape pins |
+| P8 | agent `search_customers` readTools:72-100 (contacts :94-97) | name, phone, email | `manage_invoices`, `manage_quotations` (:81) | strip unless `manage_orders` | `customerContacts.agent.test.ts` |
+| P9 | agent `get_document_detail` customer branch detailTool:24-35 | full customer | needs `manage_orders` (:25) | no change (Finance already denied) | same file: finance denied |
+| P10 | agent `get_document_detail` quotation/invoice branches detailTool:45-60 (customer select name/gstin/state/address) | no contacts | - | pin | same file |
+| P11 | agent order branch detailTool:123-136 (`customer: true`, scalars) | none | needs `manage_orders` | pin | same file |
+| P12 | PDFs / print pages: admin-web invoices/[id]/print and quotations/[id]/print render P4/P5 responses; no server-side PDF generator in apps/api | via P4/P5 | - | follow from P4/P5; UI test that print pages render without contacts | `apps/admin-web/test` (print render with contact-less payload) |
+
+The admin-web customers page (`/customers`, routeAccess.ts:13 allows `manage_invoices`/`manage_quotations`) keeps working for Finance without the contacts column.
+
+#### 4.3.7 UI nav (secondary; the backend is authoritative)
+
+admin-web builds nav from permissions: `ROUTE_PERMISSIONS` (lib/routeAccess.ts:13-45) filtered by `hasPermission` in Nav.tsx:428,465,505. Once the keys are revoked: `/finance/*`, `/invoices`, `/purchase-orders`, `/expenses`, `/reports/finance|tds|gst-returns`, `/finance/vendor-invoices` links disappear for the six roles; `LANDING_PRIORITY` (routeAccess.ts:49) already falls through by permission. Add: hide `SiteCostsSection.tsx` and order value on the site page for roles without finance/order keys. No UI-only enforcement is relied upon. `apps/mobile` is untouched (never runtime-tested); its finance calls, if any, are denied by the same REST gates.
+
+#### 4.3.8 Items Ferose must confirm (impact of D10 stated explicitly)
+
+| # | Question | Workflows / screens affected |
+|---|---|---|
+| F1 | Is `manage_quotations` finance? Default here: **no**, Sales keeps quotations | If yes: Sales loses Quotations pages (`/quotations`, quotations.ts:85-318), customer pricing and saved-items reads, `search_quotations`, `create_quotation`, and `/customers` read via that key (still has it through `manage_orders`) |
+| F2 | Sales converts a quotation to an invoice today: `POST /quotations/:id/create-invoice` accepts `manage_quotations` **or** `manage_invoices` (quotations.ts:316-318), so Sales (quotations only) can raise a proforma/tax invoice. D10 implies Sales must not. Default here: gate becomes `manage_invoices` only | Sales loses "create invoice from quotation" (button on `/quotations/[id]`); Finance does it |
+| F3 | **Ops/PM currently records vendor invoices / uses Bills** (`record_vendor_invoice` roleDefinitions.ts:91): Bills list/detail/capture/extract/edit (bills.ts:116,140,210,254,262), `/finance/vendor-invoices` pages (routeAccess.ts:33), assistant `get_payables`, `search_vendor_bills`, `create_vendor_invoice`, and purchase-orders.ts:103 | Ops/PM loses all of these (D10 overrides rev3's "Ops/PM keeps vendor invoices"). Confirm Ops/PM no longer files site vendor bills |
+| F4 | Order value (contract value) hidden from engineers, service, Ops/PM (R10). Sales keeps it (`manage_orders`) | Site list/detail value column, order pages for those roles; Ops/PM may use value to plan: confirm |
+| F5 | Sales and customer balances / invoice status: Sales has no `manage_invoices`/`view_ledgers` today, so it already cannot see invoices, receivables or ledgers (invoices.ts:65, ledgers.ts:14, tools above). The only Sales-visible money is order value (`manage_orders`, orders.ts:13-28), quotations (F1) and `GET /customers/:id` embedded orders | Confirm Sales keeps order value on orders and customer detail |
+| F6 | **Customer portal:** D10 as stated removes finance from Customers. REST gates show no finance route admits `customer` (they hold only `view_site_status`, `raise_complaint`, `resolve_pending_action`, `place_order`, roleDefinitions.ts:143-148); order value is already nulled for customers (sites.ts:49-52,88). **No customer invoice/balance path was found in REST or the assistant**, except the possible `/sites/:id/costs` leak (R9). Whether the admin-web or mobile customer screens show invoices/balances was not found in the route map (UI not exercised, not verified against production) | Confirm no customer-facing invoice/balance screen is expected; R9 closes the leak |
+| F7 | Purchase orders and suppliers (`manage_purchase_orders`) are treated as finance (4.3.1). Ops/PM and Sales hold neither in the seed | No role change in the seed; only drift cleanup |
+
+#### 4.3.9 Sequencing
+
+(1) Prod grant diff by the owner; save the pre-change grant set. (2) Deploy API with handler/REST changes R2-R4, R6, R9, R10, quotation gate F2 (code only; no behaviour change for the four finance roles). (3) Apply the R-all migration (the only revoking step, owner-approved after the diff). (4) admin-web deploy (API first, HANDOVER s5). (5) Only then enable the WhatsApp channel (M3+). Steps (2)-(4) are never run by this branch.
+
+#### 4.3.10 Rollback
+
+Redeploy the previous API build and admin-web build. The R-all migration is data-changing: its inverse is generated from the saved pre-change grant set, and for the seeded state is, per role, `INSERT INTO "RolePermission"(roleId, permissionId) SELECT r.id, p.id FROM "Role" r, "Permission" p WHERE r.key = '<role>' AND p.key = '<key>' ON CONFLICT DO NOTHING` for: `ops_pm`, `erection_engineer`, `commissioning_engineer` x `record_vendor_invoice`; any drifted grants restored from the saved diff only. No schema change in this work, so no schema rollback.
+
+#### 4.3.11 Named tests (fakes only; each listed in `apps/api/package.json` "test")
+
+- `financeAccessMatrix.test.ts` (D10): for each REST route in 4.3.3 and each role, expected status: `sales`, `ops_pm`, `erection_engineer`, `commissioning_engineer`, `service_team`, `customer` -> 403 (per route); `super_admin`, `owner_admin`, `management`, `finance` -> unchanged vs today (regression snapshot).
+- `financeToolMatrix.test.ts` (D10): every tool in 4.3.4, same role split: the six roles get `forbidden`, the four allowed roles unchanged; `get_payables`/`search_vendor_bills` reject a user holding only `record_vendor_invoice` (R4).
+- `agentRoleMatrix.test.ts`: allow/deny before vs after for all 10 roles plus a vendor-engineer user; only the deltas R2-R4, R6, R8-R10, F2 may differ (Drive unchanged: R7 withdrawn).
+- `agentFinanceWrites.test.ts`: finance propose -> confirm still succeeds for quotation, invoice, PO, expense, vendor invoice; Ops/PM, erection, commissioning `create_vendor_invoice` denied; `service_team` stays denied.
+- `vendorInvoiceRoles.test.ts` (R8): `RECORD_VENDOR_INVOICE` absent from the ops_pm, erection and commissioning seeds, present for finance and the admin trio; `/bills` routes deny the three losing roles and allow finance/admin; engineers get 403 on `GET /bills` and `GET /bills/:id` (D9).
+- `engineerSiteOnly.test.ts` (D9): engineers get 200 only for their assigned site on `GET /sites/:id`, 404/403 for unassigned, the list returns assigned only; every route in 4.3.3 returns 403.
+- `siteCostsAccess.test.ts` (R9) and `siteOrderValue.test.ts` (R10): `/sites/:id/costs` 403 for non-finance incl. customer; `order.value` null for roles without `manage_orders`/`view_orders`.
+- `customerContacts.rest.test.ts`, `customerContacts.agent.test.ts` (R3, paths P1-P12): per path, Finance response has no `contacts` and keeps `name`, `gstin`, `state`, `billingAddress`, `address`; Sales/admin still receive contacts.
+- `roleDrift.test.ts`: seeded roles and an upgrade over a drifted grant set both end in the intended state (six roles hold none of the ten keys; four allowed roles unchanged); the migration is idempotent (run twice).
+- `restPermissionsUnchanged.test.ts`: allowed roles' direct REST access for `/customers`, `/bills`, `/orders`, `/sites`, `/purchase-orders`, `/quotations` is unchanged apart from the documented deltas; customer/vendor tenant scoping unchanged.
+- `whatsappPolicy.test.ts`: WhatsApp denial for every write tool, settings, Drive and out-of-group tools, for each role incl. Super Admin.
+- `routeInventory.test.ts`: fails if a route under `routes/` reading finance-, site-, work-order-, complaint- or bill-keyed data is not registered as scoped, finance-gated or explicitly exempt.
 
 ### 4.4 Row and site filters (server-side, in the retrieval path, not the model)
 
@@ -276,16 +406,18 @@ Phone -> WhatsApp -> [OCI: whatsmeow bridge, systemd, own session.db]
 | Bridge credential | Dedicated bridge-only secret, scoped to ingest / outbox / ack. No access to Zan data routes, cannot name a user or role, cannot read other users' outbox rows beyond leased ones. Stored hashed server-side; rotation supports two valid keys during overlap; revocable immediately |
 | Signing + replay | HMAC-SHA256 over method, path, timestamp, nonce, body (including immutable protocol sender fields and message id). Reject timestamp outside +/-5 min or a reused nonce (nonce kept 10 min) |
 | Idempotency | `WhatsappInbound.waMessageId` UNIQUE; a duplicate ingest returns 202 without a second job. Outbox row carries its own unique key; ack is idempotent |
-| Durable queue | `WhatsappInbound` (status `received`/`leased`/`done`/`dropped`/`failed`, leaseUntil, attempts, checkpoint) and `WhatsappOutbox` (status `pending`/`leased`/`sending`/`sent`/`uncertain`/`discarded`/`expired`, leaseUntil, sendBy, expiresAt, accessEpoch). Persist before returning 202 |
+| Durable queue | `WhatsappInbound` (status `received`/`leased`/`done`/`dropped`/`failed`, leaseUntil, leaseToken, senderKey, receivedAt, attempts, checkpoint; partial unique index on senderKey where status = `leased`) plus the 2-row `WhatsappWorkerSlot` table (jobId, leaseUntil, leaseToken) used by the atomic claim below and `WhatsappOutbox` (status `pending`/`leased`/`sending`/`sent`/`uncertain`/`discarded`/`expired`, leaseUntil, sendBy, expiresAt, accessEpoch). Persist before returning 202 |
 | Leases | Job lease 90 s, outbox lease 30 s, `sendBy` 15 s; an expired lease returns the row to the queue (bounded attempts, then `failed`). Per-sender serial order; queue cap 10, 2 concurrent turns (D4) |
 | Reply expiry | Outbox rows expire (10 min). Delivery semantics are **at-most-once after claim**: see the pre-send claim below. Exactly-once is not available |
 | Pre-send claim (closes M3) | Leasing an outbox row (`GET /wa/outbox`, lease 30 s) returns only `{outboxId, recipient}`, **no text**. Immediately before sending, the bridge calls `POST /wa/outbox/:id/claim`. The server re-authorises right then (identity `active`, user active/not blocked, role/permissions unchanged, `accessEpoch` equal to the row's) and only on success returns the text, sets `sending` and a `sendBy` of now+15 s. On failure it returns 410, marks the row `discarded`, and the bridge sends nothing. Bridge acks with `POST /wa/ack` after WhatsApp accepts. A row left `sending` past `sendBy` becomes `uncertain` (never auto-resent, silent). Residual window: revocation after the claim response and before WhatsApp accepts (at most 15 s) cannot be recalled; content was already authorised at claim time. Tests: `whatsappOutbox.test.ts` (disable identity between lease and claim -> 410, no text released; between claim and ack -> delivered once, documented; crash after claim -> `uncertain`, no resend; expired lease and expired row; duplicate claim/ack idempotent) |
 | Vercel duration (closes the B3 blocker) | Verified read-only on 2026-10-10 ~23:40 IST via Vercel CLI/API: team plan **Hobby**; project `zan-app-api` has Fluid compute **enabled**, no project-level default max duration, `apps/api/vercel.json` has no `functions.maxDuration`, regions `["bom1"]` in vercel.json (project default regions iad1, overridden). Per Vercel docs (functions / configuring-functions / duration), with Fluid compute Hobby default is 300 s and maximum is 300 s. **Effective limit: 300 s per invocation.** The agent turn budget is 55 s (`AGENT_REQUEST_BUDGET_MS`, timeouts.ts:26; run inline today, agentConversations.ts:115-164), well inside it |
 | Cron on Hobby | Per Vercel docs, Hobby cron jobs run at most once per day; current crons are daily (cleanup 03:00 UTC, backup). A minute-level cron worker is **not available** on this plan, so the design below does not use one (and a plan upgrade is not assumed) |
 | Worker contract (closes M4) | **Trigger: bridge-driven, no cron dependency.** (1) `POST /wa/ingest` verifies, inserts the `received` row (unique `waMessageId`), returns 202, then continues in the same invocation via Vercel `waitUntil` (`@vercel/functions`, dependency and Fluid behaviour to be proven by an M2 spike on a preview deployment) to claim and run that job's turn inside the 300 s limit. (2) **Backstop:** the bridge polls `GET /wa/outbox` (every 5 s while jobs/replies are pending, 30 s idle). Each poll first reaps expired leases (`leased` with `leaseUntil < now` -> back to `received`, `attempts + 1`), then claims at most one runnable job via `waitUntil`, then returns leased outbox rows. A crashed or timed-out invocation is therefore retried by the next poll, with no cron. (3) The daily Vercel cron only sweeps terminal rows (cleanup), never drives work |
-| Lease / checkpoint / resume | Claim is one atomic conditional update (`updateMany` where `id` and (`status=received` or (`status=leased` and `leaseUntil<now`)) and sender has no earlier non-terminal row and fewer than 2 rows `leased`; claim succeeds iff count = 1). Job lease 90 s (turn budget 55 s + slack). After each tool step the invocation writes `checkpoint` (history so far, step count, tool results) and extends the lease. A re-lease resumes from the checkpoint with a fresh 55 s budget. Bounds: max 3 attempts and total job age 3 min, whichever first -> `failed` |
+| Atomic claim (rev4; closes the cross-row race) | One SQL statement, no read-then-write. Capacity is **structural**: a `WhatsappWorkerSlot` table seeded with exactly 2 rows (`id`, `jobId` null, `leaseUntil`, `leaseToken`), so the global cap of 2 cannot be exceeded whatever the interleaving. Per-sender order is enforced by eligibility plus a DB constraint: a partial unique index `UNIQUE (senderKey) WHERE status = 'leased'` (at most one in-flight job per sender) and an eligibility predicate that only the **earliest non-terminal** row of a sender can be claimed. Statement (single `$queryRaw`, data-modifying CTEs): `WITH slot AS (SELECT id FROM "WhatsappWorkerSlot" WHERE "jobId" IS NULL OR "leaseUntil" < now() ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED), job AS (SELECT j.id FROM "WhatsappInbound" j WHERE (j.status = 'received' OR (j.status = 'leased' AND j."leaseUntil" < now())) AND NOT EXISTS (SELECT 1 FROM "WhatsappInbound" e WHERE e."senderKey" = j."senderKey" AND e.status IN ('received','leased') AND (e."receivedAt", e.id) < (j."receivedAt", j.id) ) ORDER BY j."receivedAt", j.id LIMIT 1 FOR UPDATE SKIP LOCKED), upd AS (UPDATE "WhatsappInbound" SET status = 'leased', "leaseUntil" = now() + interval '90 seconds', "leaseToken" = $token, attempts = attempts + 1 WHERE id = (SELECT id FROM job) AND EXISTS (SELECT 1 FROM slot) RETURNING *), s AS (UPDATE "WhatsappWorkerSlot" SET "jobId" = (SELECT id FROM upd), "leaseUntil" = now() + interval '90 seconds', "leaseToken" = $token WHERE id = (SELECT id FROM slot) AND EXISTS (SELECT 1 FROM upd)) SELECT * FROM upd`. A claimer that finds no free slot or no eligible job gets zero rows and does nothing. Two claimers for different jobs cannot take the same slot (`FOR UPDATE SKIP LOCKED` on the slot row) and cannot both claim the same job; a later message of a sender is never eligible while an earlier one is `received` or `leased` (including after its lease expired: the expired row is itself the earliest and is re-claimed first). |
+| Lease expiry / reclaim / fencing | A `leased` row or slot with `leaseUntil < now()` is reclaimable by the statement above (attempt + 1; > 3 attempts or job age > 3 min -> the reaper marks it `failed` before claim). Every later write by a worker (checkpoint, lease extension, completion, outbox insert) is **fenced**: `UPDATE ... WHERE id = $id AND "leaseToken" = $token AND status = 'leased'` and the row count must be 1; a zombie worker whose lease was reclaimed gets 0 rows and abandons the turn without sending. Completion clears `jobId` on the slot in the same transaction. Extension after each tool step moves both the job and the slot `leaseUntil` forward |
+| Checkpoint / resume | Job lease 90 s (turn budget 55 s + slack). After each tool step the invocation writes `checkpoint` (history so far, step count, tool results), fenced as above, and extends the lease. A re-lease resumes from the checkpoint with a fresh 55 s budget. Bounds: max 3 attempts and total job age 3 min, whichever first -> `failed` |
 | Failure reply | On `failed`, a verified `active` identity gets **one** neutral reply ("Sorry, I couldn't complete that. Please try again."), sent through the normal outbox/claim path; any other case is silent. Owner may veto in M2 |
-| Tests (M1/M3 prerequisite) | `whatsappWorker.test.ts` with fake clock and fake agent: a 55 s turn completes inside the lease; a turn that exceeds budget times out and is retried from checkpoint; crash (invocation dies, lease lapses) is recovered by the next poll; duplicate ingest creates one job; concurrency cap 2 and per-sender order hold under contention; attempts/age bounds -> `failed` + single neutral reply; no code path requires a cron; two concurrent claimers never both win |
+| Tests (M1/M3 prerequisite) | `whatsappWorker.test.ts` with fake clock, fake agent and an in-memory fake store that executes the claim as one atomic step (the repo rule is fakes only, no real DB): a 55 s turn completes inside the lease; a turn exceeding budget times out and is retried from checkpoint; crash recovered by the next poll; duplicate ingest creates one job; attempts/age bounds -> `failed` + single neutral reply; no code path requires a cron. **Race tests** (`whatsappClaimRace.test.ts`, deterministic interleavings through the fake store): (1) two workers, two different senders, one free slot -> exactly one wins; (2) cap reached (2 leased) -> third claimer gets no row; (3) two workers racing for the same job -> one wins; (4) same sender with message A `received` and B `received` -> only A is claimable, B never while A is non-terminal, even when different workers claim concurrently; (5) A's lease expires while B waits -> A is reclaimed first, B not; (6) fenced write by a worker whose lease was reclaimed -> 0 rows, no outbox row, no send; (7) slot lease expiry frees capacity. The SQL statement itself cannot be executed by these fakes; it is verified once in the M2 spike against a disposable Postgres that is neither production nor a developer DB (needs Ferose's approval as an exception to the no-real-DB rule), and until then the claim semantics are "designed, not proven" |
 
 ## 8. Capacity assumptions
 
@@ -309,7 +441,7 @@ Headroom vs approved targets (VM-A): memory with a bridge under 100 MB would be 
 
 **Second VM (Oracle Linux).** Not inspected; needs correct IP, user, key and a port-22 rule. Only required if VM-A fails the M6 check.
 
-Hosting: OCI confirmed (D5). Fallback note only: if the capacity check fails, propose the second inspected VM or a larger approved instance per PLAN M6.
+Hosting: OCI confirmed (D5). Fallback note only: if the capacity check fails, propose the second VM (Oracle Linux, uninspected) or a larger approved instance per PLAN M6.
 
 Pilot targets (**approved by Ferose, D4**; measured in M6, not guarantees): 2 concurrent turns, per-user serial order, queue cap 10, p50 < 15 s, p95 < 45 s, bridge service memory < 100 MB, VM memory < 70% sustained, state + logs < 1 GB with rotation, > 10 GB disk free. Concurrency is still capped against measured provider limits, not these targets alone.
 
@@ -324,20 +456,21 @@ Decided and removed: group mapping (D1), Finance/engineer scope (D2), assigned-s
 | # | Open item | Status / needed |
 |---|---|---|
 | O1 | Live AI provider rows | **RESOLVED rev3** (section 3). Residual, before M1 integration: FreeLLMAPI base host, external quota/concurrency limits, fallback health |
-| O2 | OCI capacity check | **VM-A done (section 8), headroom OK with caution; M6 monitoring plan recorded.** Required before M3/M5 is satisfied for VM-A |
+| O2 | OCI capacity check | **VM-A inspected (section 8), headroom OK with caution; M6 monitoring plan recorded.** Required-before-M3/M5 inspection is satisfied for VM-A. Recheck headroom at M5, measure at M6 |
 | O3 | Vercel function limit | **RESOLVED rev3** (section 7): Hobby + Fluid, 300 s; no minute-level cron; bridge-driven worker |
 | O4 | Pilot users and verified numbers | Open: list from Ferose |
 | O5 | Pairing approach (fresh pair of Zan-F on OCI vs session migration); owner present at M5 | Open: approval at M5 |
 | O6 | TLS expiry check | Open: read-only `openssl s_client` check (section 8); needs the public domain from the owner or provider base-URL host |
-| O7 | Second VM (Oracle Linux) | Open, **conditional** on VM-A failing the M6 check: correct IP, user, key, port-22 rule |
+| O7 | Second VM (Oracle Linux) | Open, **conditional** and **uninspected**: only if VM-A fails the M5/M6 check; needs correct IP, user, key, port-22 rule (key refused / port-22 timeout so far) |
 | O8 | HANDOVER provider list is stale (says Gemini 1, NVIDIA 2) | Fix on master later, not on this branch |
-| O9 | Owner confirmations for M1 deltas | `service_team` access and engineer vendor-invoice removal are **decided (D6, D7, 23:43 IST)**. **Decided (D8, Ferose 11 Oct 00:01 IST):** R3 contact omission, R5 engineer Bills page and R6 all-sites removal are confirmed M1 changes; R7 (Drive revocation) is withdrawn, role-scoped Drive is a later phase. Open: production role-grant diff; accepted residual risk of the trusted bridge (section 6) before M5 |
+| O9 | Owner confirmations for M1 deltas | Decided: D6, D7 (23:43 IST); D8 items 1, 3, 4 (00:01 IST, item 2 superseded); **D9 (00:05) and D10 (00:07)**. Open for Ferose: **F1-F7 in 4.3.8** (quotations as finance, Sales create-invoice, Ops/PM vendor bills, order value, Sales money views, customer portal, POs as finance). Open: production role-grant diff; accepted residual risk of the trusted bridge (section 6) before M5 |
+| O10 | Real-DB verification of the atomic claim SQL (section 7) | Open: M2 spike against a disposable Postgres (not production); needs Ferose approval as an exception to the fakes-only rule |
 
-## 10. Gate re-score for rev3 (proposed; the reviewer decides)
+## 10. Gate re-score for rev4 (proposed; the reviewer decides)
 
 | Gate | Proposed score | Basis |
 |---|---|---|
-| 1 Reuse existing access controls | CONDITIONAL | Roles/permissions stay the only source; no Finance grant revoked, only the engineers' `RECORD_VENDOR_INVOICE` (D7); explicit change list R1-R8, sequencing, rollback and named tests (4.3, 4.4). Not implemented; prod grants NV |
+| 1 Reuse existing access controls | CONDITIONAL | Roles/permissions stay the only source; the four finance roles lose nothing; six roles lose all finance keys (D10, role x key table 4.3.2), engineers also limited to assigned sites (D9); R1-R10, sequencing, rollback and named tests (4.3, 4.4). Not implemented; prod grants NV; F1-F7 open |
 | 2 Safe sender identity, fail-closed, silent | CONDITIONAL | Verified identity table and LID reconciliation (6); bridge named as trusted identity-asserting component with accepted residual risk and tests; pre-send claim closes the lease-to-send gap except a documented <=15 s window (7) |
 | 3 Preserve FreeLLMAPI routing | CONDITIONAL (was FAIL) | Live rows verified: "Free LLM API" is priority 0, active, tried first, then OpenAI 1, NVIDIA 2, Gemini 3, no ties (3). Base host, external limits and fallback health still to record before M1 integration |
-| 4 Implementable request/reply path | CONDITIONAL | Limit confirmed (300 s, Hobby + Fluid); bridge-driven worker with atomic lease/checkpoint/resume/bounds and named tests (7). `waitUntil` behaviour to be proven by an M2 spike |
+| 4 Implementable request/reply path | CONDITIONAL | Limit confirmed (300 s, Hobby + Fluid); bridge-driven worker with a single-statement atomic claim (slot table + per-sender ordering + fenced writes) and race tests on a fake store (7); SQL proven only in an M2 disposable-DB spike; `waitUntil` to be proven in M2 |
