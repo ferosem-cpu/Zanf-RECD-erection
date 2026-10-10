@@ -13,6 +13,7 @@ import { useAuth } from "@/components/AuthContext";
 import { captureFile } from "@/lib/fileCapture";
 import { createThreadSwitchGuard, createSendQueue, createInFlightSend, startNewThread, threadForSend } from "@/lib/threadSwitchGuard";
 import { sanitizeMessages } from "@/lib/assistantText";
+import { agentErrorText } from "@/lib/agentError";
 
 /**
  * Minimal typing for the Web Speech API's SpeechRecognition - not in TypeScript's default DOM
@@ -177,6 +178,7 @@ export default function AgentChatBubble() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const [failedSend, setFailedSend] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // A late response for a thread the user already left must not paint over the current one.
@@ -368,6 +370,7 @@ export default function AgentChatBubble() {
     setAttachedFile(null);
     setAttachError(null);
     setError(null);
+    setFailedSend(null);
     setMessages((prev) => [
       ...prev,
       { role: "user", content: text || (attachment ? `📎 ${attachment.fileName}` : "") },
@@ -403,13 +406,8 @@ export default function AgentChatBubble() {
     } catch (err) {
       // Detached by "+ New" / a thread switch: its error belongs to the old thread, show nothing.
       if (!inFlight.current.isActive(flight.token)) return;
-      setError(
-        err instanceof NetworkError && err.timedOut
-          ? "The assistant didn't answer in time. Your message may still have been processed - reopen this conversation from History in a moment, or try again with a shorter request."
-          : err instanceof Error
-            ? err.message
-            : String(err),
-      );
+      setFailedSend(text || (attachment ? attachment.fileName : ""));
+      setError(agentErrorText(err));
     } finally {
       if (inFlight.current.finish(flight.token)) setSending(false);
     }
@@ -706,7 +704,20 @@ export default function AgentChatBubble() {
                 <div className="bg-gray-100 text-gray-400 rounded-2xl px-3 py-2 text-sm">Thinking…</div>
               </div>
             )}
-            {error && <p className="text-xs text-red-500">{error}</p>}
+            {error && failedSend !== null ? (
+              <div className="flex justify-start">
+                <div className="bg-red-50 text-red-600 rounded-2xl px-3 py-2 text-sm">
+                  <p>{error}</p>
+                  {failedSend && (
+                    <button type="button" className="mt-1 text-xs underline" onClick={() => copyMessage(failedSend, -1)}>
+                      Copy my message
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              error && <p className="text-xs text-red-500">{error}</p>
+            )}
           </div>
 
           {(attachedFile || attaching || attachError) && (

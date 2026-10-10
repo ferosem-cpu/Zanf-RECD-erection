@@ -145,6 +145,9 @@ General pass criteria for every row:
 | 64 | Send a long question, click "+ New" while the reply is still being generated, then type in the new thread. | - | Assistant bubble | Input is enabled at once; the old reply never appears in the new thread | |
 | 65 | Time K1 (receivables), K2 (overdue vendor bills), D1 (read a PDF) and note the agent_turn_timing log lines. | - | Chat + Vercel logs | One line per turn; K1/K2 one tool call; D1 repeat read within 60 s is faster | |
 | 61 | Mention document numbers and ALL-CAPS names (TXIN0934, PO/2026-27/0001, BOSTIK) in a question. | - | Chat reply | They appear intact in the reply | |
+| 66 | Ask a heavy question (receivables, orders list) when the primary provider is slow. | - | Chat + logs | Answer arrives within ~55 s via the fallback; no failed send | |
+| 67 | Force an error (e.g. disconnect network mid-send, or a provider outage). | - | Chat | One bubble "Sorry - I couldn't finish that, please try again" + Copy my message; no provider names, no \n text | |
+| 68 | Ask for a clause from a document (e.g. warranty). | - | Chat reply | The quote keeps its label ("Warranty: ...") | |
 
 ## Run summary
 

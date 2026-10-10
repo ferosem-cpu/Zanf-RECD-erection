@@ -7,12 +7,13 @@ import type { AgentLlmProvider } from "@prisma/client";
 import type { AgentTool, AgentAuthContext } from "./tools/types";
 import { getToolByName, isWriteTool } from "./tools/registry";
 import type { UnifiedMessage, UnifiedToolSchema, LlmAdapter, SendMessageResult } from "./providers/types";
-import { formatProviderFailures, providersToAttempt, recordProviderFailure, type ProviderFailure } from "./providers/providerHealth";
-import { createAdapterForRow, loadActiveProvidersInOrder } from "./providers/factory";
-import { AgentDeadline, LLM_CALL_TIMEOUT_MS } from "./timeouts";
+import { sendWithFallback } from "./sendWithFallback";
+import { loadActiveProvidersInOrder } from "./providers/factory";
+import { AgentDeadline } from "./timeouts";
+import { AGENT_FRIENDLY_ERROR } from "./friendlyError";
 import { executeToolCalls } from "./toolExecution";
 import { createTurnTimer } from "./turnTiming";
-import { sendCleaned, sanitizeHistory } from "./assistantText";
+import { sanitizeHistory } from "./assistantText";
 
 const MAX_TOOL_TURNS = 8;
 
@@ -45,42 +46,6 @@ function toUnifiedTools(tools: AgentTool[]): UnifiedToolSchema[] {
   return tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
 }
 
-async function sendWithFallback(
-  providers: AgentLlmProvider[],
-  adapters: Map<string, LlmAdapter>,
-  params: { systemPrompt: string; messages: UnifiedMessage[]; tools: UnifiedToolSchema[] },
-  deadline: AgentDeadline,
-): Promise<SendMessageResult> {
-  const failures: ProviderFailure[] = [];
-  const primaryId = providers[0]?.id;
-  // Re-evaluated on every call, so a provider that 410s on tool turn 1 isn't retried on turns 2..8.
-  const { attempt, skipped } = providersToAttempt(providers);
-  for (const providerRow of attempt) {
-    const primary = providerRow.id === primaryId;
-    if (deadline.expired()) {
-      failures.push({ providerName: providerRow.name, priority: providerRow.priority, primary, message: "not tried - out of time for this request" });
-      break;
-    }
-    try {
-      // Adapter creation (key decryption) is inside the try on purpose: previously a broken
-      // fallback row threw from here straight out of the loop and replaced the primary
-      // provider's real error with an unrelated decrypt/config error.
-      let adapter = adapters.get(providerRow.id);
-      if (!adapter) {
-        adapter = createAdapterForRow(providerRow);
-        adapters.set(providerRow.id, adapter);
-      }
-      // An empty / special-token-only reply (e.g. literal "<EOS_TOKEN>") is retried once on the
-      // same provider, then treated as that provider failing so the next one is tried.
-      const send = () => adapter!.sendMessage({ ...params, timeoutMs: deadline.callTimeoutMs(LLM_CALL_TIMEOUT_MS) });
-      return await sendCleaned(send, () => !deadline.expired());
-    } catch (err) {
-      failures.push(recordProviderFailure(providerRow, err, "chat", { primary }));
-    }
-  }
-  throw new Error(`All configured LLM providers failed:\n${formatProviderFailures(failures, skipped)}`);
-}
-
 export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgentTurnResult> {
   const { systemPrompt, tools, onToolCall } = params;
   const unifiedTools = toUnifiedTools(tools);
@@ -97,6 +62,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
   let history = sanitizeHistory<UnifiedMessage>(params.history);
   const deadline = params.deadline ?? new AgentDeadline();
   const timer = createTurnTimer();
+  const timedOut = new Set<string>();
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     if (deadline.expired()) {
@@ -108,7 +74,7 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
     let response: SendMessageResult;
     const llmStarted = Date.now();
     try {
-      response = await sendWithFallback(providers, adapters, { systemPrompt, messages: history, tools: unifiedTools }, deadline);
+      response = await sendWithFallback(providers, adapters, { systemPrompt, messages: history, tools: unifiedTools }, deadline, timedOut);
       timer.llm(Date.now() - llmStarted);
     } catch (err) {
       timer.llm(Date.now() - llmStarted);
@@ -117,7 +83,8 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
       if (turn === 0) throw err;
       // A later call failed after tools already ran (possibly creating a pending confirm
       // card): keep that history rather than throwing it away with a 500.
-      const reply = `Sorry - I couldn't finish that: the AI provider stopped responding part-way through. ${(err as Error).message}`;
+      console.error(`[agent:error] later round failed: ${(err as Error).message}`);
+      const reply = `${AGENT_FRIENDLY_ERROR}. Anything I already prepared is shown above.`;
       return { reply, history: [...history, { role: "assistant", content: reply }] };
     }
 

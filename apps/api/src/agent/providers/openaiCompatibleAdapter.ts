@@ -112,7 +112,7 @@ export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterCon
             type: "function",
             function: { name: t.name, description: t.description, parameters: t.inputSchema },
           })),
-        }, { timeout: params.timeoutMs ?? LLM_CALL_TIMEOUT_MS });
+        }, { timeout: params.timeoutMs ?? LLM_CALL_TIMEOUT_MS, maxRetries: 0 });
 
         const message = response.choices[0]?.message;
         if (!message) {
