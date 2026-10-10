@@ -54,7 +54,7 @@ export function createAnthropicAdapter(config: AnthropicAdapterConfig): LlmAdapt
             input_schema: t.inputSchema,
           })),
           messages: toAnthropicMessages(params.messages),
-        }, { timeout: params.timeoutMs ?? LLM_CALL_TIMEOUT_MS });
+        }, { timeout: params.timeoutMs ?? LLM_CALL_TIMEOUT_MS, maxRetries: 0 });
 
         const textBlocks = response.content.filter((b): b is Anthropic.TextBlock => b.type === "text");
         const toolUseBlocks = response.content.filter(

@@ -11,6 +11,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requireAgentAccess, type AuthenticatedRequest } from "../middleware/auth";
 import { runAgentTurn } from "../agent/llm";
 import { AgentDeadline } from "../agent/timeouts";
+import { agentErrorBody } from "../agent/friendlyError";
 import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { allTools } from "../agent/tools/registry";
 import { computeDocumentTotals } from "../services/taxCalc";
@@ -162,7 +163,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
 
     res.json({ reply: sanitizeAssistantText(result.reply ?? ""), id: updated.id, title: updated.title, messages: sanitizeHistory(updated.messages) });
   } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+    res.status(500).json(agentErrorBody(err));
   }
 });
 
