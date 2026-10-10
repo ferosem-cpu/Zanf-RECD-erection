@@ -80,3 +80,36 @@ test("fix 9: leaked tool names / Source lines are stripped on save", () => {
   assert.equal(saved[0].content, "Source: search_orders_and_sites");
   assert.equal(saved[1].content, "9 orders are completed.");
 });
+
+test("narration that names internals is removed, real content is kept", () => {
+  const leaks = [
+    "9 orders are done. This comes from the completedCount field in the the app result.",
+    "Open orders: 4. The allOrders.byUpdateStatus field lists the rest.",
+    "There are 12 open orders (allOrders.open).",
+    "Total outstanding is ₹12,53,514.00. These figures come from the get_receivables tool.",
+    "Two invoices are late. I used a search with overdueOnly=true to find them.",
+  ];
+  const out = leaks.map(stripToolInternals);
+  assert.equal(out[0], "9 orders are done.");
+  assert.equal(out[1], "Open orders: 4.");
+  assert.equal(out[2], "There are 12 open orders.");
+  assert.equal(out[3], "Total outstanding is ₹12,53,514.00.");
+  assert.equal(out[4], "Two invoices are late.");
+  for (const o of out) assert.ok(!/\b(?:the the|field|get_receivables|overdueOnly|allOrders)\b/.test(o));
+});
+
+test("doubled words from tool-name substitution are collapsed", () => {
+  assert.equal(stripToolInternals("See the `get_payables` page."), "See the app page.");
+  assert.equal(stripToolInternals("Check the the report."), "Check the report.");
+});
+
+test("document numbers, ALL-CAPS names, amounts, dates and links are untouched", () => {
+  const keep = [
+    "TXIN0934 for BOSTIK is ₹12,53,514.00 due 2026-10-10.",
+    "PO/2026-27/0001 and INV-2026-27-0042 are issued; INTERGLOBE AVIATION owes ₹1,20,00,000.50 (BPCL: ₹0.00).",
+    "See [TXIN0934](/sites/abc-123) on app.zanf.org, e.g. the Sites page.",
+    "- BOSTIK: Rs 4,50,000\n- BPCL: Rs 2,00,000",
+    "| Customer | Amount |\n| BPCL | ₹1,00,000 |",
+  ];
+  for (const k of keep) assert.equal(stripToolInternals(k), k);
+});

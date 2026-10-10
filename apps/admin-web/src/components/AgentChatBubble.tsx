@@ -11,7 +11,7 @@ import { api, NetworkError } from "@/lib/apiClient";
 const AGENT_REPLY_TIMEOUT_MS = 90_000;
 import { useAuth } from "@/components/AuthContext";
 import { captureFile } from "@/lib/fileCapture";
-import { createThreadSwitchGuard, startNewThread, threadForSend } from "@/lib/threadSwitchGuard";
+import { createThreadSwitchGuard, createSendQueue, startNewThread, threadForSend } from "@/lib/threadSwitchGuard";
 import { sanitizeMessages } from "@/lib/assistantText";
 
 /**
@@ -146,6 +146,8 @@ export default function AgentChatBubble() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [creatingThread, setCreatingThread] = useState(false);
+  const sendQueue = useRef(createSendQueue());
+  const [pendingSend, setPendingSend] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -340,12 +342,24 @@ export default function AgentChatBubble() {
     }
   }
 
+  useEffect(() => {
+    if (pendingSend && !creatingThread && !sending) {
+      setPendingSend(false);
+      if (sendQueue.current.take()) void send();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSend, creatingThread, sending]);
+
   async function send() {
     const text = input.trim();
     const attachment = attachedFile;
-    // While "+ New" is creating its thread there is no active id yet; sending now would fall
-    // back to the most recent (old) thread.
-    if ((!text && !attachment) || sending || creatingThread) return;
+    if ((!text && !attachment) || sending) return;
+    // While "+ New" is creating its thread there is no active id yet; queue the send (text stays
+    // in the input) and flush it once the thread exists, instead of dropping or merging it.
+    if (!sendQueue.current.request(creatingThread)) {
+      setPendingSend(true);
+      return;
+    }
     setInput("");
     setAttachedFile(null);
     setAttachError(null);
@@ -736,7 +750,7 @@ export default function AgentChatBubble() {
                   micSupported ? "pr-9" : ""
                 }`}
                 style={{ maxHeight: 120, msOverflowStyle: "none" }}
-                placeholder={listening ? "Listening…" : attachedFile ? "Add a note (optional)…" : "Type a message…"}
+                placeholder={listening ? "Listening…" : pendingSend ? "Starting new chat - your message will send…" : attachedFile ? "Add a note (optional)…" : "Type a message…"}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {

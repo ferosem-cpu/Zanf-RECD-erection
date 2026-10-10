@@ -330,6 +330,12 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 10. Current open items (as of 2026-10-10)
 
+**Branch `fix/agent-retest-10` (2026-10-10)** - wording leftovers of the fix-9 retest (11 pass / 2 partial /
+3 fail), see §11. After deploy re-run `docs/agent-test-checklist.md` rows 58-61. Rollback target
+`dpl_E5UAEjjWvT49rRMa1rJARv13fMV1`. No migration needed. Item 4 (one network error after ~26 s): logs for
+07:50-08:05 UTC show no 5xx/timeout and no orphan preflight; the failed request never reached the
+server (client/network side). GET already auto-retries once; POST is never auto-retried. No change.
+
 **Branch `fix/agent-retest-9` (2026-10-10)** - minor leftovers of the fix-8 retest (9/9 pass), see §11.
 After deploy re-run `docs/agent-test-checklist.md` rows 54-57. Rollback target
 `dpl_4U6zE681sfDkQQMCKiHHyrC7Yrde`. No migration needed.
@@ -431,6 +437,13 @@ hiding; revenue tax-invoice count) against production. Rollback target
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
 
+- **2026-10-10 — Fix 10, branch `fix/agent-retest-10`.** `e915d94` replies: post-filter
+  (`stripToolInternals`) now drops sentences/parentheticals that name a snake_case/camelCase
+  identifier, key=value parameter or dotted JSON path (tool names are all snake_case), fixes "the
+  the app", and the prompt forbids narrating where a figure came from. `1ff5cba` rupees in Indian
+  lakh/crore grouping: `agent/formatInr.ts`, formatted strings next to numeric totals in
+  receivables, payables and revenue tools, prompt RUPEES rule. `2e5fdba` "+ New": a send made
+  while the thread is being created is queued (`createSendQueue`) and flushed once it exists.
 - **2026-10-10 — Fix 9, branch `fix/agent-retest-9` (retest of fix 8: 9/9 pass).**
   `ad9ead0` replies no longer leak internals: prompt NO INTERNALS rule (cite app pages) +
   `stripToolInternals` (assistantText.ts) strips "Source: <tool>" lines and backticked tool names on

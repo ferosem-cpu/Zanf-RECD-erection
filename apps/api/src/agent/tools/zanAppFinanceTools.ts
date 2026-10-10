@@ -14,6 +14,7 @@ import {
   summarizePayables as summarizePayablesShared, type PayableBillRow,
 } from "../../services/payables";
 import { LIST_LIMIT, listMeta } from "../listResult";
+import { formatInr } from "../formatInr";
 import { OPEN_PO_STATUSES, exclGstPortion, isoDateIST, istDayStart, sumMoney, normalizeLabel, resolveLookupFilter, validValuesList } from "./zanAppReadTools";
 import type { AgentTool, AgentAuthContext } from "./types";
 
@@ -245,6 +246,7 @@ const getPayables: AgentTool = {
       basis: PAYABLES_BASIS,
       ...(matchedSuppliers ? { supplierFilter: supplierQuery, matchedSuppliers } : {}),
       ...summary,
+      totalOutstandingFormatted: formatInr(summary.totalOutstanding),
       awaitingVerification: {
         note: "Uploaded but not yet verified in Finance > Vendor Invoices - not included in totalOutstanding until verified.",
         count: awaiting.length,
@@ -658,6 +660,7 @@ export function summarizeRevenue(invoices: RevenueInvoiceRow[], creditNotes: Rev
       netGst: sumMoney([inv.gst, -cn.gst]),
       netInclGst: sumMoney([inv.gross, -cn.gross]),
       invoicedExclGst: inv.taxable,
+      formatted: { netExclGst: formatInr(sumMoney([inv.taxable, -cn.taxable])), netGst: formatInr(sumMoney([inv.gst, -cn.gst])), netInclGst: formatInr(sumMoney([inv.gross, -cn.gross])), invoicedExclGst: formatInr(inv.taxable) },
       creditNotesExclGst: cn.taxable,
     },
     collected: {
@@ -666,6 +669,7 @@ export function summarizeRevenue(invoices: RevenueInvoiceRow[], creditNotes: Rev
       cashReceived,
       tdsDeducted,
       settledTotal: sumMoney([cashReceived, tdsDeducted]),
+      formatted: { cashReceived: formatInr(cashReceived), tdsDeducted: formatInr(tdsDeducted), settledTotal: formatInr(sumMoney([cashReceived, tdsDeducted])) },
     },
   };
 }

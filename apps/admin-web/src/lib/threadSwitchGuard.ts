@@ -52,3 +52,30 @@ export async function threadForSend(
   apply(id);
   return id;
 }
+
+/** A send requested while "+ New" is still creating its thread is queued, not dropped: the typed
+ * text stays in the input and is sent once the thread exists. At most one send is queued, and
+ * `take()` consumes it exactly once, so text is neither lost nor sent twice. */
+export function createSendQueue() {
+  let queued = false;
+  return {
+    /** Returns true if the send may run now; false if it was queued behind thread creation. */
+    request(creatingThread: boolean): boolean {
+      if (creatingThread) {
+        queued = true;
+        return false;
+      }
+      return true;
+    },
+    /** True once if a send was queued; clears the queue. */
+    take(): boolean {
+      const was = queued;
+      queued = false;
+      return was;
+    },
+    /** A new "+ New" or thread switch invalidates a queued send only if explicitly cancelled. */
+    cancel() {
+      queued = false;
+    },
+  };
+}

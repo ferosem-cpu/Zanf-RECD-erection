@@ -137,6 +137,10 @@ General pass criteria for every row:
 | 55 | Show Platino rejected bill(s). | search_vendor_bills | /finance/vendor-invoices (Rejected) | Status said as "Rejected" only - never "written off", cancelled or paid; no balance owed | |
 | 56 | Click "+ New", type a message, send (repeat a few times, also right after a failed/slow "+ New" and double-clicking it). | - | Assistant bubble | Only the new message and its reply appear; no earlier thread messages ever shown above the reply | |
 | 57 | Ask the agent to log a status update / raise a complaint for a site with no name. | create_site_status_update / create_complaint | Confirmation card | Site shows the name, or "(no site name)" with the address as a separate field - never the address in the name slot | |
+| 58 | Ask for open orders by status, receivables overdue, and a customer's outstanding. | get_receivables, search_orders_and_sites | Chat reply | No tool/field/parameter names, no "figures come from..." narration, no "the the" | |
+| 59 | Ask for total receivables / revenue for a quarter. | get_receivables, get_revenue_summary | Chat reply | Rupees in lakh/crore grouping (₹12,53,514.00), never 1,253,514 | |
+| 60 | Click "+ New" and immediately type and send a message (repeat several times). | - | Assistant bubble | Message is sent once the new thread exists; never dropped or merged into the next one | |
+| 61 | Mention document numbers and ALL-CAPS names (TXIN0934, PO/2026-27/0001, BOSTIK) in a question. | - | Chat reply | They appear intact in the reply | |
 
 ## Run summary
 
