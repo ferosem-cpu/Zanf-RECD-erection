@@ -330,6 +330,20 @@ steps 2–7 entirely, as it did for admin-web. Try it on a low-risk change first
 
 ## 10. Current open items (as of 2026-10-10)
 
+**Branch `fix/agent-retest-13` (2026-10-10)** - retest of fix 12 (5 pass / 1 partial). (1) K2 "Any vendor bills overdue?" answered only a
+count: search_vendor_bills returned the data (supplier is in each bill) but `dueNote` had no vendor/balance and the prompt had no
+"list every overdue bill" rule, so the model summarised. dueNote is now "TXIN0934 (Platino) overdue by 11 days, balance N" and the
+prompt requires one line per overdue bill/invoice (number, vendor/customer, days, balance); the reply post-filter does not touch such
+lines (test). (2) PDF speed (prod D1: 3 rounds, search_documents 5.8 s + get_document_content 2.4 s, total 31 s): get_document_content
+takes a partial name (one Drive search resolves it; several fits return candidates) and `focus` keywords (long text cut to a 1.2k head
++ matching paragraphs, max ~5k chars); prompt/tool text say read by name, no search first; folder-tree build is single-flight with
+levels in parallel and narrow fields (tree TTL already 10 min); extracted text cached 10 min per file id + modifiedTime, name->id 5 min.
+Local mocked Drive (120 folders, 120 ms/call): cold read 16 Drive calls either way (~0.9 s), warm repeat 1 call (metadata check only),
+text to the model 11.3k -> <=5k chars with focus. Expected prod effect: one model round fewer (about 2 s of the 3 rounds) and a warm
+repeat read without the 5.8 s search; the slow first model round (18.8 s) is provider latency and is not changed. Numbers to confirm
+from agent_turn_timing after deploy. (3) Open-order rule worded "(Commissioned or later)". (4) Test-only checks of the friendly error
+(API all-providers-fail -> friendly body + errorId; admin-web bubble text). No migration. After deploy re-run checklist rows 69-72.
+
 **Branch `fix/agent-retest-12` (2026-10-10)** - speed/reliability. Prod evidence (dpl_2VQda3vCfipZq83Hg6xHShfDSiSb, 15:05-15:20 IST):
 tool time 27-280 ms (get_document_content 6.8 s incl. Drive); time is LLM rounds (receivables [9.1, 26.0] s, orders [13.0, 39.4] s,
 [49.8, 4.5] s, revenue [9.8, 21.2] s, vendor bills [12.6, 13.2] s); 5 sends failed because the PRIMARY ("Request timed out") used the
@@ -462,6 +476,10 @@ hiding; revenue tax-invoice count) against production. Rollback target
 
 ## 11. Changelog (last ~10 entries; full history at `924329a`)
 
+- **2026-10-10 - Fix 13, branch `fix/agent-retest-13` (retest of fix 12: 5 pass / 1 partial).** `ba97785` overdue vendor bills listed
+  with vendor, days, balance (dueNote + prompt rule + post-filter test). `ded5740` single-call document read by partial name,
+  `focus` excerpts, tree single-flight, 10 min text cache by id + modifiedTime, 5 min name cache; "(Commissioned or later)" wording.
+  Plus friendly-error tests (API + admin-web). Rollback target `dpl_Gq9tmWv6VPRc9egGFo8BxR1u3m9L`.
 - **2026-10-10 - Fix 12, branch `fix/agent-retest-12`.** `a1df51c` per-round primary cap 25 s + 20 s fallback reserve inside the
   55 s budget, timed-out provider skipped for the rest of the request, SDK retries off (new `agent/sendWithFallback.ts`,
   `friendlyError.ts`); single friendly error bubble (API `{error, errorId}` + admin `lib/agentError.ts`); prompt keeps

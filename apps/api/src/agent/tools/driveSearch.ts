@@ -49,6 +49,7 @@ const FOLDER_MIME = "application/vnd.google-apps.folder";
 /** Shared drives and items shared into the account are searched too, not just My Drive. */
 const ALL_DRIVES = { supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: "allDrives" };
 const FILE_FIELDS = "nextPageToken, files(id, name, mimeType, parents, modifiedTime, webViewLink)";
+const FOLDER_FIELDS = "nextPageToken, files(id, name, parents)";
 /** Parents per query - keeps each q string well inside Drive's query length limit. */
 export const PARENT_CHUNK = 40;
 const MAX_PAGES_PER_QUERY = 5;
@@ -170,8 +171,13 @@ export async function buildFolderTree(drive: DriveLike, rootId: string, rootName
   let frontier = [rootId];
   while (frontier.length > 0 && folders.size < MAX_FOLDERS) {
     const next: string[] = [];
-    for (const ids of chunk(frontier, PARENT_CHUNK)) {
-      const children = await listAll(drive, `mimeType = '${FOLDER_MIME}' and trashed = false and ${parentsClause(ids)}`, {}, 20);
+    const levels = await Promise.all(
+      chunk(frontier, PARENT_CHUNK).map(async (ids) => ({
+        ids,
+        children: await listAll(drive, `mimeType = '${FOLDER_MIME}' and trashed = false and ${parentsClause(ids)}`, { fields: FOLDER_FIELDS }, 20),
+      })),
+    );
+    for (const { ids, children } of levels) {
       for (const f of children) {
         // Only trust a folder whose parent really is one we asked about - never widen the tree.
         const parentId = parentInTreeIds(ids, f.parents);
@@ -190,26 +196,34 @@ function parentInTreeIds(ids: string[], parents: string[] | null | undefined): s
 }
 
 let cachedTree: { tree: FolderTree; at: number } | undefined;
+let inflightTree: { rootId: string; promise: Promise<FolderTree> } | undefined;
 
 /** Cached folder tree (per warm instance). `force` rebuilds it, e.g. when a file's parent is a
  * folder created after the cache was filled. */
 export async function getFolderTree(drive: DriveLike, rootId: string, opts: { force?: boolean; now?: number } = {}): Promise<FolderTree> {
   const now = opts.now ?? Date.now();
   if (!opts.force && cachedTree && cachedTree.tree.rootId === rootId && now - cachedTree.at < FOLDER_TREE_TTL_MS) return cachedTree.tree;
-  let rootName = "Shared folder";
+  if (!opts.force && inflightTree && inflightTree.rootId === rootId) return inflightTree.promise;
+  const promise = (async () => {
+    const rootName = await drive.files
+      .get({ fileId: rootId, fields: "id, name", supportsAllDrives: true })
+      .then((r) => (r.data as DriveFile).name ?? undefined)
+      .catch(() => undefined); // Name is cosmetic; the tree itself is what scopes access.
+    const tree = await buildFolderTree(drive, rootId, rootName ?? "Shared folder");
+    cachedTree = { tree, at: now };
+    return tree;
+  })();
+  inflightTree = { rootId, promise };
   try {
-    const meta = (await drive.files.get({ fileId: rootId, fields: "id, name", supportsAllDrives: true })).data as DriveFile;
-    rootName = meta.name ?? rootName;
-  } catch {
-    // Name is cosmetic; the tree itself is what scopes access.
+    return await promise;
+  } finally {
+    if (inflightTree?.promise === promise) inflightTree = undefined;
   }
-  const tree = await buildFolderTree(drive, rootId, rootName);
-  cachedTree = { tree, at: now };
-  return tree;
 }
 
 export function resetFolderTreeCache(): void {
   cachedTree = undefined;
+  inflightTree = undefined;
 }
 
 function toResult(tree: FolderTree, f: DriveFile): DriveSearchResult {
@@ -305,11 +319,15 @@ export async function listDriveDocuments(maxResults = 50, deps: { drive?: DriveL
 
 export async function getDriveDocumentContent(
   fileId: string,
-  deps: { drive?: DriveLike; rootId?: string } = {},
+  deps: { drive?: DriveLike; rootId?: string; cache?: boolean } = {},
 ): Promise<{ name: string; mimeType: string; folderPath: string; webViewLink: string | null | undefined; text: string }> {
   const drive = deps.drive ?? (getDriveClient() as unknown as DriveLike);
   const rootId = deps.rootId ?? getDriveFolderId();
   const meta = await getFileMetadataWithinFolder(drive, fileId, rootId);
+  const cacheable = !deps.drive || deps.cache === true;
+  const key = `${fileId}:${meta.modifiedTime ?? ""}`;
+  const hit = cacheable ? docCache.get(key) : undefined;
+  if (hit && Date.now() - hit.at < DOC_CACHE_TTL_MS) return hit.value;
 
   if (!isExtractable(meta.mimeType)) {
     throw new ExtractionError(`Unsupported file type: ${meta.mimeType}`);
@@ -319,19 +337,29 @@ export async function getDriveDocumentContent(
   const raw = await extractText(buffer, exportMime ?? meta.mimeType, { maxPages: DOC_MAX_PDF_PAGES });
   const text = raw.length > DOC_MAX_TEXT_CHARS ? `${raw.slice(0, DOC_MAX_TEXT_CHARS)}
 [... text cut at ${DOC_MAX_TEXT_CHARS} characters; open the file from its Drive link for the rest]` : raw;
-  return { name: meta.name, mimeType: meta.mimeType, folderPath: meta.folderPath, webViewLink: meta.webViewLink, text };
+  const value = { name: meta.name, mimeType: meta.mimeType, folderPath: meta.folderPath, webViewLink: meta.webViewLink, text };
+  if (cacheable) {
+    docCache.set(key, { at: Date.now(), value });
+    while (docCache.size > DOC_CACHE_MAX) docCache.delete(docCache.keys().next().value as string);
+  }
+  return value;
 }
 
 /** Reading a document: only the first pages of a PDF are parsed and the text sent to the model is capped, so a long file can't eat the turn. */
 export const DOC_MAX_PDF_PAGES = 20;
 export const DOC_MAX_TEXT_CHARS = 60_000;
-/** Same document asked for again within this window (follow-up questions) is served from memory. */
-export const DOC_CACHE_TTL_MS = 60_000;
-const DOC_CACHE_MAX = 5;
+/** Extracted text is kept per file id + modifiedTime (an edited file misses the cache); the
+ * metadata check that reads modifiedTime still runs on every call, so access rules apply. */
+export const DOC_CACHE_TTL_MS = 10 * 60_000;
+const DOC_CACHE_MAX = 10;
+/** A name that resolved to a file id is remembered for this long. */
+export const NAME_CACHE_TTL_MS = 5 * 60_000;
 type DocContent = Awaited<ReturnType<typeof getDriveDocumentContent>>;
 const docCache = new Map<string, { at: number; value: DocContent }>();
+const nameCache = new Map<string, { at: number; id: string }>();
 export function resetDocContentCache(): void {
   docCache.clear();
+  nameCache.clear();
 }
 
 /** Drive file ids are 10+ chars of letters, digits, "-" and "_" (no spaces or dots). */
@@ -342,46 +370,44 @@ function isNotFound(err: unknown): boolean {
   return String(e?.code) === "404" || String(e?.status) === "404" || /not found/i.test(String(e?.message ?? ""));
 }
 
-/** Newest file under the folder tree whose name is exactly `name` (case-insensitive, extension
- * optional). Hidden files are never resolved. */
-export async function findFileIdByName(name: string, deps: { drive?: DriveLike; rootId?: string } = {}): Promise<string> {
-  const drive = deps.drive ?? (getDriveClient() as unknown as DriveLike);
-  const rootId = deps.rootId ?? getDriveFolderId();
+/** Several files match a partial name and none is clearly the one asked for. */
+export class AmbiguousDocumentError extends ExtractionError {
+  constructor(message: string, public candidates: { fileId: string; name: string; folderPath: string; modifiedTime: string | null | undefined }[]) {
+    super(message);
+  }
+}
+
+/** Resolves a file name to a file id through ONE Drive search: an exact name (case-insensitive,
+ * extension optional, newest first) wins; otherwise the single file whose name holds every word
+ * of the query; otherwise the candidates are returned in an AmbiguousDocumentError. Hidden files
+ * are never resolved. */
+export async function findFileIdByName(name: string, deps: { drive?: DriveLike; rootId?: string; cache?: boolean } = {}): Promise<string> {
   const wanted = name.trim();
   if (isHiddenDriveFile(wanted, null)) throw new ExtractionError(HIDDEN_FILE_MESSAGE);
-  const tree = await getFolderTree(drive, rootId);
-  const batches = await Promise.all(
-    chunk([...tree.folders.keys()], PARENT_CHUNK).map((ids) =>
-      listAll(drive, `trashed = false and mimeType != '${FOLDER_MIME}' and ${HIDDEN_FILES_CLAUSE} and ${parentsClause(ids)} and name contains '${escapeDriveQuery(stripExtension(wanted))}'`),
-    ),
-  );
+  const cacheable = !deps.drive || deps.cache === true;
+  const cached = cacheable ? nameCache.get(wanted.toLowerCase()) : undefined;
+  if (cached && Date.now() - cached.at < NAME_CACHE_TTL_MS) return cached.id;
+  const found = await searchDriveDocuments(wanted, 25, deps);
+  const files = found.results.filter((r) => !r.isFolder);
   const same = (n: string) => n.toLowerCase() === wanted.toLowerCase() || stripExtension(n).toLowerCase() === stripExtension(wanted).toLowerCase();
-  const match = batches
-    .flat()
-    .filter((f) => f.id && f.name && same(f.name) && parentInTree(tree, f.parents) && !isHiddenDriveFile(f.name, f.mimeType))
-    .sort((a, b) => String(b.modifiedTime ?? "").localeCompare(String(a.modifiedTime ?? "")))[0];
-  if (!match) throw new ExtractionError(`No document named "${wanted}" in the shared folder - use search_documents to find its fileId.`);
-  return match.id!;
+  const tokens = searchTokens(wanted);
+  const exact = files.filter((r) => same(r.name));
+  const everyWord = tokens.length > 0 ? files.filter((r) => tokens.every((t) => r.name.toLowerCase().includes(t))) : [];
+  const pick = exact[0] ?? (everyWord.length === 1 ? everyWord[0] : undefined);
+  if (pick) {
+    if (cacheable) nameCache.set(wanted.toLowerCase(), { at: Date.now(), id: pick.fileId });
+    return pick.fileId;
+  }
+  if (files.length === 0) throw new ExtractionError(`No document named "${wanted}" in the shared folder - use search_documents to find its fileId.`);
+  const candidates = (everyWord.length > 1 ? everyWord : files).slice(0, 6).map((r) => ({ fileId: r.fileId, name: r.name, folderPath: r.folderPath, modifiedTime: r.modifiedTime }));
+  throw new AmbiguousDocumentError(`Several documents match "${wanted}"; ask the user which one, or call get_document_content again with one candidate's fileId.`, candidates);
 }
 
-/** get_document_content input: a Drive fileId OR the file's exact name. An id-shaped value that
- * Drive doesn't know (e.g. "AgsarPaint_Quote_TTCRN") is retried as a name. */
+/** get_document_content input: a Drive fileId, the file's exact name or a partial name. An
+ * id-shaped value that Drive doesn't know (e.g. "AgsarPaint_Quote_TTCRN") is retried as a name. */
 export async function getDriveDocumentByRef(ref: string, deps: { drive?: DriveLike; rootId?: string; cache?: boolean } = {}) {
   const r = ref.trim();
-  if (!r) throw new ExtractionError("Give the fileId from search_documents/list_documents, or the file's exact name.");
-  const cacheable = !deps.drive || deps.cache === true;
-  const hit = cacheable ? docCache.get(r) : undefined;
-  if (hit && Date.now() - hit.at < DOC_CACHE_TTL_MS) return hit.value;
-  const value = await readDocumentByRef(r, deps);
-  if (cacheable) {
-    docCache.set(r, { at: Date.now(), value });
-    while (docCache.size > DOC_CACHE_MAX) docCache.delete(docCache.keys().next().value as string);
-  }
-  return value;
-}
-
-async function readDocumentByRef(r: string, deps: { drive?: DriveLike; rootId?: string; cache?: boolean }) {
-
+  if (!r) throw new ExtractionError("Give the fileId from search_documents/list_documents, or the file's name.");
   if (DRIVE_ID_RE.test(r)) {
     try {
       return await getDriveDocumentContent(r, deps);
@@ -392,20 +418,51 @@ async function readDocumentByRef(r: string, deps: { drive?: DriveLike; rootId?: 
   return getDriveDocumentContent(await findFileIdByName(r, deps), deps);
 }
 
+/** Question keywords -> the matching parts of a long document. Short text (or no keywords) is
+ * returned whole. Otherwise: a short head, then the paragraphs that contain a keyword, capped. */
+export const EXCERPT_THRESHOLD_CHARS = 6_000;
+export const EXCERPT_MAX_CHARS = 5_000;
+const EXCERPT_HEAD_CHARS = 1_200;
+export function excerptForFocus(text: string, focus: string | undefined): { text: string; excerpted: boolean; totalChars: number } {
+  const total = text.length;
+  const words = [...new Set((focus ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3))];
+  if (total <= EXCERPT_THRESHOLD_CHARS || words.length === 0) return { text, excerpted: false, totalChars: total };
+  const head = text.slice(0, EXCERPT_HEAD_CHARS);
+  const paragraphs = text.slice(EXCERPT_HEAD_CHARS).split(/\n\s*\n|\n(?=[A-Z0-9][^\n]{0,60}:)/);
+  const scored = paragraphs
+    .map((p, i) => ({ p: p.trim(), i, hits: words.filter((w) => p.toLowerCase().includes(w)).length }))
+    .filter((x) => x.hits > 0 && x.p)
+    .sort((a, b) => b.hits - a.hits || a.i - b.i);
+  const picked: typeof scored = [];
+  let used = head.length;
+  for (const x of scored) {
+    const piece = x.p.length > 1_500 ? x.p.slice(0, 1_500) : x.p;
+    if (used + piece.length > EXCERPT_MAX_CHARS) continue;
+    picked.push({ ...x, p: piece });
+    used += piece.length + 2;
+  }
+  if (picked.length === 0) return { text: text.slice(0, EXCERPT_MAX_CHARS), excerpted: true, totalChars: total };
+  picked.sort((a, b) => a.i - b.i);
+  const body = `${head}\n[... excerpt: parts of the document matching "${words.join(" ")}" follow; ${total} characters in total ...]\n${picked.map((x) => x.p).join("\n\n")}`;
+  return { text: body, excerpted: true, totalChars: total };
+}
+
 /** Resolve metadata only after proving the file's parent is a folder inside the configured
  * tree. A caller-supplied file ID must never broaden the account's effective data scope. */
 export async function getFileMetadataWithinFolder(
   drive: DriveLike,
   fileId: string,
   rootId: string,
-): Promise<{ name: string; mimeType: string; folderPath: string; webViewLink: string | null | undefined }> {
+): Promise<{ name: string; mimeType: string; folderPath: string; webViewLink: string | null | undefined; modifiedTime: string | null | undefined }> {
   if (!fileId || fileId === rootId) throw new ExtractionError("Could not resolve the requested Drive file");
-  const meta = (await drive.files.get({ fileId, fields: "id, name, mimeType, parents, trashed, webViewLink", supportsAllDrives: true })).data as DriveFile;
+  const treePromise = getFolderTree(drive, rootId);
+  treePromise.catch(() => undefined);
+  const meta = (await drive.files.get({ fileId, fields: "id, name, mimeType, parents, trashed, webViewLink, modifiedTime", supportsAllDrives: true })).data as DriveFile;
   if (meta.trashed) throw new ExtractionError("The requested Drive file is in trash");
   if (!meta.name || !meta.mimeType) throw new ExtractionError("The requested Drive file has incomplete metadata");
   if (isHiddenDriveFile(meta.name, meta.mimeType)) throw new ExtractionError(HIDDEN_FILE_MESSAGE);
 
-  let tree = await getFolderTree(drive, rootId);
+  let tree = await treePromise;
   let parent = parentInTree(tree, meta.parents);
   if (!parent) {
     // The parent may be a folder created after the tree was cached - rebuild once.
@@ -413,7 +470,7 @@ export async function getFileMetadataWithinFolder(
     parent = parentInTree(tree, meta.parents);
   }
   if (!parent) throw new ExtractionError("The requested Drive file is outside the configured folder");
-  return { name: meta.name, mimeType: meta.mimeType, folderPath: folderPath(tree, parent), webViewLink: meta.webViewLink };
+  return { name: meta.name, mimeType: meta.mimeType, folderPath: folderPath(tree, parent), webViewLink: meta.webViewLink, modifiedTime: meta.modifiedTime };
 }
 
 /** Download cap, so a stuck Drive response fails the tool call fast instead of eating the turn.

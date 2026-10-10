@@ -148,6 +148,10 @@ General pass criteria for every row:
 | 66 | Ask a heavy question (receivables, orders list) when the primary provider is slow. | - | Chat + logs | Answer arrives within ~55 s via the fallback; no failed send | |
 | 67 | Force an error (e.g. disconnect network mid-send, or a provider outage). | - | Chat | One bubble "Sorry - I couldn't finish that, please try again" + Copy my message; no provider names, no \n text | |
 | 68 | Ask for a clause from a document (e.g. warranty). | - | Chat reply | The quote keeps its label ("Warranty: ...") | |
+| 69 | Ask "Any vendor bills overdue?" | - | Chat reply | Every overdue bill listed with number, vendor, days overdue and balance (e.g. TXIN0934 (Platino), 11 days) | |
+| 70 | Ask "What is the warranty in AgsarPaint quote?" (partial name). | - | Chat + logs | One get_document_content call, no search_documents; rounds=2; repeat is faster | |
+| 71 | Ask "How many open orders?" and read the rule. | - | Chat reply | Rule reads "(Commissioned or later)" | |
+| 72 | Ask a document question whose file name matches several files. | - | Chat reply | Assistant lists the candidates and asks which one | |
 
 ## Run summary
 

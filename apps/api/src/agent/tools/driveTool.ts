@@ -1,5 +1,5 @@
 import type { AgentTool, AgentAuthContext } from "./types";
-import { searchDriveDocuments, listDriveDocuments, getDriveDocumentByRef } from "./driveSearch";
+import { searchDriveDocuments, listDriveDocuments, getDriveDocumentByRef, excerptForFocus, AmbiguousDocumentError } from "./driveSearch";
 import { ExtractionError } from "../../lib/docExtract";
 
 function forbidden() {
@@ -55,14 +55,19 @@ export const driveTools: AgentTool[] = [
   {
     name: "get_document_content",
     description:
-      "Reads and extracts the text content of one specific document, given the fileId returned by " +
-      "search_documents or list_documents, or the file's exact name (e.g. 'AgsarPaint_Quote_TTCRN v1.2.pdf'). Supports PDF (its text layer), DOCX, and plain text/CSV files. " +
+      "Reads and extracts the text content of one specific document. When the user names a file, call THIS tool " +
+      "directly with that name (exact like 'AgsarPaint_Quote_TTCRN v1.2.pdf' or partial like 'AgsarPaint quote') - do " +
+      "NOT call search_documents first. A partial name that fits one file reads it; if several fit, the result lists " +
+      "candidates (name, folder, fileId) to ask the user about. A fileId from search_documents/list_documents also works. " +
+      "Pass focus = the topic words of the question (e.g. 'warranty') so a long document returns the matching parts first. " +
+      "Supports PDF (its text layer), DOCX, and plain text/CSV files. " +
       "Only a scanned/image-only PDF with no text layer cannot be read (no OCR); any other error is a read " +
       "failure - quote it, don't call the file 'scanned' or 'without OCR text'.",
     inputSchema: {
       type: "object",
       properties: {
-        fileId: { type: "string", description: "The Drive fileId of the document to read, or its exact file name." },
+        fileId: { type: "string", description: "The Drive fileId of the document to read, or its file name (exact or partial)." },
+        focus: { type: "string", description: "Topic words from the user's question (e.g. 'warranty payment terms'); long documents are cut down to the matching parts." },
       },
       required: ["fileId"],
     },
@@ -70,8 +75,11 @@ export const driveTools: AgentTool[] = [
       if (isCustomer(auth)) return forbidden();
       const fileId = String(input.fileId ?? "");
       try {
-        return await getDriveDocumentByRef(fileId);
+        const doc = await getDriveDocumentByRef(fileId);
+        const { text, excerpted, totalChars } = excerptForFocus(doc.text, input.focus ? String(input.focus) : undefined);
+        return excerpted ? { ...doc, text, excerpted, totalChars } : doc;
       } catch (err) {
+        if (err instanceof AmbiguousDocumentError) return { error: err.message, candidates: err.candidates };
         if (err instanceof ExtractionError) {
           return { error: err.message };
         }
