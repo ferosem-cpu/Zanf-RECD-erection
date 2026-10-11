@@ -22,6 +22,8 @@ const ackSchema = z.object({
   error: z.string().max(2000).optional(),
 }).strict();
 
+const IDEMPOTENCY_KEY = /^[!-~]{1,128}$/;
+
 export interface WhatsappBridgeRouterDeps {
   nonces: NonceStore;
   service: BridgeService;
@@ -43,10 +45,16 @@ export function createWhatsappBridgeRouter(deps: WhatsappBridgeRouterDeps): Rout
     }
   };
 
+  // Runs after auth (router.use above), so unauthenticated callers never reach this validation.
+  const idempotencyKey = (req: express.Request): string | null => {
+    const v = req.header("idempotency-key");
+    return v && IDEMPOTENCY_KEY.test(v) ? v : null;
+  };
+
   router.post("/ingest", async (req, res) => {
     const parsed = ingestSchema.safeParse(body(req));
-    const idem = req.header("idempotency-key");
-    if (!parsed.success || (idem && idem !== parsed.data.messageId)) return void res.status(400).json({ error: "Invalid request" });
+    const idem = idempotencyKey(req);
+    if (!parsed.success || !idem || idem !== parsed.data.messageId) return void res.status(400).json({ error: "Invalid request" });
     const { decision, jobId } = await deps.service.ingest(keyId(res), parsed.data);
     res.status(202).json({ decision });
     if (jobId) deps.background(deps.service.processJob(jobId));
@@ -61,12 +69,14 @@ export function createWhatsappBridgeRouter(deps: WhatsappBridgeRouterDeps): Rout
   });
 
   router.post("/outbox/:id/claim", async (req, res) => {
+    if (!idempotencyKey(req)) return void res.status(400).json({ error: "Invalid request" });
     const out = await deps.service.claim(keyId(res), String(req.params.id));
     if (out.status === 200) return void res.json({ text: out.text, sendBy: out.sendBy });
     res.status(out.status).json({ error: out.status === 409 ? "Not claimable" : out.status === 410 ? "Gone" : "Not found" });
   });
 
   router.post("/ack", async (req, res) => {
+    if (!idempotencyKey(req)) return void res.status(400).json({ error: "Invalid request" });
     const parsed = ackSchema.safeParse(body(req));
     if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
     const status = await deps.service.ack(keyId(res), parsed.data);

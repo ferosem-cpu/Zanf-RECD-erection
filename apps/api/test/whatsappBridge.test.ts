@@ -180,7 +180,8 @@ function call(method: "GET" | "POST", path: string, body?: unknown, over: Record
     body: method === "GET" ? undefined : raw,
     headers: {
       "content-type": "application/json", "x-zan-key-id": keyId, "x-zan-timestamp": ts, "x-zan-nonce": nonce, "x-zan-body-sha256": sha,
-      "x-zan-signature": signBridgeRequest(keyId === "k1" ? SECRET : "other-secret-0123456789", method, path, ts, nonce, sha), ...over,
+      "x-zan-signature": signBridgeRequest(keyId === "k1" ? SECRET : "other-secret-0123456789", method, path, ts, nonce, sha),
+      ...(method === "POST" ? { "idempotency-key": String((body as { messageId?: string } | undefined)?.messageId ?? crypto.randomUUID()) } : {}), ...over,
     },
   });
 }
@@ -421,4 +422,19 @@ test("claim: an expired lease stops counting toward the cap and is reclaimable",
   nowMs += 100_000;
   assert.ok(await fs_.store.claimJob(c.id, "t3", clock(), 90_000, 3));
   assert.ok(await fs_.store.claimJob(a.id, "t4", clock(), 90_000, 3));
+});
+
+test("Idempotency-Key is required (after auth) on ingest, claim and ack; malformed values are 400", async () => {
+  const noKey = (path: string, body: unknown) => call("POST", path, body, { "idempotency-key": "" });
+  assert.equal((await noKey("/wa/ingest", msg("ik1"))).status, 400);
+  assert.equal((await noKey("/wa/outbox/x/claim", {})).status, 400);
+  assert.equal((await noKey("/wa/ack", { outboxId: "x", status: "sent", at: 1 })).status, 400);
+  for (const bad of ["a b", "x".repeat(129), "café"]) {
+    assert.equal((await call("POST", "/wa/ack", { outboxId: "x", status: "sent", at: 1 }, { "idempotency-key": bad })).status, 400, bad);
+  }
+  assert.equal((await call("POST", "/wa/ingest", msg("ik2"), { "idempotency-key": "x".repeat(128) })).status, 400, "ingest key must equal messageId");
+  assert.equal((await call("POST", "/wa/ack", { outboxId: "nope", status: "sent", at: 1 }, { "idempotency-key": "k-1:ok" })).status, 404, "valid key reaches the handler");
+  const unsigned = await fetch(base + "/wa/ack", { method: "POST", body: "{}" });
+  assert.equal(unsigned.status, 401, "auth still comes first");
+  assert.equal(fs_.inbound.length, 0);
 });
