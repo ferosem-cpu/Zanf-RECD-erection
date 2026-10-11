@@ -1472,3 +1472,14 @@ model WhatsappSenderMapping {
 
   @@index([userId])
 }
+
+/// WhatsApp bridge replay protection (M2): one row per accepted request nonce, kept >= 600 s.
+/// Durable because serverless instances do not share memory. Swept opportunistically.
+model WhatsappBridgeNonce {
+  keyId     String
+  nonce     String
+  expiresAt DateTime
+
+  @@id([keyId, nonce])
+  @@index([expiresAt])
+}
