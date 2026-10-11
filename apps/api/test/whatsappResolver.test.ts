@@ -209,3 +209,105 @@ test("a tool handler that throws becomes an error result, not a crash or a leak"
   const turn = await open({ tools: [fakeTool("search_customers", () => { throw new Error("boom"); })] });
   assert.equal((await run(turn, "search_customers")).error, "boom");
 });
+
+// ---------- Codex M1 review fixes ----------
+const DRIVE = { photosDriveFolderId: "f1", photosDriveFolderUrl: "https://drive.google.com/x", drawingsDriveFolderId: "f2", drawingsDriveFolderUrl: "https://drive.google.com/y" };
+const fullSite = {
+  id: "s1", address: "A", companyName: "Co", assignedEngineerId: "u1", vendorId: null, currentStageId: "st", gpsLat: 1, structureDiagramUrl: "https://x/d.png", ...DRIVE,
+  currentStage: { key: "k", label: "Installing", phase: "P", sequenceOrder: 3, createdAt: "t" }, assignedEngineer: { name: "E", email: "e@x" }, vendor: { name: "V", gstin: "G" },
+};
+
+test("order detail projection (Sales and Ops): Drive links and unlisted fields are absent, allowed fields present", async () => {
+  const order = {
+    id: "o1", orderNumber: "SO-1", quantity: 1, value: 9, customerNotes: "n", customer: { id: "c", name: "ACME", gstin: "G" },
+    product: { name: "R", model: "M", price: 3 }, salesEngineer: { name: "S", email: "s@x" },
+    lineItems: [{ id: "l", quantity: 1, product: { name: "R", model: "M" } }], site: fullSite,
+  };
+  for (const role of ["sales", "operations_pm"]) {
+    const turn = await open({ user: () => ctx({ roleKey: role }), tools: [fakeTool("get_document_detail", order)] });
+    const out = await run(turn, "get_document_detail", { docType: "order", id: "o1" });
+    const text = JSON.stringify(out);
+    assert.doesNotMatch(text, /[Dd]rive|folder/, role);
+    for (const gone of ["gpsLat", "structureDiagramUrl", "gstin", "email"]) assert.equal(text.includes(gone), false, `${role}: ${gone}`);
+    assert.equal(out.orderNumber, "SO-1");
+    assert.equal(out.site.address, "A");
+    assert.equal(out.site.currentStage.label, "Installing");
+    assert.equal(out.site.vendor.name, "V");
+    assert.equal(out.lineItems[0].product.model, "M");
+    assert.equal(out.customer.name, "ACME");
+  }
+});
+
+test("work-order and complaint detail projection (engineer / Ops): Drive links absent, allowed fields present", async () => {
+  const wo = {
+    id: "w1", workOrderNumber: "WO-1", siteId: "mine", title: "T", status: "open", completionPhotoUrl: "https://drive.google.com/p", assignedTo: { name: "E", email: "x" },
+    site: { ...fullSite, order: { orderNumber: "SO-1", value: 5, customer: { name: "ACME", gstin: "G" } } },
+  };
+  const complaint = { id: "k1", ticketNumber: "T-1", siteId: "mine", description: "d", status: "open", customer: { name: "ACME", gstin: "G" }, site: { address: "A", ...DRIVE } };
+  const sites = { mine: { assignedEngineerId: "u1", vendorId: null } };
+  const cases: Array<[string, string, unknown, string]> = [
+    ["erection_engineer", "work_order", wo, "workOrderNumber"],
+    ["operations_pm", "work_order", wo, "workOrderNumber"],
+    ["erection_engineer", "complaint", complaint, "ticketNumber"],
+  ];
+  for (const [role, docType, doc, key] of cases) {
+    const turn = await open({ user: () => ctx({ roleKey: role }), tools: [fakeTool("get_document_detail", doc)], sites });
+    const out = await run(turn, "get_document_detail", { docType, id: "x" });
+    assert.doesNotMatch(JSON.stringify(out), /[Dd]rive|folder|completionPhotoUrl|gstin|email/, `${role}/${docType}`);
+    assert.ok(out[key], `${role}/${docType}: ${key}`);
+    assert.equal(out.customer?.name ?? out.site.order?.customer?.name, "ACME");
+    assert.equal(out.site.address ?? "A", "A");
+  }
+});
+
+test("admin keeps order value in the projection but never Drive links", async () => {
+  const order = { id: "o1", orderNumber: "SO-1", value: 9, customer: { name: "ACME", gstin: "G" }, site: fullSite };
+  const turn = await open({ user: () => ctx({ roleKey: "management" }), tools: [fakeTool("get_document_detail", order)] });
+  const out = await run(turn, "get_document_detail", { docType: "order", id: "o1" });
+  assert.equal(out.value, 9);
+  assert.equal(out.customer.gstin, "G");
+  assert.doesNotMatch(JSON.stringify(out), /[Dd]rive/);
+  const vendor = await open({ user: () => ctx({ roleKey: "management" }), tools: [fakeTool("get_document_detail", { id: "v", sites: [{ id: "s", ...DRIVE }] })] });
+  assert.doesNotMatch(JSON.stringify(await run(vendor, "get_document_detail", { docType: "vendor", id: "v" })), /[Dd]rive/);
+});
+
+test("extra money keys are stripped for non-finance (lineTotal, mrp, margin, advance, retention, gstPercentage, interestRate)", async () => {
+  const payload = { totalCount: 1, rows: [{ id: "a", lineTotal: 1, MRP: 2, Margin: 3, advance: 4, retention: 5, gstPercentage: 6, interestRate: 7, quantity: 2 }] };
+  const turn = await open({ user: () => ctx({ roleKey: "sales" }), tools: [fakeTool("search_customers", payload)] });
+  const out = await run(turn, "search_customers");
+  assert.deepEqual(out.rows[0], { id: "a", quantity: 2 });
+  assert.equal(out.totalCount, 1);
+});
+
+test("recheck: fails (and flags the turn) after disable, pause, deactivation, lookup error or any group change", async () => {
+  type S = { u: WaUserContext | null; m: MappingRow | null; boom: boolean };
+  const scenarios: Array<[string, (s: S) => void]> = [
+    ["disabled", (s) => { s.m = mapping({ enabled: false }); }],
+    ["paused", (s) => { s.m = mapping({ aiPaused: true }); }],
+    ["mapping gone", (s) => { s.m = null; }],
+    ["deactivated", (s) => { s.u = ctx({ roleKey: "finance", isActive: false }); }],
+    ["user gone", (s) => { s.u = null; }],
+    ["downgrade finance->sales", (s) => { s.u = ctx({ roleKey: "sales" }); }],
+    ["change finance->admin", (s) => { s.u = ctx({ roleKey: "management" }); }],
+    ["lookup error", (s) => { s.boom = true; }],
+  ];
+  for (const [name, change] of scenarios) {
+    const state: S = { u: ctx({ roleKey: "finance" }), m: mapping(), boom: false };
+    const turn = await open({ user: () => { if (state.boom) throw new Error("db down"); return state.u; }, row: () => state.m });
+    assert.equal(await turn.recheck(), true, `${name}: unchanged`);
+    change(state);
+    assert.equal(await turn.recheck(), false, name);
+    assert.equal(turn.shouldAbort(), true, name);
+  }
+});
+
+test("a group change mid-turn revokes on the next tool call even when the tool is still allowed in the new group", async () => {
+  seen.length = 0;
+  const state = { u: ctx({ roleKey: "management" }) };
+  const turn = await open({ user: () => state.u });
+  assert.equal((await run(turn, "search_orders_and_sites")).ok, true);
+  state.u = ctx({ roleKey: "finance" });
+  assert.ok((await run(turn, "search_orders_and_sites")).error);
+  assert.equal(seen.length, 1);
+  assert.equal(turn.revokedReason(), "group_changed");
+});

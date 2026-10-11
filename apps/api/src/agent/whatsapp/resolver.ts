@@ -9,7 +9,7 @@
  */
 import type { AgentTool, AgentAuthContext } from "../tools/types";
 import {
-  checkUserAccess, isDetailDocAllowed, isFinanceGroup, isToolAllowed, looksLikeFinanceDoc, sanitizeNonFinance,
+  checkUserAccess, projectDetail, isDetailDocAllowed, isFinanceGroup, isToolAllowed, looksLikeFinanceDoc, sanitizeNonFinance,
   type SenderDecision, type SenderStore, type WaGroup,
 } from "./policy";
 import { waSiteVisible } from "./siteScope";
@@ -28,6 +28,8 @@ export interface WhatsappTurn {
   getTool: (name: string) => AgentTool | undefined;
   isWriteTool: (name: string) => boolean;
   shouldAbort: () => boolean;
+  /** Re-resolves mapping, user and group right now; false (and flags revoked) on any change or failure. */
+  recheck: () => Promise<boolean>;
   revokedReason: () => string | null;
 }
 
@@ -37,6 +39,22 @@ const NOT_FOUND = (docType: string, id: string) => ({ error: `No ${docType} foun
 export function createWhatsappTurn(sender: Extract<SenderDecision, { ok: true }>, deps: WhatsappTurnDeps): WhatsappTurn {
   let revoked: string | null = null;
   const { mapping } = sender;
+
+  async function recheck(): Promise<boolean> {
+    if (revoked) return false;
+    try {
+      const row = await deps.store.findById(mapping.id);
+      if (!row || !row.enabled || row.aiPaused || row.userId !== mapping.userId) { revoked = "mapping_changed"; return false; }
+      const user = await deps.store.loadUser(mapping.userId);
+      const access = user ? checkUserAccess(user) : null;
+      if (!user || !access || !access.ok) { revoked = access && !access.ok ? access.reason : "user_missing"; return false; }
+      if (access.group !== sender.group) { revoked = "group_changed"; return false; }
+      return true;
+    } catch {
+      revoked = "lookup_error";
+      return false;
+    }
+  }
 
   function wrap(inner: AgentTool): AgentTool {
     return {
@@ -58,6 +76,10 @@ export function createWhatsappTurn(sender: Extract<SenderDecision, { ok: true }>
           return DENIED;
         }
         const group: WaGroup = access.group;
+        if (group !== sender.group) {
+          revoked = "group_changed";
+          return DENIED;
+        }
         if (!isToolAllowed(group, inner.name) || deps.isWriteTool(inner.name)) return DENIED;
 
         const auth: AgentAuthContext = {
@@ -86,10 +108,7 @@ export function createWhatsappTurn(sender: Extract<SenderDecision, { ok: true }>
             const site = siteId ? await deps.siteLookup(siteId) : null;
             if (!waSiteVisible(auth, site)) return NOT_FOUND(docType, docId);
           }
-          if (docType === "order" && !isFinanceGroup(group)) {
-            const customer = (result as { customer?: { name?: string } }).customer;
-            result = { ...(result as object), customer: customer ? { name: customer.name } : undefined };
-          }
+          result = projectDetail(docType, result, isFinanceGroup(group));
         }
         return isFinanceGroup(group) ? result : sanitizeNonFinance(result);
       },
@@ -104,6 +123,7 @@ export function createWhatsappTurn(sender: Extract<SenderDecision, { ok: true }>
     getTool: (name) => byName.get(name),
     isWriteTool: deps.isWriteTool,
     shouldAbort: () => revoked !== null,
+    recheck,
     revokedReason: () => revoked,
   };
 }

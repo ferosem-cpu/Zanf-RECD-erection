@@ -1,5 +1,6 @@
 -- WhatsApp sender mapping (M1). Additive only: one new table, no change to existing tables.
--- Written by hand; NOT applied to any database.
+-- Written by hand; NOT applied to any database (edited in place after the Codex M1 review
+-- because this file had never been applied anywhere).
 
 -- CreateTable
 CREATE TABLE "WhatsappSenderMapping" (
@@ -28,6 +29,10 @@ CREATE UNIQUE INDEX "WhatsappSenderMapping_lid_key" ON "WhatsappSenderMapping"("
 
 -- CreateIndex
 CREATE INDEX "WhatsappSenderMapping_userId_idx" ON "WhatsappSenderMapping"("userId");
+
+-- One enabled mapping per user, enforced by the database. Prisma cannot express a partial
+-- index: keep this statement if the schema/migrations are regenerated.
+CREATE UNIQUE INDEX "WhatsappSenderMapping_one_enabled_user_idx" ON "WhatsappSenderMapping"("userId") WHERE "enabled" = true;
 
 -- AddForeignKey
 ALTER TABLE "WhatsappSenderMapping" ADD CONSTRAINT "WhatsappSenderMapping_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

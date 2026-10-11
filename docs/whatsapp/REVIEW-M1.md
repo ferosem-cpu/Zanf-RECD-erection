@@ -37,3 +37,16 @@ Edited (additive, optional params): `schema.prisma` (new model + User back-relat
 - `search_customers` still returns contacts to Sales/Admin (as DISCOVERY 4.2.1 allows); Finance gets no customer tool.
 - Sanitiser is key-name based: new money fields with unusual names would need adding to the lists in `policy.ts`.
 - Real-DB behaviour of the scoped queries is untested (fakes only), as per project rules.
+
+## Codex M1 review -> fixes
+
+| Finding | Fix | Files | Tests | Status |
+|---|---|---|---|---|
+| BLOCKER: allowed order / work-order detail exposes Site Drive folder IDs/URLs | Fixed per-type field allowlist (order incl. finance variant, work_order, complaint) applied on the WhatsApp path only; unlisted fields (incl. nested) dropped; any key containing "drive" dropped for every doc type | `agent/whatsapp/policy.ts` (`projectDetail`), `agent/whatsapp/resolver.ts` | `whatsappResolver.test.ts`: order (Sales, Ops), work_order (engineer, Ops), complaint (engineer), admin/vendor | Fixed |
+| BLOCKER: no access re-check before a reply (no-tool reply, timeout/error paths, group change) | `finalCheck` hook on `runAgentTurn` runs after every reply path; `turn.recheck()` reloads mapping, user and group, fails closed on any change or lookup error (reply becomes empty = silent). A group change mid-turn now revokes instead of returning DENIED only. Turn errors still propagate (nothing sent) | `agent/llm.ts`, `agent/whatsapp/finalCheck.ts`, `agent/whatsapp/resolver.ts` | `whatsappSilence.test.ts` (no-tool, timeout/error, downgrade, lookup failure), `whatsappResolver.test.ts` (recheck, group change) | Fixed; the future bridge route must pass `finalCheck: turn.recheck` (no route calls it yet) |
+| MEDIUM: key-based redaction misses keys | Added lineTotal, mrp, margin, advance, retention, gstPercentage, interestRate to the strip list. Free-text money is NOT redacted (projection is the boundary; strings stay) | `agent/whatsapp/policy.ts` | `whatsappResolver.test.ts` | Keys fixed; free text accepted risk |
+| MEDIUM: one enabled mapping per user can race | Partial unique index `WhatsappSenderMapping_one_enabled_user_idx` added to the M1 migration (edited in place; never applied anywhere); schema comment updated | migration.sql, `schema.prisma` | none (no DB access) | Written, not applied, not verified against a DB |
+| MEDIUM: scope tests only fake Prisma args | Not addressed | | | Open: disposable-Postgres test before M4/M5 |
+| LOW: absent named test files, super-admin without MANAGE_SETTINGS, concurrent enable, LID binding | `whatsappSilence.test.ts` added; rest not addressed | | | Partly open |
+
+Test counts after fixes: API 223/223, admin-web 35/35.

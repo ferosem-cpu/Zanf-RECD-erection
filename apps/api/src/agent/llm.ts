@@ -14,6 +14,7 @@ import { AGENT_FRIENDLY_ERROR } from "./friendlyError";
 import { executeToolCalls } from "./toolExecution";
 import { createTurnTimer } from "./turnTiming";
 import { sanitizeHistory } from "./assistantText";
+import { withFinalCheck } from "./whatsapp/finalCheck";
 
 const MAX_TOOL_TURNS = 8;
 
@@ -41,6 +42,9 @@ export interface RunAgentTurnParams {
   isWriteTool?: (name: string) => boolean;
   /** Checked after each tool step; true ends the turn with an empty reply (silent abort). */
   shouldAbort?: () => boolean;
+  /** Awaited after the turn produces ANY reply (plain answer, timeout, error fallback); false or
+   * a throw replaces the reply with "" (silent). WhatsApp re-checks sender access here. */
+  finalCheck?: () => Promise<boolean>;
 }
 
 export interface RunAgentTurnResult {
@@ -52,7 +56,11 @@ function toUnifiedTools(tools: AgentTool[]): UnifiedToolSchema[] {
   return tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
 }
 
-export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgentTurnResult> {
+export function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgentTurnResult> {
+  return withFinalCheck(() => runAgentLoop(params), params.finalCheck);
+}
+
+async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnResult> {
   const { systemPrompt, tools, onToolCall } = params;
   const unifiedTools = toUnifiedTools(tools);
 

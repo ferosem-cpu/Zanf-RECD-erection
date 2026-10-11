@@ -72,6 +72,7 @@ const STRIP_EXACT = new Set([
   "allocations", "allocation", "paymentallocations", "billallocations", "paymentordertags",
   "expenses", "purchaseorders", "payments", "invoices", "quotations", "bills", "creditnotes",
   "customerpurchaseorders", "customerprices", "saveditemprices",
+  "linetotal", "mrp", "margin", "advance", "retention", "gstpercentage", "interestrate",
 ]);
 
 /** Any key containing one of these fragments is also removed (case-insensitive). Note
@@ -115,6 +116,78 @@ export function looksLikeFinanceDoc(output: unknown): boolean {
   if (!isPlainContainer(output) && !(output && typeof output === "object")) return false;
   const keys = Object.keys(output as object).map((k) => k.toLowerCase());
   return FINANCE_DOC_MARKERS.some((m) => keys.includes(m));
+}
+
+// ---------- WhatsApp detail output projection (allowlist) ----------
+
+type Spec = true | { [key: string]: Spec };
+
+const PERSON: Spec = { name: true };
+const PRODUCT: Spec = { name: true, model: true };
+const STAGE: Spec = { key: true, label: true, phase: true, sequenceOrder: true };
+const SITE_CORE: { [key: string]: Spec } = {
+  id: true, address: true, companyName: true, assignedEngineerId: true, vendorId: true, currentStageId: true,
+  confirmedExhaustHookupType: true, currentStage: STAGE, assignedEngineer: PERSON, vendor: PERSON,
+};
+
+function orderSpec(finance: boolean): Spec {
+  return {
+    id: true, orderNumber: true, quantity: true, orderDate: true, promisedDeliveryDate: true, actualDispatchDate: true,
+    plannedExhaustHookupType: true, customerPoNumber: true, customerPoDate: true, requestedByCustomer: true,
+    customerNotes: true, createdAt: true,
+    ...(finance ? { value: true } : {}),
+    customer: finance ? { name: true, gstin: true, state: true, address: true } : PERSON,
+    product: PRODUCT, salesEngineer: PERSON,
+    lineItems: { id: true, quantity: true, product: PRODUCT },
+    site: SITE_CORE,
+  };
+}
+
+const WORK_ORDER_SPEC: Spec = {
+  id: true, workOrderNumber: true, siteId: true, taskType: true, title: true, instructions: true, status: true,
+  scheduledDate: true, startedAt: true, completedAt: true, completionNotes: true, createdAt: true, updatedAt: true,
+  assignedTo: PERSON, createdBy: PERSON,
+  site: { ...SITE_CORE, order: { orderNumber: true, customer: PERSON } },
+};
+
+const COMPLAINT_SPEC: Spec = {
+  id: true, ticketNumber: true, siteId: true, category: true, description: true, severity: true, status: true,
+  rootCause: true, resolutionNotes: true, createdAt: true, closedAt: true,
+  customer: PERSON, site: { address: true }, assignedTo: PERSON,
+};
+
+function project(value: unknown, spec: Spec): unknown {
+  if (Array.isArray(value)) return value.map((v) => project(v, spec)).filter((v) => v !== undefined);
+  if (spec === true) return isPlainContainer(value) ? undefined : value;
+  if (!isPlainContainer(value)) return value === null ? null : undefined;
+  const out: Record<string, unknown> = {};
+  for (const [k, s] of Object.entries(spec)) {
+    if (!Object.prototype.hasOwnProperty.call(value, k)) continue;
+    const p = project(value[k], s);
+    if (p !== undefined) out[k] = p;
+  }
+  return out;
+}
+
+function dropDriveKeys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => dropDriveKeys(v)) as unknown as T;
+  if (isPlainContainer(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k.toLowerCase().includes("drive")) continue;
+      out[k] = dropDriveKeys(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+/** WhatsApp only: fixed field allowlist for order / work_order / complaint detail (anything
+ * unlisted, incl. nested Site Drive folder IDs/URLs, is dropped). Every doc type also loses any
+ * key containing "drive" (admin/finance-only types such as vendor.sites embed Site rows). */
+export function projectDetail(docType: string, result: unknown, finance: boolean): unknown {
+  const spec = docType === "order" ? orderSpec(finance) : docType === "work_order" ? WORK_ORDER_SPEC : docType === "complaint" ? COMPLAINT_SPEC : null;
+  return dropDriveKeys(spec ? project(result, spec) : result);
 }
 
 // ---------- sender resolution ----------

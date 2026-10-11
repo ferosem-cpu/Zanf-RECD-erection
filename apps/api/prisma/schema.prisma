@@ -1449,7 +1449,9 @@ model CustomerPurchaseOrderAuditLog {
 /// Verified WhatsApp sender -> Zan user mapping (Super Admin managed). Authorisation never
 /// uses message text or User.phone; role and permissions always come from the user's CURRENT
 /// role. A new mapping is disabled until a Super Admin enables it. "At most one enabled
-/// mapping per user" is enforced in services/whatsappMapping.ts, not by a partial index.
+/// mapping per user" is enforced in services/whatsappMapping.ts AND by a hand-written partial
+/// unique index in the migration (WhatsappSenderMapping_one_enabled_user_idx, WHERE enabled =
+/// true); Prisma cannot express it, so keep it if migrations are regenerated.
 model WhatsappSenderMapping {
   id           String    @id @default(cuid())
   userId       String
