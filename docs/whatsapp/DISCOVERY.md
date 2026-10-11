@@ -17,6 +17,8 @@ Date: 2026-10-10; revised 2026-10-11 (rev4, on top of rev3c `abb0b73`; rev3 `ef3
 | D9 | **Ferose 11 Oct 00:05 IST (replaces his 00:01 answer 2):** engineers (`erection_engineer`, `commissioning_engineer`, `service_team`) can access **only site details, only for sites assigned to them**. **No finance at all:** no Bills page, payables, receivables, invoices, vendor bills, expenses, payments, ledger or revenue. The read-only bills permission suggested by Codex is **not** added. Implemented as removal of Bills and finance access app-wide (4.3: R5 superseded, R6, R8, R9, R10) |
 | D10 | **Ferose 11 Oct 00:07 IST (broadest; supersedes narrower finance wording and rev3's "Ops/PM and Finance keep vendor invoice recording"):** finance details are ONLY for Management, Finance, Owner/Admin and Super Admin. EVERY other role loses finance access app-wide, REST and assistant: Sales, Ops/PM, erection_engineer, commissioning_engineer, service_team, and Customers. Role x key table, routes, tools, tests, rollback: 4.3.1-4.3.11. Items for Ferose to confirm (Ops/PM, Sales, customer portal): 4.3.8 |
 
+**D11 (Ferose, 11 Oct 2026, ~06:02 IST) - answers F1-F7 and re-prioritises:** "The most important thing I want is integration of WhatsApp. The permissions and other things can be looked at later." F1 quotations ARE finance. F2 Sales KEEPS creating invoices from quotations. F3 Ops/PM loses vendor invoice recording and Bills. F4 order value hidden from engineers, service_team and Ops/PM. F5/F7 purchase orders and suppliers ARE finance. F6 customers cannot see their invoices anywhere. **Open interaction (flagged, not resolved):** F1 and F2 conflict - Sales keeps quotation->invoice creation (quotations.ts:316-318) although quotations now count as finance; later item, M1b. **Re-scope:** all app-wide permission changes (D8-D11, R1-R10, P1-P12, quotation invoice field, `financeAccessMatrix.test.ts`) move to deferred milestone **M1b** (4.3). New **M1** is WhatsApp-only (4.2.1) and changes no app-wide permission.
+
 ## 1. Verified paths and revisions
 
 | Item | Value |
@@ -163,7 +165,20 @@ WhatsApp never creates or confirms a pending action: write tools are not in any 
 
 Confirm-route fix (M1, concrete). Today `confirmOrReject` checks conversation ownership and pending status only, then calls `executeConfirmedAction(action.toolName, ...)` (agentConversations.ts:537-565). Change: before executing, (1) reload the caller's permissions (as `authenticate` does, middleware/auth.ts:22-45), (2) look up `getToolByName(action.toolName)` and require the same permission predicate that the tool's own write handler applies (e.g. `RECORD_VENDOR_INVOICE` for vendor invoices, zanAppWriteTools.ts:958; `MANAGE_ORDERS` for customer POs, zanAppWriteTools.ts:1116), exported as one `canRunWrite(auth, toolName)` helper used by both the tool handler and the confirm route, (3) reject with 403 and leave the action `pending` on failure, and (4) reject when the conversation's `channel` is `whatsapp`. Tests: `agentConfirmPermission.test.ts` (permission revoked between propose and confirm -> 403, nothing written; each of the 9 write tools has an allowed and a denied role; whatsapp-channel conversation -> rejected).
 
-### 4.3 App-wide M1 role changes (D2, D9, D10) and regression checks
+### 4.2.1 M1 (WhatsApp-only, rev5): safe on its own, no app-wide permission change
+
+Nothing in the app (REST, in-app assistant, seed, migrations, UI) changes in M1. All restriction lives in a WhatsApp policy layer:
+
+- **Deny by default, read-only, per-group allowlist** (tool names x group) held in code and keyed by the sender's resolved role. A policy-aware resolver replaces the global `getToolByName` on the WhatsApp path (4.5) and checks the allowlist at execution time; only allowed tool schemas are sent to the model. The user's current permissions and the row filter (4.4) must also pass.
+- **Finance tools** (receivables, revenue, invoices, payables, vendor bills, POs, expenses, ledger, credit notes, advances, payments/TDS, suppliers, **quotations**) only for `super_admin`, `owner_admin`, `management`, `finance`.
+- **Engineers** (`erection_engineer`, `commissioning_engineer`, `service_team`): assigned-site tools only - site status/detail, work orders, complaints, `get_document_detail` for work_order/complaint. Site scope is applied server-side in the WhatsApp path (`siteScope`, 4.4), never by the model. Order value is stripped from site/order output on WhatsApp.
+- **Sales:** read-only, non-finance: site/order/site-status search and detail (order value stripped), customer search. **No quotations tool** (this also closes the quotation-embedded invoice-metadata leak on WhatsApp), no `get_document_detail` quotation branch.
+- **Ops/PM:** read-only, non-finance: site/order/site-status search and detail (order value stripped), work orders, complaints, `get_document_detail` work_order. No payables, vendor bills or quotations.
+- **For everyone:** no Drive, no writes, no confirm/reject, no settings/providers/credentials. **Customers, unknown, unmapped, inactive or disabled senders: silence.**
+- **Deliverables:** (1) verified sender mapping table (phone/LID -> user -> role -> group, section 6); (2) super-admin controls (enable/disable per user, pilot allowlist); (3) the policy layer (allowlist, resolver, schema filtering, order-value stripping, site scope); (4) tests on fakes: `whatsappPolicy.test.ts` (every tool x every group allowed/denied, unmapped tool denied), `whatsappSchemaFilter.test.ts` (only allowed schemas reach the model), `whatsappSiteScope.test.ts` (engineer sees only assigned sites), `whatsappSilence.test.ts` (customer/unknown/disabled -> no reply), `whatsappNoWrites.test.ts`; each listed in `apps/api/package.json` "test".
+- App-wide effects such as the in-app assistant exposing finance to Sales or the quotation invoice field in REST are **not** fixed here; they are M1b.
+
+### 4.3 M1b - app-wide permission changes (DEFERRED, off the WhatsApp critical path; D2, D8-D11) and regression checks\n\n**Deferred by D11.** Analysis kept intact below for the later M1b milestone. Anything in this section saying "M1" now means M1b; nothing here blocks WhatsApp M1-M6. Rev5 additions to M1b: (a) `GET /quotations/:id` linked-`invoices` field must be excluded for non-finance roles at the response boundary or gated by a finance key, with Sales/Finance route tests (Codex rev4 MEDIUM); (b) `financeAccessMatrix.test.ts` must assert per route: finance endpoints 403 for the losing roles, authorised site/customer reads retained, financial fields absent (Codex rev4 MEDIUM); (c) P4 uses the shared role-aware contact filter (`manage_orders` holders keep contacts) and P12 names the print test `printContacts.test.ts` pinning Finance and admin cases (Codex rev4 LOW); (d) F1/F2 interaction (4.3.8).
 
 Correction history: rev2 said Finance "loses write tools"; withdrawn in rev3. Rev3/rev3c let Ops/PM keep vendor-invoice recording (D7) and narrowed engineers' Bills to own sites (D8-2). **Both are superseded in rev4 by D10 (00:07 IST) and D9 (00:05 IST).** Current principle:
 
@@ -285,7 +300,7 @@ The admin-web customers page (`/customers`, routeAccess.ts:13 allows `manage_inv
 
 admin-web builds nav from permissions: `ROUTE_PERMISSIONS` (lib/routeAccess.ts:13-45) filtered by `hasPermission` in Nav.tsx:428,465,505. Once the keys are revoked: `/finance/*`, `/invoices`, `/purchase-orders`, `/expenses`, `/reports/finance|tds|gst-returns`, `/finance/vendor-invoices` links disappear for the six roles; `LANDING_PRIORITY` (routeAccess.ts:49) already falls through by permission. Add: hide `SiteCostsSection.tsx` and order value on the site page for roles without finance/order keys. No UI-only enforcement is relied upon. `apps/mobile` is untouched (never runtime-tested); its finance calls, if any, are denied by the same REST gates.
 
-#### 4.3.8 Items Ferose must confirm (impact of D10 stated explicitly)
+#### 4.3.8 Items Ferose had to confirm - ANSWERED by D11 (kept for M1b; F1/F2 interaction still open)\n\nD11: F1 yes (quotations are finance); F2 Sales keeps quotation->invoice; F3 Ops/PM loses vendor invoices and Bills; F4 order value hidden from engineers, service_team, Ops/PM; F5/F7 POs and suppliers are finance; F6 customers see no invoices anywhere. **Flag:** F1+F2 interact - Sales keeps creating invoices from quotations although quotations are finance; unresolved, M1b. The "default" wording in the rows below is superseded by D11.
 
 | # | Question | Workflows / screens affected |
 |---|---|---|
@@ -463,7 +478,7 @@ Decided and removed: group mapping (D1), Finance/engineer scope (D2), assigned-s
 | O6 | TLS expiry check | Open: read-only `openssl s_client` check (section 8); needs the public domain from the owner or provider base-URL host |
 | O7 | Second VM (Oracle Linux) | Open, **conditional** and **uninspected**: only if VM-A fails the M5/M6 check; needs correct IP, user, key, port-22 rule (key refused / port-22 timeout so far) |
 | O8 | HANDOVER provider list is stale (says Gemini 1, NVIDIA 2) | Fix on master later, not on this branch |
-| O9 | Owner confirmations for M1 deltas | Decided: D6, D7 (23:43 IST); D8 items 1, 3, 4 (00:01 IST, item 2 superseded); **D9 (00:05) and D10 (00:07)**. Open for Ferose: **F1-F7 in 4.3.8** (quotations as finance, Sales create-invoice, Ops/PM vendor bills, order value, Sales money views, customer portal, POs as finance). Open: production role-grant diff; accepted residual risk of the trusted bridge (section 6) before M5 |
+| O9 | Owner confirmations for M1b deltas (F1-F7 now answered by D11; M1b deferred) | Decided: D6, D7 (23:43 IST); D8 items 1, 3, 4 (00:01 IST, item 2 superseded); **D9 (00:05) and D10 (00:07)**. Open for Ferose: **F1-F7 in 4.3.8** (quotations as finance, Sales create-invoice, Ops/PM vendor bills, order value, Sales money views, customer portal, POs as finance). Open: production role-grant diff; accepted residual risk of the trusted bridge (section 6) before M5 |
 | O10 | Real-DB verification of the atomic claim SQL (section 7) | Open: M2 spike against a disposable Postgres (not production); needs Ferose approval as an exception to the fakes-only rule |
 
 ## 10. Gate re-score for rev4 (proposed; the reviewer decides)
@@ -474,3 +489,14 @@ Decided and removed: group mapping (D1), Finance/engineer scope (D2), assigned-s
 | 2 Safe sender identity, fail-closed, silent | CONDITIONAL | Verified identity table and LID reconciliation (6); bridge named as trusted identity-asserting component with accepted residual risk and tests; pre-send claim closes the lease-to-send gap except a documented <=15 s window (7) |
 | 3 Preserve FreeLLMAPI routing | CONDITIONAL (was FAIL) | Live rows verified: "Free LLM API" is priority 0, active, tried first, then OpenAI 1, NVIDIA 2, Gemini 3, no ties (3). Base host, external limits and fallback health still to record before M1 integration |
 | 4 Implementable request/reply path | CONDITIONAL | Limit confirmed (300 s, Hobby + Fluid); bridge-driven worker with a single-statement atomic claim (slot table + per-sender ordering + fenced writes) and race tests on a fake store (7); SQL proven only in an M2 disposable-DB spike; `waitUntil` to be proven in M2 |
+
+
+## 11. Fast path (rev5; D11)
+
+1. **M1 - mapping + allowlist:** verified sender mapping table, super-admin enable/disable, WhatsApp policy layer (4.2.1), fake-based tests. No app-wide change.
+2. **M3 - bridge receive/reply on OCI:** WhatsMeow service on VM-A, HMAC to the API, queue/claim/reply per section 7; echo-level text first, then wire to M2.
+3. **M2 - shared assistant wiring:** call the same assistant service through the policy resolver; reuse provider selection; `waitUntil`/claim spikes (O10) here.
+4. **M4 - test:** full flow on fakes plus a staging-number dry run; silence, scope and no-write cases.
+5. **M5 - install:** OCI install, pairing with the owner present, trusted-bridge risk sign-off, VM-A headroom recheck.
+6. **M6 - pilot:** a few verified users, measure targets (2 concurrent, p50 < 15 s, p95 < 45 s), then activate.
+7. **M1b (later, off this path):** app-wide permissions, finance contacts, quotation/invoice field, matrix test.

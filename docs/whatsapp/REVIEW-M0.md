@@ -12,7 +12,19 @@
 | 2 | `4e909da` (+ `61618cd` read-only OCI facts) | Codex: **CHANGES REQUIRED** (B1, B2, M1-M4, L1) |
 | 3 | `58ec86b` (rev3), `ef380ca` (rev3b, D6/D7); Codex reviewed `ef380ca` | Codex: **CHANGES REQUIRED** (three MEDIUM, three LOW; table below) |
 | 3c | `abb0b73` | Owner decisions D8 recorded (docs only); item 2 now superseded |
-| 4 | this commit (sha in the git log; no self-reference) | For re-review |
+| 4 | `32aaf64` | Codex: **CHANGES REQUIRED** (2 MEDIUM, 2 LOW; table below) |
+| 5 | this commit (sha in the git log; no self-reference) | Docs only; for re-review of gate 1 |
+
+## Rev4 -> rev5 (docs only; D11 re-scope)
+| Id | Finding / decision | Fix (rev5) | Ref | Status |
+|---|---|---|---|---|
+| D11 | Owner: WhatsApp first, permissions later; F1-F7 answered (F1 quotations finance, F2 Sales keeps quotation->invoice, F3 Ops/PM loses Bills, F4 order value hidden, F5/F7 POs/suppliers finance, F6 no customer invoices) | Recorded; F1/F2 interaction flagged, unresolved | DISCOVERY D11, 4.3.8 | Recorded; interaction open (M1b) |
+| D11-2 | Re-scope | All app-wide permission work moved to deferred M1b (kept, not deleted); new WhatsApp-only M1: deny-by-default allowlist, finance tools for four roles only, engineers assigned-site only, no Drive/writes/settings, unknown senders silent | DISCOVERY 4.2.1, 4.3, 11 | Design done |
+| R4-1 | MEDIUM: `GET /quotations/:id` returns linked invoices to Sales | WhatsApp: quotations tool excluded from all non-finance groups. REST field fix + Sales/Finance tests moved to M1b | DISCOVERY 4.2.1, 4.3 (a) | WhatsApp closed; app-wide deferred |
+| R4-2 | MEDIUM: `financeAccessMatrix.test.ts` expects 403 on routes Sales may read | Per-route status + field assertions specified; test moved to M1b | DISCOVERY 4.3 (b) | Deferred (M1b) |
+| R4-3 | LOW: P4 contact filter vs `manage_orders`; P12 test unnamed | P4 uses shared role-aware filter; print test named `printContacts.test.ts` | DISCOVERY 4.3 (c) | Deferred (M1b) |
+| R4-4 | LOW: `PLAN.md:34` categorical priority-0 claim | Edited in place to the verified statement (Free LLM API row priority 0, tried first, 10 Oct 23:39/23:41 IST; VM-A link inferred); addendum keeps the reference | PLAN.md:34 | Fixed |
+| R4-5 | Gates 2-4 conditions (bridge risk acceptance before M5; provider host/limits before integration; SQL/`waitUntil` spikes in M2) | Unchanged; placed on the fast path (M5, M2) | DISCOVERY 11, O6-O10 | Open as scheduled |
 
 ## Rev3 -> rev4 findings
 | Id | Severity | Finding | Fix (rev4) | DISCOVERY ref | Status |
@@ -53,9 +65,6 @@ D1-D4 (10 Oct): site details for all groups but Customers; Owner/Admin = Super A
 3. M2 disposable-DB spike for the atomic claim SQL (O10) and `waitUntil` spike; needs approval as an exception to fakes-only.
 4. Pilot users and verified numbers; pairing approach (owner present at M5); TLS expiry check; VM-B only if VM-A fails headroom; FreeLLMAPI base host, limits and fallback health before M1 integration; HANDOVER provider list fix on master; trusted-bridge residual-risk acceptance before M5.
 
-## Gate questions for re-review
-1. Do 4.3.1-4.3.11 (key set, role x key table, route and tool inventories with file:line, R-items, tests per route/tool, rollback) fully implement D9 and D10, including closing the non-key leaks R9/R10, without touching the four finance roles?
-2. Does 4.3.6 (P1-P12) enumerate every in-app path that returns customer contacts, with Finance keeping the billing fields it needs and a test per path?
-3. Is the atomic claim (slot table + earliest-per-sender eligibility + partial unique index + fencing) sufficient for global cap 2 and sender order, given the SQL is proven only in an M2 disposable-DB spike?
-4. Is the PLAN line-34 handling (addendum only, canonical statement in item 1) acceptable, or must line 34 be edited in place?
-5. Are the open F1-F7 owner confirmations correctly framed, and are gates 1-4 as re-scored in DISCOVERY 10 supportable?
+## Gate questions for re-review (rev5)
+1. Gate 1: does the M1 design (DISCOVERY 4.2.1) reuse current access controls, identify senders safely and enforce a WhatsApp-only allowlist (deny by default, execution-time resolver, schema filtering, site scope, silence for unknown senders) without any app-wide permission change?
+2. Rev5 items: is the D11 re-scope (M1 WhatsApp-only; M1b deferred with analysis kept) coherent, is the F1/F2 interaction correctly flagged rather than resolved, and is PLAN.md:34 now acceptable?

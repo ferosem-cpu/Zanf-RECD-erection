@@ -31,7 +31,7 @@ Version 1 is text-based information retrieval only. Do not enable document creat
 
 1. Zan app chat and the OCI WhatsMeow bridge call the same server-side assistant service.
 2. The service resolves the real user, checks current permissions, loads only permitted context, executes permitted retrieval tools and uses Zan's existing provider selection.
-3. FreeLLMAPI remains the existing priority-0 provider. Verify what priority 0 means in the actual code; retain configured fallback order and shared provider limits.
+3. The verified priority-0 provider is the "Free LLM API" row (`openai_compatible`, tried first per live Settings, 10 Oct 2026 23:39/23:41 IST; then OpenAI 1, NVIDIA 2, Gemini 3). That this row is the FreeLLMAPI container on VM-A is inferred from the name, pending base-host verification (addendum 2026-10-11 item 1). Retain configured fallback order and shared provider limits.
 4. WhatsMeow runs as a persistent Linux service. Do not reuse the Windows executable as a Linux binary or run the persistent connection inside a duration-limited Vercel request.
 5. Use Zan's existing database where suitable for identity mappings, bounded conversation context, processing status and audit records. A phone's chat history is not a substitute for shared assistant context.
 6. Store WhatsApp encryption/session state separately on persistent OCI storage. One active process owns each WhatsApp session. Never run the same copied session concurrently on the laptop and OCI.
@@ -183,3 +183,9 @@ Source: `docs/whatsapp/DISCOVERY.md` rev4, `REVIEW-M0.md`, and Ferose's decision
 5. **Drive.** Role-scoped Drive search is deferred to a later phase, not M1. In-app Drive is unchanged in M1. WhatsApp v1 excludes Drive.
 6. **Worker claim (Codex rev3 MEDIUM).** The cross-row claim is one atomic statement over a 2-row slot table with per-sender ordering and fenced writes; race tests run on a fake store and the SQL is proven only in an M2 disposable-DB spike (DISCOVERY 7).
 7. **Owner confirmations pending (DISCOVERY 4.3.8, F1-F7):** quotations as finance, Sales create-invoice from quotation, Ops/PM vendor-bill workflow, order-value visibility, Sales money views, customer-portal invoice/balance expectations, purchase orders as finance.
+
+## ADDENDUM 2026-10-11 (M0 rev5) - notes only; supersedes earlier addenda where they conflict
+
+1. **Line 34** was edited in place (rev5, Codex rev4 LOW); addendum item 1 above remains the reference for the inferred VM-A link.
+2. **Re-scope (Ferose D11, 11 Oct ~06:02 IST: WhatsApp first, permissions later).** App-wide permission changes (earlier addenda items 3, 9, 12(b) and rev4 items 2-4: finance restricted to four roles, contact removal, order-value redaction, quotation invoice field, financeAccessMatrix test) move to deferred milestone **M1b**. **M1 is WhatsApp-only**: deny-by-default read-only allowlist per group enforced at execution time and in the schemas sent to the model; finance tools (including quotations) only for Management, Finance, Owner/Admin, Super Admin; engineers and service_team assigned-site tools only; Sales and Ops/PM non-finance read-only; no Drive, writes or settings for anyone; unknown/unmapped/disabled senders silent (DISCOVERY 4.2.1).
+3. **Fast path:** M1 -> M3 -> M2 -> M4 -> M5 -> M6 (DISCOVERY 11).
