@@ -76,3 +76,12 @@ Opt-in Postgres test (`apps/api/test/whatsappBridgeStore.pg.test.ts`, skipped un
 Deferred: free-text money redaction and real-Postgres site-scope checks (M1); rate limits/daily cap (DISCOVERY s6); preview-deploy verification above; bridge alignment to the rev6 contract and key provisioning.
 
 Risks: migrations still unapplied and prod history drifted; the advisory-lock SQL is only covered by the opt-in test, never run; a blocked claim (cap or ordering) leaves the job `received` and relies on the poll-restart backstop to retry it, so latency under load can reach the restart delay; `hashtext` lock key is global to the database.
+
+### Throwaway-Postgres verification (coordinator, 2026-10-11 ~11:35 IST)
+
+- Where: a disposable PostgreSQL 17.11 instance on the coordinator's own Linux box (not the PC, not production, not Supabase), database `wa_throwaway`, created fresh. Source = `git archive` of feat/whatsapp-m2 at 695f87b (no .env present), `npm ci`, shared build, `prisma generate`.
+- `npx prisma migrate deploy` (Prisma 5.22.0) with DATABASE_URL and DIRECT_URL both pointing at the throwaway DB: all 35 migrations applied from scratch, exit 0; `_prisma_migrations` 35/35 finished, none rolled back.
+- Drift check `prisma migrate diff --from-url <throwaway> --to-schema-datamodel prisma/schema.prisma --script`: no WhatsApp differences (WhatsappInbound, WhatsappOutbox, AgentConversation.channel, sender mapping and nonce tables all match schema.prisma). The only diff is a PRE-EXISTING, unrelated one: `PaymentReceived_invoiceId_fkey` is re-created with ON DELETE SET NULL ON UPDATE CASCADE (schema vs migrations disagree on that FK; not introduced by M2; worth reconciling when production migration history is fixed).
+- Opt-in test `WA_PG_TEST_URL=... node --import tsx --test test/whatsappBridgeStore.pg.test.ts`: 5/5 pass (insertInbound dedup, per-sender ordering + lease expiry, cap of 2 under 5 concurrent claimers, outbox lease/claim/ack transitions, nonce replay), repeated 6 times with no failures; afterwards WhatsappInbound/WhatsappOutbox/AgentConversation row counts were 0 (cleanup works).
+- Note: claimJob uses pg_advisory_xact_lock (transaction-scoped), which is compatible with the transaction-mode pgbouncer pooler used by DATABASE_URL; it serialises all WhatsApp claims globally, acceptable at pilot volume.
+- Still not verified: production/Supabase migration history (drifted, unapplied), Vercel preview checks (waitUntil, req.originalUrl).
