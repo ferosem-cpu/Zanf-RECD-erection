@@ -13,7 +13,7 @@ import type { RunAgentTurnParams, RunAgentTurnResult } from "../src/agent/llm";
 import { createWhatsappBridgeRouter } from "../src/routes/whatsappBridge";
 import { sha256Hex, signBridgeRequest, type NonceStore } from "../src/services/whatsappBridgeAuth";
 import {
-  createBridgeService, MAX_ATTEMPTS, NEUTRAL_FAILURE_REPLY, WHATSAPP_PROMPT_ADDENDUM,
+  createBridgeService, MAX_ATTEMPTS, MAX_CONCURRENT_TURNS, NEUTRAL_FAILURE_REPLY, WHATSAPP_PROMPT_ADDENDUM,
   type InboundRow, type NewOutbox, type OpenTurn, type OutboxRow, type WaBridgeStore,
 } from "../src/services/whatsappBridge";
 
@@ -38,7 +38,8 @@ function fakeStore() {
     async claimJob(id, token, now, leaseMs, max) {
       const j = inbound.find((r) => r.id === id);
       if (!j || !j.mappingId || j.attempts >= max) return null;
-      if (inbound.some((e) => e.id !== id && e.mappingId === j.mappingId && e.createdAt < j.createdAt && (e.status === "received" || e.status === "processing"))) return null;
+      if (inbound.some((e) => e.id !== id && e.mappingId === j.mappingId && ((e.createdAt < j.createdAt && (e.status === "received" || e.status === "processing")) || (e.status === "processing" && !!e.leaseUntil && e.leaseUntil >= now)))) return null;
+      if (inbound.filter((e) => e.id !== id && e.status === "processing" && !!e.leaseUntil && e.leaseUntil >= now).length >= MAX_CONCURRENT_TURNS) return null;
       const ok = j.status === "received" || (j.status === "processing" && !!j.leaseUntil && j.leaseUntil < now);
       if (!ok) return null;
       Object.assign(j, { status: "processing", leaseToken: token, leaseUntil: new Date(now.getTime() + leaseMs), attempts: j.attempts + 1 });
@@ -385,4 +386,39 @@ test("a zombie worker (lease reclaimed) cannot complete the job or queue a reply
 
 test("bridge key grants nothing outside /wa/*: other paths are not served by this router", async () => {
   assert.equal((await call("GET", "/wa/orders")).status, 404);
+});
+
+const seed = (waMessageId: string, mappingId: string) =>
+  fs_.store.insertInbound({ waMessageId, keyId: "k1", senderJid: "j@s.whatsapp.net", senderLid: null, resolvedPhone: null, chatJid: "c", messageAt: clock(), decision: "accept", mappingId, text: "hi", status: "received" }).then((r) => r.row);
+
+test("claim: same sender's second job is blocked while the first is running", async () => {
+  const a = await seed("s1", "mA");
+  nowMs += 10;
+  const b = await seed("s2", "mA");
+  assert.ok(await fs_.store.claimJob(a.id, "t1", clock(), 90_000, 3));
+  assert.equal(await fs_.store.claimJob(b.id, "t2", clock(), 90_000, 3), null);
+});
+
+test("claim: a third concurrent turn (different senders) is blocked by the global cap", async () => {
+  const a = await seed("c1", "mA");
+  const b = await seed("c2", "mB");
+  const c = await seed("c3", "mC");
+  assert.equal(MAX_CONCURRENT_TURNS, 2);
+  assert.ok(await fs_.store.claimJob(a.id, "t1", clock(), 90_000, 3));
+  assert.ok(await fs_.store.claimJob(b.id, "t2", clock(), 90_000, 3));
+  assert.equal(await fs_.store.claimJob(c.id, "t3", clock(), 90_000, 3), null);
+  assert.equal(await fs_.store.completeJob(a.id, "t1", { status: "done" }, null, null), true);
+  assert.ok(await fs_.store.claimJob(c.id, "t3", clock(), 90_000, 3));
+});
+
+test("claim: an expired lease stops counting toward the cap and is reclaimable", async () => {
+  const a = await seed("e1", "mA");
+  const b = await seed("e2", "mB");
+  const c = await seed("e3", "mC");
+  assert.ok(await fs_.store.claimJob(a.id, "t1", clock(), 90_000, 3));
+  assert.ok(await fs_.store.claimJob(b.id, "t2", clock(), 90_000, 3));
+  assert.equal(await fs_.store.claimJob(c.id, "t3", clock(), 90_000, 3), null);
+  nowMs += 100_000;
+  assert.ok(await fs_.store.claimJob(c.id, "t3", clock(), 90_000, 3));
+  assert.ok(await fs_.store.claimJob(a.id, "t4", clock(), 90_000, 3));
 });

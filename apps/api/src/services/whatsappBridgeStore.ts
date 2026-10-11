@@ -1,8 +1,8 @@
 /** Prisma implementation of the WhatsApp bridge queue. Every state change is a conditional
  * updateMany (count must be 1) so concurrent serverless instances cannot double-process or double-release. */
-import { Prisma } from "@prisma/client";
-import { prisma } from "../lib/prisma";
-import type { InboundRow, OutboxRow, WaBridgeStore } from "./whatsappBridge";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { prisma as defaultPrisma } from "../lib/prisma";
+import { MAX_CONCURRENT_TURNS, type InboundRow, type OutboxRow, type WaBridgeStore } from "./whatsappBridge";
 
 class Zombie extends Error {}
 const asInbound = (r: unknown) => r as InboundRow;
@@ -17,7 +17,8 @@ function staleWhere(now: Date, restartAfterMs: number): Prisma.WhatsappInboundWh
   };
 }
 
-export const prismaBridgeStore: WaBridgeStore = {
+export function createPrismaBridgeStore(prisma: PrismaClient): WaBridgeStore {
+  return {
   async insertInbound(row) {
     try {
       return { row: asInbound(await prisma.whatsappInbound.create({ data: row })), created: true };
@@ -31,18 +32,33 @@ export const prismaBridgeStore: WaBridgeStore = {
   },
 
   async claimJob(id, token, now, leaseMs, maxAttempts) {
-    const job = await prisma.whatsappInbound.findUnique({ where: { id } });
-    if (!job || !job.mappingId) return null;
-    const earlier = await prisma.whatsappInbound.findFirst({
-      where: { mappingId: job.mappingId, id: { not: id }, createdAt: { lt: job.createdAt }, status: { in: ["received", "processing"] } },
-      select: { id: true },
+    // A transaction-scoped advisory lock serialises claims, so the per-sender ordering check and the
+    // global cap are evaluated and applied atomically across serverless instances. A crashed worker's
+    // lease expires (leaseUntil < now) and stops counting, so its slot is reclaimable.
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('whatsapp_turn_claim'))`;
+      const job = await tx.whatsappInbound.findUnique({ where: { id } });
+      if (!job || !job.mappingId) return null;
+      const blocking = await tx.whatsappInbound.findFirst({
+        where: {
+          mappingId: job.mappingId,
+          id: { not: id },
+          OR: [
+            { createdAt: { lt: job.createdAt }, status: { in: ["received", "processing"] } },
+            { status: "processing", leaseUntil: { gte: now } },
+          ],
+        },
+        select: { id: true },
+      });
+      if (blocking) return null;
+      const running = await tx.whatsappInbound.count({ where: { id: { not: id }, status: "processing", leaseUntil: { gte: now } } });
+      if (running >= MAX_CONCURRENT_TURNS) return null;
+      const { count } = await tx.whatsappInbound.updateMany({
+        where: { id, attempts: { lt: maxAttempts }, OR: [{ status: "received" }, { status: "processing", leaseUntil: { lt: now } }] },
+        data: { status: "processing", leaseToken: token, leaseUntil: new Date(now.getTime() + leaseMs), attempts: { increment: 1 } },
+      });
+      return count === 1 ? asInbound(await tx.whatsappInbound.findUnique({ where: { id } })) : null;
     });
-    if (earlier) return null;
-    const { count } = await prisma.whatsappInbound.updateMany({
-      where: { id, attempts: { lt: maxAttempts }, OR: [{ status: "received" }, { status: "processing", leaseUntil: { lt: now } }] },
-      data: { status: "processing", leaseToken: token, leaseUntil: new Date(now.getTime() + leaseMs), attempts: { increment: 1 } },
-    });
-    return count === 1 ? asInbound(await prisma.whatsappInbound.findUnique({ where: { id } })) : null;
   },
 
   async completeJob(id, token, patch, outbox, conversation) {
@@ -133,4 +149,7 @@ export const prismaBridgeStore: WaBridgeStore = {
     }
     return out;
   },
-};
+  };
+}
+
+export const prismaBridgeStore: WaBridgeStore = createPrismaBridgeStore(defaultPrisma);

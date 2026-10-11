@@ -11,6 +11,8 @@ export const OUTBOX_LEASE_MS = 30_000;
 export const SEND_WINDOW_MS = 15_000;
 export const OUTBOX_TTL_MS = 10 * 60_000;
 export const MAX_ATTEMPTS = 3;
+/** Global cap on concurrently running WhatsApp turns; enforced atomically inside claimJob. */
+export const MAX_CONCURRENT_TURNS = 2;
 export const MAX_JOB_AGE_MS = 3 * 60_000;
 export const RESTART_AFTER_MS = 20_000;
 export const MAX_HISTORY_MESSAGES = 30;
