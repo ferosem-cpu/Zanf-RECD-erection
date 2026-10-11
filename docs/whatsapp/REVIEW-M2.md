@@ -53,3 +53,26 @@ See DISCOVERY.md s7, "Final wire contract (rev6)". Summary:
 - `WHATSAPP_BRIDGE_KEYS` must be set in the Vercel env; the bridge must be aligned to the s7 contract.
 - The bridge key is a trusted identity-asserting component; key custody matters.
 - Free-text money is not redacted (M1 accepted risk).
+
+## Preview-deploy checks (not verifiable locally; do these on a protected preview before activation)
+1. `waitUntil` lifetime: ingest answers 202 and the turn runs after the response via the private Vercel request-context `waitUntil` (`lib/backgroundTask.ts`). Confirm on the deployed function (300 s `maxDuration` config) that a turn of realistic length (LLM + tools, up to ~90 s lease) completes after the response and is not frozen; check the log for the job reaching `done` and an outbox row. If the request-context lookup is absent the work is detached and may be cut.
+2. Poll-restart backstop: kill/slow a turn (or stop it mid-way) and confirm a later `GET /wa/outbox` restarts a `received` accept job older than the restart delay, and that a `processing` job with an expired lease is reclaimed, up to `MAX_ATTEMPTS`, then fails with the neutral reply.
+3. Public path: `req.originalUrl` must be the public `/wa/outbox?limit=N` (not the rewritten `/api/index`) through the `vercel.json` rewrite `/(.*) -> /api/index`. Send a correctly signed `GET /wa/outbox?limit=5` to the preview; expect 200. A 401 for a correctly signed request means the rewrite changed the URL. A unit test (`whatsappBridgeAuth.test.ts`) proves verification uses `req.originalUrl` incl. query and that other path/query fails, but not the Vercel rewrite itself.
+
+## Fix round 1 (Codex review: CHANGES REQUIRED)
+| Commit | What |
+|---|---|
+| (see `git log`, message starts "M2 fix 1: migration") | **MIGRATION (own commit, "M2 fix 1: migration")**: `20261011140000_whatsapp_queue_and_channel` creates `WhatsappInbound`, `WhatsappOutbox`, adds `AgentConversation.channel` + `(userId, channel)` index. SQL from offline `prisma migrate diff` (old schema e141444 -> current schema), minus the nonce table already migrated. Not applied anywhere; coordinator to run `migrate deploy` on a throwaway Postgres. |
+| M2 fix 2 | Atomic claim: `claimJob` runs in one transaction under `pg_advisory_xact_lock`; checks earlier jobs and live leases for the sender plus a count of live `processing` leases (cap `MAX_CONCURRENT_TURNS` = 2). Expired leases stop counting, so a crashed worker's slot is reclaimable; no slot table, no extra migration. Stores are now factories (`createPrismaBridgeStore`, `createPrismaNonceStore`) with the old singletons kept. |
+| M2 fix 3 | `Idempotency-Key` required on ingest (must equal `messageId`), claim and ack: 1-128 visible ASCII, else 400 after auth. DISCOVERY s7 updated. |
+| M2 fix 4 | Preview-deploy checks section above + originalUrl signing test. |
+
+Tests: API 256 total / 251 pass / 0 fail / 5 skipped (the opt-in Postgres file); admin-web 35 pass. New: 3 claim tests (same-sender block, cap of 2, expired lease reclaim), 1 idempotency-key test, 1 originalUrl signing test, 5 skipped pg tests.
+
+Opt-in Postgres test (`apps/api/test/whatsappBridgeStore.pg.test.ts`, skipped unless `WA_PG_TEST_URL` is set; NOT run by us): point it at a throwaway, already-migrated database and run from `apps/api`:
+`WA_PG_TEST_URL=postgresql://... node --import tsx --test test/whatsappBridgeStore.pg.test.ts`
+(PowerShell: `$env:WA_PG_TEST_URL='...'; node --import tsx --test test/whatsappBridgeStore.pg.test.ts`). It covers insert + message-id dedup, per-sender claim ordering and lease reclaim, the cap of 2 under `Promise.all` claims, outbox lease/claim/ack transitions and nonce insert/replay, and deletes its own rows. The cap test assumes no other WhatsApp jobs are running in that DB.
+
+Deferred: free-text money redaction and real-Postgres site-scope checks (M1); rate limits/daily cap (DISCOVERY s6); preview-deploy verification above; bridge alignment to the rev6 contract and key provisioning.
+
+Risks: migrations still unapplied and prod history drifted; the advisory-lock SQL is only covered by the opt-in test, never run; a blocked claim (cap or ordering) leaves the job `received` and relies on the poll-restart backstop to retry it, so latency under load can reach the restart delay; `hashtext` lock key is global to the database.

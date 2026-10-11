@@ -100,3 +100,18 @@ test("a signed query tampered in flight fails", async () => {
   const r = await fetch(base + "/wa/outbox?limit=50", { headers: { "x-zan-key-id": "k2", "x-zan-timestamp": ts, "x-zan-nonce": nonce, "x-zan-body-sha256": sha, "x-zan-signature": signBridgeRequest(SECRET, "GET", "/wa/outbox?limit=5", ts, nonce, sha) } });
   assert.equal(r.status, 401);
 });
+
+test("signature is verified over req.originalUrl (public path incl. query, even though the router is mounted at /wa)", async () => {
+  assert.equal((await signed("GET", "/wa/outbox?limit=5")).status, 200);
+  const sign = (signPath: string, reqPath: string) => {
+    const ts = String(Math.floor(now / 1000));
+    const nonce = crypto.randomBytes(16).toString("hex");
+    const sha = sha256Hex("");
+    return fetch(base + reqPath, { method: "GET", headers: { "x-zan-key-id": "k2", "x-zan-timestamp": ts, "x-zan-nonce": nonce, "x-zan-body-sha256": sha, "x-zan-signature": signBridgeRequest(SECRET, "GET", signPath, ts, nonce, sha) } });
+  };
+  assert.equal((await sign("/wa/outbox?limit=5", "/wa/outbox?limit=5")).status, 200);
+  assert.equal((await sign("/wa/outbox?limit=5", "/wa/outbox?limit=9")).status, 401, "different query");
+  assert.equal((await sign("/wa/outbox", "/wa/outbox?limit=5")).status, 401, "query not signed");
+  assert.equal((await sign("/outbox?limit=5", "/wa/outbox?limit=5")).status, 401, "mount-relative path is not what is signed");
+  assert.equal((await sign("/wa/ack", "/wa/outbox?limit=5")).status, 401, "different path");
+});
