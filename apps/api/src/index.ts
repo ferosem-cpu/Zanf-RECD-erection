@@ -30,6 +30,7 @@ import { notificationsRouter } from "./routes/notifications";
 import { agentTestRouter } from "./routes/agentTest";
 import { agentProvidersRouter } from "./routes/agentProviders";
 import { whatsappMappingsRouter } from "./routes/whatsappMappings";
+import { whatsappBridgeRouter } from "./services/whatsappBridgeProd";
 import { agentConversationsRouter } from "./routes/agentConversations";
 import { agentCronRouter } from "./routes/agentCron";
 import { backupRouter } from "./routes/backup";
@@ -52,6 +53,8 @@ app.use((_req, res, next) => {
 // Authorization header, so without this each request is preceded by its own OPTIONS round trip
 // (double the requests, and double the exposure to a cold start or a flaky connection).
 app.use(cors({ maxAge: 600 }));
+// WhatsApp bridge: must see the raw body (HMAC), so it is mounted before express.json.
+app.use("/wa", whatsappBridgeRouter);
 // Raise the body limit so base64 data-URL payloads (site photos, company logo) fit;
 // the default 100kb rejects anything but a thumbnail.
 app.use(express.json({ limit: "10mb" }));

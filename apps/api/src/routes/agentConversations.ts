@@ -37,7 +37,7 @@ function deriveTitle(firstUserMessage: string): string {
 
 agentConversationsRouter.get("/conversations", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const rows = await prisma.agentConversation.findMany({
-    where: { userId: req.auth!.userId },
+    where: { userId: req.auth!.userId, channel: "app" },
     select: { id: true, title: true, createdAt: true, updatedAt: true },
     orderBy: { updatedAt: "desc" },
   });
@@ -53,7 +53,7 @@ agentConversationsRouter.post("/conversations", authenticate, requireAgentAccess
 
 agentConversationsRouter.get("/conversations/:id", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const row = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
-  if (!row || row.userId !== req.auth!.userId) {
+  if (!row || row.userId !== req.auth!.userId || row.channel !== "app") {
     return res.status(404).json({ error: "Conversation not found" });
   }
   res.json({ id: row.id, title: row.title, messages: sanitizeHistory(row.messages), createdAt: row.createdAt, updatedAt: row.updatedAt });
@@ -61,7 +61,7 @@ agentConversationsRouter.get("/conversations/:id", authenticate, requireAgentAcc
 
 agentConversationsRouter.delete("/conversations/:id", authenticate, requireAgentAccess, async (req: AuthenticatedRequest, res) => {
   const row = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
-  if (!row || row.userId !== req.auth!.userId) {
+  if (!row || row.userId !== req.auth!.userId || row.channel !== "app") {
     return res.status(404).json({ error: "Conversation not found" });
   }
   await prisma.agentConversation.delete({ where: { id: row.id } });
@@ -128,7 +128,7 @@ agentConversationsRouter.post("/conversations/:id/messages", authenticate, requi
   }
 
   const row = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
-  if (!row || row.userId !== req.auth!.userId) {
+  if (!row || row.userId !== req.auth!.userId || row.channel !== "app") {
     return res.status(404).json({ error: "Conversation not found" });
   }
 
@@ -535,7 +535,7 @@ async function handleResolveAction(
   outcome: "confirmed" | "rejected",
 ) {
   const conversation = await prisma.agentConversation.findUnique({ where: { id: String(req.params.id) } });
-  if (!conversation || conversation.userId !== req.auth!.userId) {
+  if (!conversation || conversation.userId !== req.auth!.userId || conversation.channel !== "app") {
     return res.status(404).json({ error: "Conversation not found" });
   }
   const action = await prisma.agentPendingAction.findUnique({ where: { id: String(req.params.actionId) } });

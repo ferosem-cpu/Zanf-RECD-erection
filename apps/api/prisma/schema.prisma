@@ -1336,10 +1336,13 @@ model AgentConversation {
   user      User     @relation("AgentConversationUser", fields: [userId], references: [id], onDelete: Cascade)
   title     String?
   messages  Json     @default("[]")
+  /// "app" (in-app assistant) or "whatsapp" (one dedicated thread per WhatsApp user; hidden from the in-app list).
+  channel   String   @default("app")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  @@index([userId, channel])
   pendingActions AgentPendingAction[]
 }
 
@@ -1482,4 +1485,56 @@ model WhatsappBridgeNonce {
 
   @@id([keyId, nonce])
   @@index([expiresAt])
+}
+
+/// WhatsApp inbound job (M2): one row per bridge message id (unique = idempotency). Text is kept only
+/// while the job is non-terminal. Lease + token fence the worker; see services/whatsappBridge.ts.
+model WhatsappInbound {
+  id            String    @id @default(cuid())
+  waMessageId   String    @unique
+  keyId         String
+  senderJid     String
+  senderLid     String?
+  resolvedPhone String?
+  chatJid       String
+  messageAt     DateTime
+  /// accept | ignore
+  decision      String
+  mappingId     String?
+  text          String?
+  /// received | processing | done | dropped | failed
+  status        String
+  attempts      Int       @default(0)
+  leaseUntil    DateTime?
+  leaseToken    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status, leaseUntil])
+  @@index([mappingId, status])
+}
+
+/// WhatsApp reply waiting for the bridge (M2). Text is released only by the claim call and cleared
+/// once the bridge acks a terminal status. One row per inbound job (unique inboundId).
+model WhatsappOutbox {
+  id             String    @id @default(cuid())
+  inboundId      String    @unique
+  mappingId      String
+  /// Role group at queue time; the claim re-check requires it unchanged.
+  waGroup        String
+  recipientPhone String
+  recipientLid   String?
+  text           String?
+  /// pending | leased | sending | sent | delivered | failed | uncertain | discarded | expired
+  status         String    @default("pending")
+  leasedKeyId    String?
+  leaseUntil     DateTime?
+  sendBy         DateTime?
+  expiresAt      DateTime
+  waMessageId    String?
+  error          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, leaseUntil])
 }
