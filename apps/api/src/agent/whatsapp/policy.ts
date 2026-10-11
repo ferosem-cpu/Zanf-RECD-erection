@@ -156,6 +156,12 @@ const COMPLAINT_SPEC: Spec = {
   customer: PERSON, site: { address: true }, assignedTo: PERSON,
 };
 
+const VENDOR_SPEC: Spec = {
+  id: true, name: true, status: true, contactName: true, contactPhone: true, address: true, createdAt: true,
+  members: { name: true, phone: true },
+  sites: { id: true, address: true, companyName: true, currentStage: STAGE, order: { orderNumber: true } },
+};
+
 function project(value: unknown, spec: Spec): unknown {
   if (Array.isArray(value)) return value.map((v) => project(v, spec)).filter((v) => v !== undefined);
   if (spec === true) return isPlainContainer(value) ? undefined : value;
@@ -182,11 +188,11 @@ function dropDriveKeys<T>(value: T): T {
   return value;
 }
 
-/** WhatsApp only: fixed field allowlist for order / work_order / complaint detail (anything
+/** WhatsApp only: fixed field allowlist for order / work_order / complaint / vendor detail (anything
  * unlisted, incl. nested Site Drive folder IDs/URLs, is dropped). Every doc type also loses any
  * key containing "drive" (admin/finance-only types such as vendor.sites embed Site rows). */
 export function projectDetail(docType: string, result: unknown, finance: boolean): unknown {
-  const spec = docType === "order" ? orderSpec(finance) : docType === "work_order" ? WORK_ORDER_SPEC : docType === "complaint" ? COMPLAINT_SPEC : null;
+  const spec = docType === "order" ? orderSpec(finance) : docType === "work_order" ? WORK_ORDER_SPEC : docType === "complaint" ? COMPLAINT_SPEC : docType === "vendor" ? VENDOR_SPEC : null;
   return dropDriveKeys(spec ? project(result, spec) : result);
 }
 

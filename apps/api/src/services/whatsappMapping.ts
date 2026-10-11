@@ -8,6 +8,24 @@ export class MappingError extends Error {
   }
 }
 
+/** Prisma P2002 or a raw Postgres 23505 (the partial unique index surfaces either way). */
+export function isUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: unknown; meta?: { code?: unknown }; message?: unknown } | null;
+  if (!e || typeof e !== "object") return false;
+  return e.code === "P2002" || e.code === "23505" || e.meta?.code === "23505" ||
+    (typeof e.message === "string" && /23505|duplicate key value violates unique constraint/i.test(e.message));
+}
+
+/** Runs a store write and turns a unique-constraint race (two admins at once) into a clean 409. */
+async function guardUnique<T>(work: Promise<T>, message: string): Promise<T> {
+  try {
+    return await work;
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new MappingError(409, message);
+    throw err;
+  }
+}
+
 export interface MappingRecord {
   id: string;
   userId: string;
@@ -68,10 +86,10 @@ export async function createMapping(
   if (await store.findByPhone(phoneE164)) throw new MappingError(409, "That phone number is already mapped");
   if (lid && (await store.findByLid(lid))) throw new MappingError(409, "That LID is already mapped");
 
-  return store.create({
+  return guardUnique(store.create({
     userId, phoneE164, lid, enabled: false, aiPaused: false, note,
     createdById: actorId, updatedById: actorId, verifiedById: actorId, verifiedAt: new Date(),
-  });
+  }), "Phone number or LID is already mapped");
 }
 
 async function mustGet(store: MappingStore, id: string): Promise<MappingRecord> {
@@ -90,7 +108,7 @@ export async function setEnabled(store: MappingStore, actorId: string, id: strin
     const others = (await store.findEnabledByUser(row.userId)).filter((m) => m.id !== id);
     if (others.length > 0) throw new MappingError(409, "This user already has an enabled WhatsApp mapping");
   }
-  return store.update(id, { enabled, updatedById: actorId });
+  return guardUnique(store.update(id, { enabled, updatedById: actorId }), enabled ? "This user already has an enabled WhatsApp mapping" : "Mapping conflict");
 }
 
 export async function setPaused(store: MappingStore, actorId: string, id: string, aiPaused: boolean): Promise<MappingRecord> {

@@ -34,6 +34,17 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
       });
     case "vendor":
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_VENDORS)) return forbidden("vendors");
+      // WhatsApp: fixed field list, so Site Drive folder columns and approver/archiver ids are never even loaded.
+      if (auth.waGroup) {
+        return prisma.vendor.findUnique({
+          where: { id },
+          select: {
+            id: true, name: true, status: true, contactName: true, contactPhone: true, address: true, createdAt: true,
+            members: { select: { name: true, phone: true } },
+            sites: { select: { id: true, address: true, companyName: true, order: { select: { orderNumber: true } }, currentStage: { select: { key: true, label: true, phase: true, sequenceOrder: true } } } },
+          },
+        });
+      }
       return prisma.vendor.findUnique({
         where: { id },
         include: {
