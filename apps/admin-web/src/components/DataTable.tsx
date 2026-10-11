@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { apiAssetUrl, printWhenReady } from "@/lib/images";
 
 interface Company {
   legalName?: string | null;
@@ -12,7 +13,7 @@ interface Company {
   website?: string | null;
   phone?: string | null;
   documentFooterNote?: string | null;
-  logoDataUrl?: string | null;
+  logoUrl?: string | null;
 }
 
 /** "City, Pin Code" / "City" / "Pin Code" - whichever parts are set. */
@@ -202,7 +203,7 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
           </button>
         )}
         <button
-          onClick={() => window.print()}
+          onClick={() => void printWhenReady()}
           className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -324,7 +325,7 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
       <div className="hidden print:block print-doc datatable-print">
         <div className="print-header">
           <div className="print-co-block">
-            {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
+            {company?.logoUrl ? <img src={apiAssetUrl(company.logoUrl)!} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
             <div className="print-co-name">{company?.legalName ?? "Your Company"}</div>
             <address>
               {company?.address}
