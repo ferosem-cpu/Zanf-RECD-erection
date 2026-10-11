@@ -38,6 +38,11 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   GST aids), customer portal, notifications, reports, backups (Drive + Vercel cron).
 - Crons (`apps/api/vercel.json`): conversation cleanup 03:00 UTC, scheduled backup 19:30 UTC. Both
   fail closed without `CRON_SECRET`.
+- Company logo/signature (egress fix): `CompanySettings.logoDataUrl`/`signatoryDataUrl` are omitted from every
+  Prisma query (global `omit`, preview feature `omitApi`, `lib/prisma.ts`); only `services/companyAssets.ts` reads them.
+  `/settings` returns `logoUrl`/`signatureUrl` (`/settings/logo?v=<md5>`, hash computed in SQL). `GET /settings/logo` and
+  `/settings/signature` are public, ETag + immutable cache, 10-min in-memory cache. PUT rejects an image data URL over
+  300 KB (400); admin-web downscales to ~600 px PNG first. Never add the columns back to a `select`/response.
 - Env vars (api): `DATABASE_URL`, `JWT_SECRET` (API throws at boot if unset), `CRON_SECRET`,
   `AGENT_SECRETS_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_DRIVE_*` (CLIENT_ID/SECRET/REFRESH_TOKEN/FOLDER_ID),
   `SMTP_*`, `EMAIL_FROM_ADDRESS`. admin-web: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_GOOGLE_CLIENT_ID`.
