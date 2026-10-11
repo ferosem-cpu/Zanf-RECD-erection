@@ -69,16 +69,16 @@ export function createWhatsappBridgeRouter(deps: WhatsappBridgeRouterDeps): Rout
   });
 
   router.post("/outbox/:id/claim", async (req, res) => {
-    if (!idempotencyKey(req)) return void res.status(400).json({ error: "Invalid request" });
-    const out = await deps.service.claim(keyId(res), String(req.params.id));
+    const id = String(req.params.id);
+    if (idempotencyKey(req) !== `claim:${id}`) return void res.status(400).json({ error: "Invalid request" });
+    const out = await deps.service.claim(keyId(res), id);
     if (out.status === 200) return void res.json({ text: out.text, sendBy: out.sendBy });
     res.status(out.status).json({ error: out.status === 409 ? "Not claimable" : out.status === 410 ? "Gone" : "Not found" });
   });
 
   router.post("/ack", async (req, res) => {
-    if (!idempotencyKey(req)) return void res.status(400).json({ error: "Invalid request" });
     const parsed = ackSchema.safeParse(body(req));
-    if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
+    if (!parsed.success || idempotencyKey(req) !== `ack:${parsed.data.outboxId}:${parsed.data.status}`) return void res.status(400).json({ error: "Invalid request" });
     const status = await deps.service.ack(keyId(res), parsed.data);
     res.status(status).json(status === 200 ? { ok: true } : { error: "Not found" });
   });

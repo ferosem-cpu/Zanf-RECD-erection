@@ -85,3 +85,10 @@ Risks: migrations still unapplied and prod history drifted; the advisory-lock SQ
 - Opt-in test `WA_PG_TEST_URL=... node --import tsx --test test/whatsappBridgeStore.pg.test.ts`: 5/5 pass (insertInbound dedup, per-sender ordering + lease expiry, cap of 2 under 5 concurrent claimers, outbox lease/claim/ack transitions, nonce replay), repeated 6 times with no failures; afterwards WhatsappInbound/WhatsappOutbox/AgentConversation row counts were 0 (cleanup works).
 - Note: claimJob uses pg_advisory_xact_lock (transaction-scoped), which is compatible with the transaction-mode pgbouncer pooler used by DATABASE_URL; it serialises all WhatsApp claims globally, acceptable at pilot volume.
 - Still not verified: production/Supabase migration history (drifted, unapplied), Vercel preview checks (waitUntil, req.originalUrl).
+
+### Fix round 2
+
+- Claim and ack now require EXACT Idempotency-Key values: `claim:<outboxId>` and `ack:<outboxId>:<status>` (status = ack body status). Missing, malformed or mismatched is 400 after auth (`apps/api/src/routes/whatsappBridge.ts`). DISCOVERY s7 updated.
+- Bridge `internal/zan/client.go` already sends exactly these values (covered by `zan_test.go`); no bridge change.
+- Tests: new test for match / wrong id / wrong status / missing on claim and ack. API 257 total / 252 pass / 0 fail / 5 skipped (opt-in Postgres); admin-web 35 pass. `.claude-task/check.ps1` all steps OK.
+- Commit: see `git log` ("M2 fix round 2: exact claim/ack Idempotency-Key").
