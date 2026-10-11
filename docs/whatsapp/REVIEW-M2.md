@@ -143,3 +143,10 @@ npx tsx scripts/waSignedRequest.ts POST /wa/ingest '{"messageId":"m1","senderJid
 2. Fire 2 ingests from the SAME sender at once: the second must not start until the first is `done`; replies appear in message order.
 3. Blocked jobs are not errors: they stay `received` and are picked up by the next outbox poll (within the 20 s restart delay). Confirm all 6 jobs end `done`/produce outbox rows, and the logs show no errors other than expected claim misses (409 on a double claim, claim returning no job).
 4. After the run, delete the preview project/DB and the Preview env values.
+
+## Fix round 3 (Codex review: CHANGES REQUIRED)
+- High: the false claim that Prisma wraps each PostgreSQL migration in a transaction is removed. Each of the 3 unapplied WhatsApp migrations now has its own `BEGIN;` / `SET LOCAL lock_timeout = '5s';` / `COMMIT;`. The "mark rolled back and retry" step is replaced by a mandatory read-only catalog inspection first (`docs/whatsapp/MIGRATION-RECONCILE.md` section 6).
+- RLS + `REVOKE ALL ... FROM anon, authenticated` are folded into each creation migration (4 tables, no unprotected window); the separate `20261011150000_whatsapp_enable_rls` is removed (never applied). Note: the REVOKE needs the `anon`/`authenticated` roles, which exist on Supabase but NOT on a plain Neon preview database; create them there first (`CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN;`) or the preview migration fails.
+- The reconcile doc accounts for the renamed `20261011110000_enable_rls_public_tables` (fix/enable-rls): apply it first, merge master, `migrate status` must not list it; the 15-object precheck is re-run immediately before reconciling.
+- `.gitattributes` added (identical to fix/enable-rls): LF for `*.sql`, applied migration folders byte-exact.
+- `waSignedRequest.ts` now refuses production: only `http://localhost` / `127.0.0.1` and `https://*.vercel.app` except `zan-app-api.vercel.app`; checked before signing or sending (`test/waSignedRequestHost.test.ts`). Limitation: a prod deployment-specific `*.vercel.app` URL cannot be told apart from a preview URL by name; use only preview URLs.

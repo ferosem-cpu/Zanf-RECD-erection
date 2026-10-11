@@ -42,7 +42,7 @@ What this means:
 
 ## 5. What the WhatsApp change does
 
-It is NOT only new tables. Three migrations (four with the RLS proposal) change production as follows.
+It is NOT only new tables. Three migrations change production as follows. Each carries its own `BEGIN;` / `SET LOCAL lock_timeout = '5s';` / `COMMIT;`, and each also enables RLS and revokes `anon`/`authenticated` on the tables it creates.
 
 Change to an EXISTING table:
 - `ALTER TABLE "AgentConversation" ADD COLUMN "channel" TEXT NOT NULL DEFAULT 'app'`. Metadata-only on PG 11+ (no table rewrite). The 48 existing rows read as `'app'`. Takes a brief ACCESS EXCLUSIVE lock on `AgentConversation`.
@@ -50,7 +50,7 @@ Change to an EXISTING table:
 
 New objects:
 - 4 new tables: `WhatsappSenderMapping` (foreign key to `User`), `WhatsappBridgeNonce`, `WhatsappInbound`, `WhatsappOutbox`.
-- Proposed (needs review): `20261011150000_whatsapp_enable_rls` enables RLS on those 4 tables (no policies; the app role bypasses RLS).
+- RLS is folded into the creation migrations: inside each file, before `COMMIT`, `ENABLE ROW LEVEL SECURITY` and `REVOKE ALL ON TABLE ... FROM anon, authenticated` for every table it creates (no policies; the app role bypasses RLS). The earlier separate `20261011150000_whatsapp_enable_rls` migration was folded in and removed; it was never applied anywhere. `AgentConversation` is not touched by this: its RLS comes from `20261011110000_enable_rls_public_tables` on `fix/enable-rls`.
 
 Compatibility of the existing app code with the new column: `schema.prisma` declares `channel String @default("app")` on `AgentConversation`. The code currently in production does not know about `channel`; an extra NOT NULL column with a default is harmless to it (inserts omit it and get `'app'`; reads select explicit known columns). The reverse is NOT true: the new API code, which reads and filters on `channel`, will fail on `AgentConversation` queries if deployed to a database without the column. Therefore: apply the migrations first, deploy the new API afterwards (consistent with HANDOVER section 5, API first).
 
@@ -59,7 +59,7 @@ Compatibility of the existing app code with the new column: `schema.prisma` decl
 ### Pre-checks
 1. Backup. The Free plan has NO automated backups. Take a `pg_dump` of schema and data first (`pg_dump --no-owner --format=custom` using the direct connection, stored off the repo), or a Supabase dashboard backup if available. Confirm the dump restores (or at least lists with `pg_restore -l`).
 2. Pick a quiet time (few or no users in the app).
-3. Re-run the read-only facts: `_prisma_migrations` still has the same 17 rows; the WhatsApp tables and `AgentConversation.channel` still do not exist; `AgentConversation` row count and size are about the same.
+3. Re-run the read-only facts, and re-run the 15-object / catalog precheck (section 3 queries) IMMEDIATELY before reconciling, in the same session and only minutes before, not from an earlier run: `_prisma_migrations` still has the same 17 rows; the WhatsApp tables and `AgentConversation.channel` still do not exist; `AgentConversation` row count and size are about the same.
 4. Where to run from: from `apps/api`, with prod `DATABASE_URL` and `DIRECT_URL` set in that shell only (never printed, never written to a file, never committed). A Linux copy of the repo gives LF checksums for the WhatsApp files; the Windows working tree gives CRLF. Either works. Be consistent, and use the same place for steps 1-3.
 
 ### Step 1 - record the 15 pre-WhatsApp migrations as applied (bookkeeping only)
@@ -86,17 +86,17 @@ npx prisma migrate resolve --applied 20260829054500_add_backup_settings_and_log
 Recommendation: use `prisma migrate resolve`. It records the checksum of the file as it exists where it is run (so history matches the repo), is the supported path, validates the migration folder name, and is the same tool used afterwards. The alternative (INSERT rows into `_prisma_migrations` through Supabase MCP) means hand-computing SHA-256 checksums and fields, and is how the existing empty-checksum row came about. Use it only if `migrate resolve` cannot connect.
 
 ### Step 2 - check
-`npx prisma migrate status` must report exactly the WhatsApp migrations as pending: 3 (`20261011120000_whatsapp_sender_mapping`, `20261011130000_whatsapp_bridge_nonce`, `20261011140000_whatsapp_queue_and_channel`), or 4 with `20261011150000_whatsapp_enable_rls` if the proposal is approved. Anything else pending or failed: stop.
+Expected order: the RLS fix is applied to production first (manual path plus its history row, see `docs/SECURITY-RLS.md` on `fix/enable-rls`), then master is merged into `feat/whatsapp-m2` so the folder `20261011110000_enable_rls_public_tables` exists locally. `npx prisma migrate status` must then list exactly the 15 migrations (if not yet resolved in Step 1) plus the 3 WhatsApp migrations as pending (`20261011120000_whatsapp_sender_mapping`, `20261011130000_whatsapp_bridge_nonce`, `20261011140000_whatsapp_queue_and_channel`) and must NOT list `20261011110000_enable_rls_public_tables`. Anything else pending or failed: stop.
 
 ### Step 3 - apply
-Production has `lock_timeout=0`, which would make a migration wait on a lock forever and queue other queries behind it. Set a short one for this session, for example `PGOPTIONS='-c lock_timeout=5s'` in the shell (applies when the connection uses the direct connection; pooled/pgbouncer URLs may ignore startup options, so use `DIRECT_URL` semantics). Prisma runs each migration file in its own transaction on PostgreSQL, so a lock timeout makes that migration fail and roll back as a whole. If it times out, wait for a quieter moment, `migrate resolve --rolled-back <name>` if Prisma marks it failed, and retry. Then:
+Production has `lock_timeout=0`, which would make a migration wait on a lock forever and queue other queries behind it. Set a short one for this session, for example `PGOPTIONS='-c lock_timeout=5s'` in the shell (applies when the connection uses the direct connection; pooled/pgbouncer URLs may ignore startup options, so use `DIRECT_URL` semantics). Prisma does NOT wrap PostgreSQL migration files in a transaction. Each unapplied WhatsApp migration therefore carries its own `BEGIN;` + `SET LOCAL lock_timeout = '5s';` ... `COMMIT;`, so a lock timeout leaves nothing half-applied. If a migration fails, do NOT blindly mark it rolled back and retry: first run the read-only catalog inspection (are any of that migration's objects present: tables, the `channel` column, indexes, RLS flags?). With the explicit transaction the expected result is none; only then retry. If partial effects are ever found, stop and repair manually before any `migrate resolve --rolled-back`. Then:
 
 `npx prisma migrate deploy`
 
 ### Step 4 - verify (read-only SELECTs)
 - The 4 tables exist; `_prisma_migrations` has the new rows, all finished, none rolled back.
 - `AgentConversation.channel` exists with default `'app'`, and all 48 rows have `'app'`; index `AgentConversation_userId_channel_idx` exists.
-- RLS enabled on the 4 new tables (`pg_class.relrowsecurity`), if the proposal was applied.
+- RLS enabled on the 4 new tables (`pg_class.relrowsecurity`) and no `anon`/`authenticated` grants left on them (`information_schema.role_table_grants`).
 - The Supabase security advisor shows no NEW ERROR (the 25 pre-existing ones remain, section 8).
 - The existing app still lists conversations (in-app smoke check) before the API deploy continues per HANDOVER section 5.
 
@@ -113,8 +113,7 @@ ALTER TABLE "AgentConversation" DROP COLUMN "channel";  -- also drops AgentConve
 DELETE FROM "_prisma_migrations" WHERE migration_name IN (
   '20261011120000_whatsapp_sender_mapping',
   '20261011130000_whatsapp_bridge_nonce',
-  '20261011140000_whatsapp_queue_and_channel',
-  '20261011150000_whatsapp_enable_rls'
+  '20261011140000_whatsapp_queue_and_channel'
 );
 ```
 
@@ -126,8 +125,10 @@ The Supabase security advisor reports 25 ERROR "RLS Disabled in Public" (includi
 
 ## 9. Approval wording for Ferose
 
-> I approve, on the production Supabase project `zan-app`: (1) taking a `pg_dump` backup first; (2) recording 15 existing migrations as applied in `_prisma_migrations` (history rows only, no schema change); (3) running `prisma migrate deploy` for the WhatsApp migrations, which ALTERS the existing `AgentConversation` table (adds column `channel` with default `'app'`, and creates index `AgentConversation_userId_channel_idx`), and creates 4 new tables (`WhatsappSenderMapping`, `WhatsappBridgeNonce`, `WhatsappInbound`, `WhatsappOutbox`); (4) enabling row-level security on those 4 new tables; with a 5-second lock timeout, at a quiet time, and with the rollback plan in section 7 ready. The API deploy follows separately.
+> I approve, on the production Supabase project `zan-app`: (1) taking a `pg_dump` backup first; (2) recording 15 existing migrations as applied in `_prisma_migrations` (history rows only, no schema change); (3) running `prisma migrate deploy` for the WhatsApp migrations, which ALTERS the existing `AgentConversation` table (adds column `channel` with default `'app'`, and creates index `AgentConversation_userId_channel_idx`), and creates 4 new tables (`WhatsappSenderMapping`, `WhatsappBridgeNonce`, `WhatsappInbound`, `WhatsappOutbox`); (4) enabling row-level security and revoking `anon`/`authenticated` privileges on those 4 new tables, inside each creation migration; each of the 3 migrations runs in its own explicit transaction with a 5-second lock timeout (the `AgentConversation` ALTER is on an existing table), at a quiet time, at a quiet time, and with the rollback plan in section 7 ready. The API deploy follows separately.
 
 ## 10. Interaction with fix/enable-rls
 
-The branch `fix/enable-rls` adds `20261011120000_enable_rls_public_tables`, which sorts BEFORE the WhatsApp migrations. The plan is to apply the RLS fix first. Before WhatsApp goes to prod, merge master (with the RLS migration) into `feat/whatsapp-m2` so the migration folders match the prod history. The WhatsApp RLS migration `20261011150000_whatsapp_enable_rls` (2925ef2): the committed file (LF in git) has SHA-256 e0cc0a8b712f7e6dbf377f020fbf8b696d3d3cf7579b27126f6e08418cba359c; it has the same four ALTER TABLE ... ENABLE ROW LEVEL SECURITY statements as the coordinator-tested draft (only the header comment differs), and the committed file itself was re-verified by the coordinator on a fresh throwaway Postgres: 37 migrations applied, store tests 5/5, anon 0 rows and INSERT blocked.
+The branch `fix/enable-rls` adds `20261011110000_enable_rls_public_tables` (renamed from `20261011120000_...` to get a unique timestamp; never applied anywhere). It sorts BEFORE all WhatsApp migrations. Expected order: apply the RLS fix to production first (manual path: `psql -v ON_ERROR_STOP=1 -f migration.sql`, then INSERT its `_prisma_migrations` row; checksum of the committed LF bytes `8d50e9970cfa3c5c41c6f54d6ac5d82624c1725625e2805e1ad698fd67afe1b8`), then merge master into `feat/whatsapp-m2` so the migration folder exists locally and matches prod history (see Step 2 for the expected `migrate status`).
+
+The separate WhatsApp RLS migration `20261011150000_whatsapp_enable_rls` (earlier checksum notes, e.g. `e0cc0a8b...`) is obsolete: it was folded into the three creation migrations and removed, and was never applied. The WhatsApp migration count is therefore 3. Both branches add the same `.gitattributes`, so a merge is clean. The three WhatsApp files now have new bytes (explicit transaction + RLS); `migrate resolve` / `migrate deploy` record whatever checksum the file has where it runs, so no old checksum applies.
