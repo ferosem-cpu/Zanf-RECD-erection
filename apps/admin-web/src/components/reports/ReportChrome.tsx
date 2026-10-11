@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/apiClient";
+import { apiAssetUrl, printWhenReady } from "@/lib/images";
 
 interface Company {
   legalName?: string | null;
-  logoDataUrl?: string | null;
+  logoUrl?: string | null;
 }
 
 /** Fetches company settings once, shared by every report's print header. */
@@ -27,7 +28,7 @@ export function ReportPrintHeader({ company, title, subtitle }: { company: Compa
   return (
     <div className="hidden print:flex items-start justify-between border-b border-gray-300 pb-3 mb-4">
       <div>
-        {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-8 object-contain mb-1" /> : null}
+        {company?.logoUrl ? <img src={apiAssetUrl(company.logoUrl)!} alt="logo" className="h-8 object-contain mb-1" /> : null}
         <div className="text-base font-semibold">{company?.legalName ?? "Company"}</div>
       </div>
       <div className="text-right">
@@ -55,7 +56,7 @@ export function ReportToolbar({ onExportCsv, exportDisabled, backHref = "/report
             Export CSV
           </button>
         )}
-        <button onClick={() => window.print()} className="btn-primary px-3 py-1.5 text-xs" data-testid="report-print">
+        <button onClick={() => void printWhenReady()} className="btn-primary px-3 py-1.5 text-xs" data-testid="report-print">
           Print
         </button>
       </div>
