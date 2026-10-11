@@ -6,11 +6,20 @@ Installation, Testing, Commissioning. Cloned from Platino on 2026-07-19 and NOT 
 Full pre-compaction handover (changelog, per-fix narratives): `git show 649ca2a:docs/HANDOVER.md`.
 Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
-## 1. Production state (2026-10-10)
-- API code = master `649ca2a` (fix 14). Deployment `dpl_8ai5M6GjkauRGno4byPe9xh6sb1j` (18:59 IST,
-  Oct 10 2026). Rollback target: `dpl_CaYkxaNLkckQZbFBDE5JYmyHVT93` (fix 13). The docs merge moves
-  master but not the API code.
-- admin-web auto-deploys from master (`app.zanf.org`). API is deployed manually (section 5).
+## 1. Production state (2026-10-11)
+- API = master `5c3dbc6` (logo egress fix): `dpl_49cApBVUavTvvbZxDwFpo6X3AqQ5` (20:47 IST, Oct 11 2026).
+  Rollback target: `dpl_8ai5M6GjkauRGno4byPe9xh6sb1j` (fix 14).
+- admin-web auto-deploys from master (`app.zanf.org`): `dpl_EnkCXpEgppRFudaP1ey8mJ9d14HX` (20:48 IST,
+  Oct 11). Rollback: `dpl_47SeBbfRbSMzJhfa3hte2orzQzkS`. API is deployed manually (section 5).
+- 2026-10-11 RLS fix: RLS on + anon/authenticated grants revoked on the 25 public Zan tables
+  (migration `20261011110000_enable_rls_public_tables`, applied in prod with its history row; ebiz
+  tables untouched). Runbook: `docs/SECURITY-RLS.md`. Pre-change JSON backup (64 tables, 1,263 rows,
+  `grants-before.json`, emergency-only `rollback-exact.sql`): `D:\Backups\zan-db\json-20261011-1725\` (private ACL).
+- 2026-10-11 logo egress fix live (section 2): stored logo shrunk 2.45 MB -> 52 KB PNG (md5 of data URL
+  `ed0fa8e6...`); original kept at `D:\Backups\zan-db\logo-original.png`.
+- WhatsApp assistant: M1/M2/M3 on local branches `feat/whatsapp-m*` (+ bridge `D:\Apps\zan-wa-bridge`),
+  reviewed, NOT merged/deployed/migrated. Next: Neon preview DB trial.
+- Agent/session handover: `.claude-task\HERMES-HANDOVER.md` (local only, not committed).
 - Repo `github.com/ferosem-cpu/Zanf-RECD-erection`, branch `master`. Local ports: API 4011, web 6011.
 - DB: Supabase `zan-app` (`ap-south-1`). Vercel team `ferose-salahudeen-s-projects`; CLI user
   `ferosem-1321`. Projects `admin-web` (git-connected) and `zan-app-api` (`bom1`, `zan-app-api.vercel.app`).
@@ -51,7 +60,7 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Before every push: `npm run build --workspace=packages/shared`; in `apps/api` `npx prisma generate`,
   `npx tsc --noEmit`, `npm run build`; in `apps/admin-web` `npx tsc --noEmit`, `npm run build`; root
   `npm test`. One-shot: `.claude-task/check.ps1` (local file, not committed).
-- Tests: node:test via tsx, mocks only. Current counts: API 176, admin-web 35. New test files must
+- Tests: node:test via tsx, mocks only. Current counts: API 181, admin-web 38. New test files must
   be added to the app's package.json "test" script. Lint is not set up.
 - Shared changes need a rebuild; a stale real copy in `apps/api/node_modules/@recd/shared` shadows the
   workspace link.
@@ -67,7 +76,7 @@ Prod migration history has drifted (DDL applied by hand via Supabase MCP). Never
 `prisma migrate deploy/dev` or `db push` against any database; write migrations only and flag them.
 15 prod migrations (`20260813122825` ... `20260829054500`) have no `_prisma_migrations` row, so
 `migrate deploy` would try to re-run them; backfill rows (SHA-256 of each `migration.sql`) first.
-No migrations pending. Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
+No migrations pending (RLS migration applied 2026-10-11 with its row). Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
 
 ## 5. Deploying
 Backend first: deploy `zan-app-api` and confirm it live BEFORE pushing dependent admin-web changes
@@ -116,14 +125,8 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
   NVIDIA priority 2 (HTTP 410, see section 8), plus an OpenAI fallback row per the fix 12 logs
   (rows not verified against production). A 410 provider is skipped 60 min, an out-of-quota 429 for
   15 min (`providerHealth.ts`; cleared when the row is edited). Final error lists the primary's first.
-- Time caps (`timeouts.ts`, env-overridable): request budget `AGENT_REQUEST_BUDGET_MS` 55 s; one LLM
-  call 30 s (`AGENT_LLM_CALL_TIMEOUT_MS`); a provider with a fallback behind it gets 25 s per round
-  (`AGENT_LLM_ATTEMPT_CAP_MS`) and never the last 20 s (`AGENT_FALLBACK_RESERVE_MS`); no new call
-  with under 4 s left; tool call 25 s; extraction 40 s; max 8 tool turns; chat calls use SDK retries 0;
-  a timed-out provider is skipped for the rest of the request. `vercel.json` sets no maxDuration
-  (not verified against the plan limit). API 500 body: `{error, errorId}`, details only in logs.
-- Timing: `npx vercel logs <url>` lines `agent_turn_timing {json}` (rounds, llmMs, tools, totalMs,
-  outcome; no inputs or text). Slow answers are LLM rounds, not tools.
+- Time caps in `timeouts.ts` (env-overridable): request 55 s, LLM call 30 s, 25 s per round when a fallback
+  exists, max 8 tool turns. API 500 body `{error, errorId}`. Timing: `agent_turn_timing` lines in `npx vercel logs`.
 - Tools (`tools/`) mirror their REST route's permissions and refuse customers where the route does.
   Write tools are confirm-gated and draft-only (`AgentPendingAction`); no Accounting writes, no
   edit tools. Test prompt/tool fixes in a NEW thread. Threads over 30 days are deleted by cron.
@@ -172,14 +175,11 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
    idempotent migration if wanted.
 6. Decide whether GSTR-3B 4A ITC (`gstExport.ts`) and site vendor costs (`routes/sites.ts`) should
    count Verified bills (they use Approved+).
-7. Intermittent browser `net::ERR_FAILED` never reached the API (client/network side); if it recurs
-   capture the console line + Network entry. Management user should sign out/in and re-check Orders,
-   Sites, Customers.
-8. Needs real-user click-through: order value auto-fill, Accounting-Lite A-D, vendor advances, DataTable
+7. Needs real-user click-through: order value auto-fill, Accounting-Lite A-D, vendor advances, DataTable
    columns/print, Drive folder creation, reports, multi-product order, order edit.
-9. Data: `RecdDelivery` mostly empty for Ethen's 29 sites; import from
+8. Data: `RecdDelivery` mostly empty for Ethen's 29 sites; import from
    `Material_Delivery_Status_version_1.xlsx` awaits approval.
-10. Gaps: no advance section on vendor bill page; no `requestedByCustomer` badge; `Product.shape` too
+9. Gaps: no advance section on vendor bill page; no `requestedByCustomer` badge; `Product.shape` too
     coarse; no audit log for quotations/POs; agent can invent HSN codes (Zod rejects), no Drive upload,
-    no mic on Firefox/iOS; Expo/RN and Next 16 PostCSS advisories deferred; vendor Vercel MCP
-    connectors cannot see the projects; untried: plain `vercel deploy --prod` (remote build) for the API.
+    no mic on Firefox/iOS; Expo/RN and Next 16 PostCSS advisories deferred.
+10. After the logo fix, re-check `pg_stat_statements` that queries selecting `logoDataUrl` stop growing.
