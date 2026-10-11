@@ -1,8 +1,10 @@
-/** Sends one signed WhatsApp-bridge request (no WhatsApp needed). Never prints the secret.
+/** Preview/local only: refuses production and non-vercel.app hosts before signing or sending.
+ * Sends one signed WhatsApp-bridge request (no WhatsApp needed). Never prints the secret.
  * Env: WA_BASE_URL, WA_KEY_ID, WA_KEY_SECRET, optional VERCEL_BYPASS_SECRET (Deployment Protection).
  * Usage: npx tsx scripts/waSignedRequest.ts METHOD /wa/path?query [bodyJson] [--sign-path /other] [--idem KEY]
  * --sign-path signs a different path than the one requested (expect 401). */
 import crypto from "node:crypto";
+import { checkWaBaseUrl } from "./waHostGuard";
 import { BRIDGE_HEADERS, sha256Hex, signBridgeRequest } from "../src/services/whatsappBridgeAuth";
 
 async function main() {
@@ -17,6 +19,8 @@ async function main() {
   const [method = "GET", path = "/wa/outbox?limit=5", body = ""] = args;
   const { WA_BASE_URL, WA_KEY_ID, WA_KEY_SECRET, VERCEL_BYPASS_SECRET } = process.env;
   if (!WA_BASE_URL || !WA_KEY_ID || !WA_KEY_SECRET) throw new Error("Set WA_BASE_URL, WA_KEY_ID, WA_KEY_SECRET");
+  const refusal = checkWaBaseUrl(WA_BASE_URL);
+  if (refusal) throw new Error(refusal);
   const bodySha = sha256Hex(body);
   const ts = String(Math.floor(Date.now() / 1000));
   const nonce = crypto.randomBytes(16).toString("hex");
