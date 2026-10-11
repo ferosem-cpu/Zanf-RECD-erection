@@ -127,3 +127,7 @@ The Supabase security advisor reports 25 ERROR "RLS Disabled in Public" (includi
 ## 9. Approval wording for Ferose
 
 > I approve, on the production Supabase project `zan-app`: (1) taking a `pg_dump` backup first; (2) recording 15 existing migrations as applied in `_prisma_migrations` (history rows only, no schema change); (3) running `prisma migrate deploy` for the WhatsApp migrations, which ALTERS the existing `AgentConversation` table (adds column `channel` with default `'app'`, and creates index `AgentConversation_userId_channel_idx`), and creates 4 new tables (`WhatsappSenderMapping`, `WhatsappBridgeNonce`, `WhatsappInbound`, `WhatsappOutbox`); (4) enabling row-level security on those 4 new tables; with a 5-second lock timeout, at a quiet time, and with the rollback plan in section 7 ready. The API deploy follows separately.
+
+## 10. Interaction with fix/enable-rls
+
+The branch `fix/enable-rls` adds `20261011120000_enable_rls_public_tables`, which sorts BEFORE the WhatsApp migrations. The plan is to apply the RLS fix first. Before WhatsApp goes to prod, merge master (with the RLS migration) into `feat/whatsapp-m2` so the migration folders match the prod history. The WhatsApp RLS migration `20261011150000_whatsapp_enable_rls` (2925ef2) matches the coordinator-tested SQL (sha256 87e92757...9497, LF) and was verified on the throwaway DB (37 migrations applied, store tests 5/5, anon sees 0 rows).
