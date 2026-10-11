@@ -101,6 +101,7 @@ model User {
   expensesRecorded     Expense[]          @relation("ExpenseRecorder")
   invoiceEdits         InvoiceEditLog[]   @relation("InvoiceEditor")
   backupsTriggered     BackupLog[]        @relation("BackupTriggeredBy")
+  whatsappMappings     WhatsappSenderMapping[]
   creditNotesCreated   CreditNote[]       @relation("CreditNoteCreator")
   debitNotesCreated    DebitNote[]        @relation("DebitNoteCreator")
   workOrdersAssigned   WorkOrder[]        @relation("WorkOrderAssignee")
@@ -1443,4 +1444,29 @@ model CustomerPurchaseOrderAuditLog {
   action                  String
   summary                 String
   createdAt               DateTime              @default(now())
+}
+
+/// Verified WhatsApp sender -> Zan user mapping (Super Admin managed). Authorisation never
+/// uses message text or User.phone; role and permissions always come from the user's CURRENT
+/// role. A new mapping is disabled until a Super Admin enables it. "At most one enabled
+/// mapping per user" is enforced in services/whatsappMapping.ts, not by a partial index.
+model WhatsappSenderMapping {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  /// Normalised E.164 with leading "+" (services/whatsappPhone.ts).
+  phoneE164    String    @unique
+  /// WhatsApp LID digits, set only by a Super Admin-verified match.
+  lid          String?   @unique
+  enabled      Boolean   @default(false)
+  aiPaused     Boolean   @default(false)
+  note         String?
+  createdById  String
+  updatedById  String
+  verifiedById String?
+  verifiedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([userId])
 }

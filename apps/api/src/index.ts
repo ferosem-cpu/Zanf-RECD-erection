@@ -29,6 +29,7 @@ import { workOrdersRouter } from "./routes/workOrders";
 import { notificationsRouter } from "./routes/notifications";
 import { agentTestRouter } from "./routes/agentTest";
 import { agentProvidersRouter } from "./routes/agentProviders";
+import { whatsappMappingsRouter } from "./routes/whatsappMappings";
 import { agentConversationsRouter } from "./routes/agentConversations";
 import { agentCronRouter } from "./routes/agentCron";
 import { backupRouter } from "./routes/backup";
@@ -90,6 +91,7 @@ if (process.env.NODE_ENV !== "production") {
   app.use("/agent", agentTestRouter);
 }
 app.use("/agent", agentProvidersRouter);
+app.use("/whatsapp/mappings", whatsappMappingsRouter);
 app.use("/agent", agentConversationsRouter);
 app.use("/agent", agentCronRouter);
 app.use("/backup", backupRouter);
