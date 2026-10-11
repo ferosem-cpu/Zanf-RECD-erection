@@ -1,0 +1,3 @@
+*.sql text eol=lf
+# Applied migrations keep their committed bytes (prod checksums)
+apps/api/prisma/migrations/20260[6-9]*/migration.sql -text

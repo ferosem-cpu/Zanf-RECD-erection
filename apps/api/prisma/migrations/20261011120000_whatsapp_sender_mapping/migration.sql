@@ -1,3 +1,12 @@
+-- Explicit transaction: Prisma does NOT wrap PostgreSQL migration files in a transaction, so this
+-- file carries its own BEGIN/COMMIT. SET LOCAL lock_timeout makes a blocked lock fail fast (5s)
+-- and roll everything back, leaving nothing half-applied.
+-- RLS + REVOKE at the end: Supabase default privileges grant anon/authenticated full access to new
+-- public tables, and RLS alone does not stop TRUNCATE, so each new table is locked down in the same
+-- transaction that creates it (no unprotected window). No policies: the app role bypasses RLS.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
 -- WhatsApp sender mapping (M1). Additive only: one new table, no change to existing tables.
 -- Written by hand; NOT applied to any database (edited in place after the Codex M1 review
 -- because this file had never been applied anywhere).
@@ -36,3 +45,9 @@ CREATE UNIQUE INDEX "WhatsappSenderMapping_one_enabled_user_idx" ON "WhatsappSen
 
 -- AddForeignKey
 ALTER TABLE "WhatsappSenderMapping" ADD CONSTRAINT "WhatsappSenderMapping_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- Lock down (RLS + revoke anon/authenticated)
+ALTER TABLE "WhatsappSenderMapping" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE "WhatsappSenderMapping" FROM anon, authenticated;
+
+COMMIT;

@@ -1,3 +1,12 @@
+-- Explicit transaction: Prisma does NOT wrap PostgreSQL migration files in a transaction, so this
+-- file carries its own BEGIN/COMMIT. SET LOCAL lock_timeout makes a blocked lock fail fast (5s)
+-- and roll everything back, leaving nothing half-applied.
+-- RLS + REVOKE at the end: Supabase default privileges grant anon/authenticated full access to new
+-- public tables, and RLS alone does not stop TRUNCATE, so each new table is locked down in the same
+-- transaction that creates it (no unprotected window). No policies: the app role bypasses RLS.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
 -- WhatsApp M2 queue tables + AgentConversation.channel. Additive, hand-written, NOT applied to any database.
 
 -- AlterTable
@@ -66,3 +75,10 @@ CREATE INDEX "WhatsappOutbox_status_leaseUntil_idx" ON "WhatsappOutbox"("status"
 -- CreateIndex
 CREATE INDEX "AgentConversation_userId_channel_idx" ON "AgentConversation"("userId", "channel");
 
+-- Lock down (RLS + revoke anon/authenticated)
+ALTER TABLE "WhatsappInbound" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE "WhatsappInbound" FROM anon, authenticated;
+ALTER TABLE "WhatsappOutbox" ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE "WhatsappOutbox" FROM anon, authenticated;
+
+COMMIT;
