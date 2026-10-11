@@ -16,6 +16,7 @@ import { LIST_LIMIT, listMeta, listPage } from "../listResult";
 import { isoDateIST } from "../istDates";
 import { isPastDue, istStartOfDay } from "../../services/ageing";
 import type { AgentTool, AgentAuthContext } from "./types";
+import { waOrderWhere, waEventWhere, waSiteVisible, waSiteWhere, waIsScoped } from "../whatsapp/siteScope";
 
 const RESULT_LIMIT = LIST_LIMIT;
 
@@ -846,6 +847,14 @@ const searchOrdersAndSites: AgentTool = {
       if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("your sites");
       scope = { customerId: auth.customerId };
       filters.unshift(scope);
+    } else if (auth.waGroup) {
+      // WhatsApp only: site reads open to every group that may use them, always row-scoped.
+      if (!hasAny(auth, [PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.VIEW_ORDERS, PERMISSION_KEY.VIEW_SITE_STATUS])) return forbidden("orders");
+      const waScope = waOrderWhere(auth);
+      if (waScope) {
+        scope = waScope;
+        filters.unshift(scope);
+      }
     } else {
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("orders");
     }
@@ -854,7 +863,7 @@ const searchOrdersAndSites: AgentTool = {
       loadOpenCutoff(),
       prisma.stageDefinition.findMany({ orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
       prisma.statusOption.findMany({ where: { domain: "site_stage" }, orderBy: { sequenceOrder: "asc" }, select: { key: true, label: true } }),
-      loadLatestUpdates(auth.customerId ? { site: { order: { customerId: auth.customerId } } } : {}),
+      loadLatestUpdates(auth.customerId ? { site: { order: { customerId: auth.customerId } } } : waEventWhere(auth) ?? {}),
     ]);
     const filtered = Boolean(query) || openOnly ||
       (input.stageKey != null && String(input.stageKey).trim() !== "") ||
@@ -1016,6 +1025,8 @@ const searchSiteStatusUpdates: AgentTool = {
       // Vendor isolation, mirroring create_site_status_update: an erection vendor's engineers
       // only see updates for sites assigned to their own vendor.
       if (auth.vendorId && site.vendorId !== auth.vendorId) return forbidden("this site's status updates");
+      // WhatsApp only: a site outside the sender's scope is indistinguishable from a missing one.
+      if (!waSiteVisible(auth, site)) return { error: `No site found with id ${siteId}. Use search_orders_and_sites first.` };
     }
 
     let statusKeys: string[] | undefined;
@@ -1037,7 +1048,7 @@ const searchSiteStatusUpdates: AgentTool = {
     // engineers their vendor's sites, everyone else all orders.
     const scope: Prisma.OrderWhereInput = auth.customerId
       ? { customerId: auth.customerId }
-      : auth.vendorId ? { site: { is: { vendorId: auth.vendorId } } } : {};
+      : waOrderWhere(auth) ?? (auth.vendorId ? { site: { is: { vendorId: auth.vendorId } } } : {});
 
     const [events, allForSite, allOrders] = await Promise.all([
       prisma.siteStageEvent.findMany({
@@ -1058,7 +1069,7 @@ const searchSiteStatusUpdates: AgentTool = {
       }),
       Promise.all([
         loadOpenCutoff(),
-        loadLatestUpdates(auth.customerId ? { site: { order: { customerId: auth.customerId } } } : auth.vendorId ? { site: { vendorId: auth.vendorId } } : {}),
+        loadLatestUpdates(auth.customerId ? { site: { order: { customerId: auth.customerId } } } : auth.vendorId ? { site: { vendorId: auth.vendorId } } : waEventWhere(auth) ?? {}),
       ]).then(([{ closedFromSeq }, latest]) => loadWholeSet(scope, closedFromSeq, latest)),
     ]);
     const matching = statusKeys ? allForSite.filter((e) => statusKeys!.includes(e.statusOption.key)) : allForSite;
@@ -1105,6 +1116,8 @@ const searchWorkOrders: AgentTool = {
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
     const where: Prisma.WorkOrderWhereInput = auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS) ? {} : { assignedToId: auth.userId };
+    // WhatsApp only: engineers see work orders on their assigned sites, on top of the rule above.
+    if (waIsScoped(auth)) where.site = { is: waSiteWhere(auth)! };
     if (status) where.status = status;
     if (query) where.OR = [{ title: { contains: query, mode: "insensitive" } }, { workOrderNumber: { contains: query, mode: "insensitive" } }];
     const [workOrders, groups] = await Promise.all([
@@ -1157,6 +1170,8 @@ const searchComplaints: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW)) {
       where.assignedToId = auth.userId;
     }
+    // WhatsApp only: engineers see complaints on their assigned sites, on top of the rule above.
+    if (waIsScoped(auth)) where.site = { is: waSiteWhere(auth)! };
     if (status) where.status = status;
     if (query) where.OR = [{ ticketNumber: { contains: query, mode: "insensitive" } }, { customer: { name: { contains: query, mode: "insensitive" } } }];
     const [complaints, groups] = await Promise.all([

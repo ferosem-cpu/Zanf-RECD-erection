@@ -29,6 +29,7 @@ export async function loadWaUserContext(userId: string): Promise<WaUserContext |
 export const prismaSenderStore: SenderStore = {
   findByPhone: (phoneE164) => prisma.whatsappSenderMapping.findMany({ where: { phoneE164 } }),
   findByLid: (lid) => prisma.whatsappSenderMapping.findMany({ where: { lid } }),
+  findById: (id) => prisma.whatsappSenderMapping.findUnique({ where: { id } }),
   loadUser: loadWaUserContext,
 };
 

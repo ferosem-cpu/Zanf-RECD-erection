@@ -35,6 +35,12 @@ export interface RunAgentTurnParams {
   /** Overall time budget for this request (shared with any attachment extraction the caller
    * already did). Defaults to a fresh AGENT_REQUEST_BUDGET_MS budget. */
   deadline?: AgentDeadline;
+  /** Tool resolver / write-tool predicate. Default: the global registry (in-app behaviour).
+   * The WhatsApp path passes a policy-aware resolver here. */
+  getTool?: (name: string) => AgentTool | undefined;
+  isWriteTool?: (name: string) => boolean;
+  /** Checked after each tool step; true ends the turn with an empty reply (silent abort). */
+  shouldAbort?: () => boolean;
 }
 
 export interface RunAgentTurnResult {
@@ -99,13 +105,17 @@ export async function runAgentTurn(params: RunAgentTurnParams): Promise<RunAgent
     const results = await executeToolCalls({
       calls: response.toolCalls,
       auth: params.auth,
-      getTool: getToolByName,
-      isWriteTool,
+      getTool: params.getTool ?? getToolByName,
+      isWriteTool: params.isWriteTool ?? isWriteTool,
       onToolCall,
       deadline,
       onTiming: timer.tools,
     });
     history = [...history, ...results];
+    if (params.shouldAbort?.()) {
+      timer.log("aborted");
+      return { reply: "", history };
+    }
   }
 
   timer.log("max_steps");

@@ -25,4 +25,8 @@ export interface AgentAuthContext {
    * an AgentPendingAction to the right thread. Not set for the throwaway /agent/chat-test
    * route (no persisted conversation), so write tools must handle it being absent. */
   conversationId?: string;
+  /** Set ONLY by the WhatsApp path (server-side, from the sender's current role): switches
+   * the read tools to the WhatsApp site scope. Undefined for the in-app assistant, whose
+   * behaviour is unchanged. */
+  waGroup?: import("../whatsapp/policy").WaGroup;
 }

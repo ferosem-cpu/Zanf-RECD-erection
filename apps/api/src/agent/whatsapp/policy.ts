@@ -68,7 +68,7 @@ export function isDetailDocAllowed(group: WaGroup, docType: unknown): boolean {
 /** Keys removed (with their whole subtree) at every nesting level. */
 const STRIP_EXACT = new Set([
   "total", "subtotal", "grandtotal", "paid", "due", "rate", "unitrate", "cost", "costs",
-  "balance", "outstanding", "tds", "discount",
+  "balance", "outstanding", "tds", "discount", "gst", "cgst", "sgst", "igst", "gstrate",
   "allocations", "allocation", "paymentallocations", "billallocations", "paymentordertags",
   "expenses", "purchaseorders", "payments", "invoices", "quotations", "bills", "creditnotes",
   "customerpurchaseorders", "customerprices", "saveditemprices",
@@ -76,7 +76,7 @@ const STRIP_EXACT = new Set([
 
 /** Any key containing one of these fragments is also removed (case-insensitive). Note
  * "totalCount", "totals" and "quantity" are deliberately NOT matched, so counts survive. */
-const STRIP_FRAGMENTS = ["value", "amount", "price", "balance", "outstanding", "revenue", "payable", "receivable", "gst", "tax"];
+const STRIP_FRAGMENTS = ["value", "amount", "price", "balance", "outstanding", "revenue", "payable", "receivable", "tax", "cost", "expense", "allocation", "purchaseorder"];
 
 /** Documented list of fields removed by sanitizeNonFinance (exact keys + fragments). */
 export const MONEY_STRIP_FIELDS = { exact: [...STRIP_EXACT], fragments: STRIP_FRAGMENTS };
@@ -141,6 +141,7 @@ export interface WaUserContext {
 export interface SenderStore {
   findByPhone(phoneE164: string): Promise<MappingRow[]>;
   findByLid(lid: string): Promise<MappingRow[]>;
+  findById(id: string): Promise<MappingRow | null>;
   loadUser(userId: string): Promise<WaUserContext | null>;
 }
 

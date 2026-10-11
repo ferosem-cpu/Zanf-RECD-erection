@@ -122,6 +122,10 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
       // from tool input).
       if (auth.customerId) {
         if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("orders");
+      } else if (auth.waGroup) {
+        // WhatsApp only: same relaxed site-read gate as search_orders_and_sites.
+        const keys = [PERMISSION_KEY.MANAGE_ORDERS, PERMISSION_KEY.VIEW_ORDERS, PERMISSION_KEY.VIEW_SITE_STATUS];
+        if (!keys.some((k) => auth.permissions.has(k))) return forbidden("orders");
       } else if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) {
         return forbidden("orders");
       }
