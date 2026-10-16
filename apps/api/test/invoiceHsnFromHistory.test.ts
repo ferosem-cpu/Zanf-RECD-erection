@@ -100,12 +100,40 @@ test("the most-used earlier code wins over a one-off", async (t) => {
   assert.equal(pending[0].input.lineItems[0].hsnCode, "996511");
 });
 
+test("'Extra work' lines take the fabrication (civil work) code from earlier invoices", async (t) => {
+  const { tool, pending, auth } = await setup(t, [
+    { description: "Extra for crane and unloading - INTERGLOBE AVIATION", hsnCode: "998346" },
+    { description: "Dismantling & Mechanical Fabrication – VRL Hubli 750 KVA", hsnCode: "998898" },
+    { description: "Dismantling & Mechanical Fabrication - Wipro", hsnCode: "998898" },
+    { description: "Panel board fixing, connection testing, logistics - Wipro", hsnCode: "998346" },
+  ]);
+  const result: any = await tool.handler(
+    {
+      ...base,
+      lineItems: [{ description: "Extra work – DG Acoustic removal and refixing, panel board wiring and fixing", quantity: 1, unitPrice: 15000 }],
+    },
+    auth,
+  );
+  assert.equal(result.status, "pending_confirmation");
+  assert.equal(pending[0].input.lineItems[0].hsnCode, "998898");
+  assert.match(result.note, /998898/);
+  assert.match(result.note, /fabrication \(civil work\) code/);
+  assert.equal(result.preview.subtotal, 15000);
+});
+
+test("'Extra work' with no fabrication line in history is refused, not guessed", async (t) => {
+  const { tool, pending, auth } = await setup(t, [{ description: "Extra for crane and unloading - X", hsnCode: "998346" }]);
+  const result: any = await tool.handler({ ...base, lineItems: [{ description: "Extra work - anything", quantity: 1, unitPrice: 1 }] }, auth);
+  assert.ok(result.error);
+  assert.equal(pending.length, 0);
+});
+
 test("no match: refuses, lists earlier codes as options, and writes nothing", async (t) => {
   const { tool, pending, auth } = await setup(t, [
     { description: "Panel board fixing, connection testing, logistics - VRL Belgaum", hsnCode: "998346" },
   ]);
   const result: any = await tool.handler(
-    { ...base, lineItems: [{ description: "Extra work – DG Acoustic removal and refixing", quantity: 1, unitPrice: 15000 }] },
+    { ...base, lineItems: [{ description: "Miscellaneous site charges", quantity: 1, unitPrice: 15000 }] },
     auth,
   );
   assert.equal(result.status, undefined);

@@ -50,6 +50,29 @@ export async function resolveHsnFromHistory(description: string): Promise<HsnMat
   const savedHit = saved.find((s) => clean(s.hsnCode));
   if (savedHit) return { hsnCode: clean(savedHit.hsnCode), source: `saved billing item "${savedHit.name}"` };
 
+  const direct = await fromInvoiceHistory(core);
+  if (direct) return direct;
+
+  // "Extra work - ..." / "Additional ..." lines have no standard name of their own. Business
+  // rule (Ferose, 2026-10-16): they are civil/fabrication work, so they take the code of the
+  // fabrication line on earlier invoices. The reply note says so, so the user can check it.
+  if (EXTRA_WORK_LINE.test(core)) {
+    const fab = await fromInvoiceHistory(EXTRA_WORK_FALLBACK_SERVICE);
+    if (fab) {
+      return {
+        hsnCode: fab.hsnCode,
+        source: `${fab.source} - extra/additional work lines default to the fabrication (civil work) code`,
+      };
+    }
+  }
+  return null;
+}
+
+/** Extra-work lines default to this service's code (the fabrication/civil-work line). */
+export const EXTRA_WORK_FALLBACK_SERVICE = "Dismantling & Mechanical Fabrication";
+const EXTRA_WORK_LINE = /^(extra|additional)\b/i;
+
+async function fromInvoiceHistory(core: string): Promise<HsnMatch | null> {
   const rows = await prisma.invoiceLineItem.findMany({
     where: { hsnCode: { not: null }, description: { contains: core, mode: "insensitive" } },
     orderBy: { invoice: { createdAt: "desc" } },
