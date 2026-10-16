@@ -78,7 +78,7 @@ test("sanity: incl. >= excl. for totals and every customer, and incl - excl = th
 test("overdue list names every overdue invoice with due date, balance and days overdue", () => {
   const out = summarizeReceivables(fixture(), NOW);
   assert.deepEqual(out.overdueInvoices, [
-    { id: "i1", invoiceNumber: "INV/2026-27/0001", customer: "Acme", dueDate: "2026-08-31", balanceInclGst: 109850, balanceExclGst: 98520.18, daysOverdue: 38 },
+    { id: "i1", invoiceNumber: "INV/2026-27/0001", customer: "Acme", orderNumber: null, site: null, siteSource: null, dueDate: "2026-08-31", balanceInclGst: 109850, balanceExclGst: 98520.18, daysOverdue: 38 },
   ]);
   assert.equal(out.overdueListComplete, true);
 });

@@ -15,6 +15,7 @@ import { computeBillTotals } from "../../routes/bills";
 import { computeCustomerPoTotals } from "../../routes/customer-purchase-orders";
 import { isoDateIST } from "../istDates";
 import { listHsnCandidates, resolveHsnFromHistory } from "../hsnLookup";
+import { applyPercentSplits } from "../lineSplit";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
@@ -501,6 +502,9 @@ interface InvoiceLineItemInput {
   hsnCode: string;
   quantity: number;
   unitPrice: number;
+  /** Percentage split (see agent/lineSplit.ts): the app derives unitPrice from these. */
+  splitTotal?: number;
+  splitPct?: number;
   discountPct?: number;
   taxRatePct?: number;
 }
@@ -536,11 +540,13 @@ const createInvoiceTool: AgentTool = {
             description: { type: "string" },
             hsnCode: { type: "string", description: "HSN/SAC code for GST. Leave it out unless the user gave one: the app then reuses the code from earlier invoices or saved billing items with the same line name. Never guess a code." },
             quantity: { type: "number" },
-            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax and discount." },
+            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax and discount. Leave it out when using splitTotal + splitPct." },
+            splitTotal: { type: "number", description: "To divide an amount across lines by percentage: the total amount being divided (e.g. 65000). Give the same splitTotal on every line of that group. The app calculates each line's price - never do this arithmetic yourself." },
+            splitPct: { type: "number", description: "With splitTotal: this line's share in percent (e.g. 63.85). Quantity defaults to 1." },
             discountPct: { type: "number", description: "Discount percent, 0-100. Defaults to 0." },
             taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
           },
-          required: ["description", "quantity", "unitPrice"],
+          required: ["description"],
         },
       },
       issueDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
@@ -571,8 +577,12 @@ const createInvoiceTool: AgentTool = {
 
     if (!customerId && !customerName) return { error: "Provide either customerId or customerName." };
     if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
+    // Percentage splits are computed here, never by the model (see agent/lineSplit.ts).
+    const split = applyPercentSplits(lineItemsRaw);
+    if ("error" in split) return { error: split.error };
     for (const [i, li] of lineItemsRaw.entries()) {
       if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
+      if (li.quantity === undefined || li.quantity === null) li.quantity = 1;
       if (!li.hsnCode || !li.hsnCode.trim()) {
         // No code given: reuse what earlier invoices / saved billing items used for this line.
         const found = await resolveHsnFromHistory(String(li.description));
@@ -690,7 +700,8 @@ const createInvoiceTool: AgentTool = {
       preview,
       note:
         "Prepared for review - waiting for the user to confirm or reject in the chat UI. This creates a DRAFT only (no invoice number) - do not say it has been created/issued." +
-        (hsnNotes.length ? ` HSN/SAC codes filled in from earlier records (tell the user so they can check): ${hsnNotes.join(" ")}` : ""),
+        (hsnNotes.length ? ` HSN/SAC codes filled in from earlier records (tell the user so they can check): ${hsnNotes.join(" ")}` : "") +
+        (split.notes.length ? ` Percentage splits were calculated by the app (quote the preview's amounts, do not recompute): ${split.notes.join(" ")}` : ""),
     };
   },
 };
