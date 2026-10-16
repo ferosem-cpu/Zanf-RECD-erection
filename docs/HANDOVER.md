@@ -7,7 +7,15 @@ Full pre-compaction handover (changelog, per-fix narratives): `git show 649ca2a:
 Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
 ## 1. Production state (2026-10-16)
-- API = `dpl_2x3jbxyvZccZSjM8gt3tNTtKKWqg` (17:24 IST, Oct 16 2026): master code (`182517e`, same as `5c3dbc6`)
+- API = `dpl_FL2AzQKMMTE9S8zZsfu67VDyrcuo` (19:46 IST, Oct 16 2026, from branch
+  `fix/agent-tuning-split-site-confirm` commit `ef2a92c` on top of the deployment below). Adds: receivables /
+  invoice search return each invoice's own site (`agent/invoiceSite.ts`); `create_invoice` lines accept
+  `splitTotal` + `splitPct` and the app computes the amounts (`agent/lineSplit.ts`); prompt rules against
+  "no tools" give-ups. Rollback target: `dpl_2x3jbxyvZccZSjM8gt3tNTtKKWqg`.
+  Deploy gotcha: patch EVERY `*.func` recursively (there are two: `functions/index.func` and
+  `functions/api/index.func`) and write `.vc-config.json` WITHOUT a BOM (`Set-Content -Encoding UTF8` adds one
+  and `vercel deploy` fails "Unexpected token" before uploading).
+- Previous API = `dpl_2x3jbxyvZccZSjM8gt3tNTtKKWqg` (17:24 IST, Oct 16 2026): master code (`182517e`, same as `5c3dbc6`)
   plus 3 agent fixes from branch `deploy/agent-fixes-on-prod` (not yet merged to master): Gemini fallback
   accepts tool calls made by another provider (placeholder thought signature); `create_invoice` reuses
   HSN/SAC from earlier invoices, "Extra ..." lines default to the fabrication code (section 6); prompt no
@@ -137,7 +145,7 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
   OFF in prod, deliberate). Needs a provider in Settings > Agent providers (`AgentLlmProvider`, keys
   AES-256-GCM with `AGENT_SECRETS_KEY`).
 - Provider order: active rows by `priority` ascending (`providers/factory.ts`), with fallback. Prod rows seen in
-  the runtime errors on 2026-10-16: `Free LLM API` priority 0 (model `auto`, the FreeLLM router VM), `Open AI `
+  the runtime errors on 2026-10-16: `Free LLM API` priority 0 (model `auto` until 2026-10-16 evening, then set to `codestral-latest`: with `auto` the router (FreeLLM VM) first tried dead Google models (404 "no longer available") and Cohere (15 s abort), so a call took 16-23 s and hit our 25 s per-attempt cap; codestral answers in 1-5 s. The router has only one working route, so it can answer 429 "all models exhausted" when rate-limited), `Open AI `
   priority 1 (`gpt-5.6-luna`, out of credits, HTTP 429), `NVIDIA` priority 2 (timeouts; earlier HTTP 410, see
   section 8), `Gemini` priority 3 (`models/gemini-3.5-flash-lite`). Gemini URLs use native `:generateContent` for PDFs.
   A 410 provider is skipped 60 min, an out-of-quota 429 for 15 min (`providerHealth.ts`; cleared when the row is
