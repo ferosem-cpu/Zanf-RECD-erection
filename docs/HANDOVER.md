@@ -6,9 +6,13 @@ Installation, Testing, Commissioning. Cloned from Platino on 2026-07-19 and NOT 
 Full pre-compaction handover (changelog, per-fix narratives): `git show 649ca2a:docs/HANDOVER.md`.
 Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
-## 1. Production state (2026-10-11)
-- API = master `5c3dbc6` (logo egress fix): `dpl_49cApBVUavTvvbZxDwFpo6X3AqQ5` (20:47 IST, Oct 11 2026).
-  Rollback target: `dpl_8ai5M6GjkauRGno4byPe9xh6sb1j` (fix 14).
+## 1. Production state (2026-10-16)
+- API = `dpl_2x3jbxyvZccZSjM8gt3tNTtKKWqg` (17:24 IST, Oct 16 2026): master code (`182517e`, same as `5c3dbc6`)
+  plus 3 agent fixes from branch `deploy/agent-fixes-on-prod` (not yet merged to master): Gemini fallback
+  accepts tool calls made by another provider (placeholder thought signature); `create_invoice` reuses
+  HSN/SAC from earlier invoices, "Extra ..." lines default to the fabrication code (section 6); prompt no
+  longer asks for HSN up front. Rollback target: `dpl_49cApBVUavTvvbZxDwFpo6X3AqQ5` (logo egress, `5c3dbc6`,
+  20:47 IST Oct 11); before that `dpl_8ai5M6GjkauRGno4byPe9xh6sb1j` (fix 14).
 - admin-web auto-deploys from master (`app.zanf.org`): `dpl_EnkCXpEgppRFudaP1ey8mJ9d14HX` (20:48 IST,
   Oct 11). Rollback: `dpl_47SeBbfRbSMzJhfa3hte2orzQzkS`. API is deployed manually (section 5).
 - 2026-10-11 RLS fix: RLS on + anon/authenticated grants revoked on the 25 public Zan tables
@@ -107,6 +111,18 @@ Never deploy, merge to master or open a PR without Ferose's explicit approval.
 10. Rollback: `npx vercel rollback <previous dpl id or url>` (or
     `npx vercel alias set <previous url> zan-app-api.vercel.app`); then report.
 
+**Lessons from the 2026-10-16 deploy:**
+- Dirty main tree (WhatsApp WIP had a changed `vercel.json` rewrite, `tsconfig.json`, `schema.prisma`)? Do not
+  build it. `git worktree add D:\Apps\zanf-deploy -b <branch> <prod sha>`, cherry-pick only the fixes, `npm ci`,
+  then run steps 2-9 from that worktree's `apps/api`. Build was 21 min cold, upload 52 s.
+- `apps/api/.vercel/project.json` in the main repo links the project `api` (`prj_FsLs...`), NOT `zan-app-api`
+  (`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`, team `team_psJwhw81rjDAba1sPZSBqxzZ`). Write the right link before `vercel
+  pull` and check `projectName` in `.vercel/project.json` afterwards.
+- A production deploy came back BLOCKED (docs "team configuration") while HEAD was authored by
+  `Claude <noreply@anthropic.com>`; the same tree redeployed fine once the commits were authored by the team
+  member (no rebuild needed). Deploy only from commits authored by a Vercel team member. A BLOCKED deploy never
+  takes the alias; stop the waiting CLI and do not retry blindly.
+
 **Ignored Build Step:** `zan-app-api` has `commandForIgnoringBuildStep` = `exit 0` and an empty Root
 Directory. Git-triggered builds failed "No entrypoint found"; setting Root Directory = `apps/api`
 would make git builds succeed and auto-promote WITHOUT the step-6 patch, and clash with the
@@ -120,16 +136,25 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
 - Chat bubble hidden until Super Admin enables roles in Settings > Agent Visibility (Customer toggle
   OFF in prod, deliberate). Needs a provider in Settings > Agent providers (`AgentLlmProvider`, keys
   AES-256-GCM with `AGENT_SECRETS_KEY`).
-- Provider order: active rows by `priority` ascending (`providers/factory.ts`), with fallback. Prod:
-  Gemini priority 1 (OpenAI-compat base URL; Gemini URLs use native `:generateContent` for PDFs),
-  NVIDIA priority 2 (HTTP 410, see section 8), plus an OpenAI fallback row per the fix 12 logs
-  (rows not verified against production). A 410 provider is skipped 60 min, an out-of-quota 429 for
-  15 min (`providerHealth.ts`; cleared when the row is edited). Final error lists the primary's first.
+- Provider order: active rows by `priority` ascending (`providers/factory.ts`), with fallback. Prod rows seen in
+  the runtime errors on 2026-10-16: `Free LLM API` priority 0 (model `auto`, the FreeLLM router VM), `Open AI `
+  priority 1 (`gpt-5.6-luna`, out of credits, HTTP 429), `NVIDIA` priority 2 (timeouts; earlier HTTP 410, see
+  section 8), `Gemini` priority 3 (`models/gemini-3.5-flash-lite`). Gemini URLs use native `:generateContent` for PDFs.
+  A 410 provider is skipped 60 min, an out-of-quota 429 for 15 min (`providerHealth.ts`; cleared when the row is
+  edited). Final error lists the primary's first. Gemini (OpenAI-compat) rejects a history containing tool calls it
+  did not make (bare 400) unless each has a thought signature: `toOpenAIMessages` echoes the stored one and uses the
+  placeholder `skip_thought_signature_validator` for calls from other providers (test `geminiForeignToolCalls`).
 - Time caps in `timeouts.ts` (env-overridable): request 55 s, LLM call 30 s, 25 s per round when a fallback
   exists, max 8 tool turns. API 500 body `{error, errorId}`. Timing: `agent_turn_timing` lines in `npx vercel logs`.
 - Tools (`tools/`) mirror their REST route's permissions and refuse customers where the route does.
   Write tools are confirm-gated and draft-only (`AgentPendingAction`); no Accounting writes, no
   edit tools. Test prompt/tool fixes in a NEW thread. Threads over 30 days are deleted by cron.
+- `create_invoice` takes `hsnCode` as optional: `agent/hsnLookup.ts` fills a missing code from an active saved
+  billing item of the same name, else the most-used code on earlier invoice lines with the same service name (text
+  before ` - ` / ` – `; tie goes to the newest invoice). A line starting "Extra"/"Additional" with no match takes the
+  code of "Dismantling & Mechanical Fabrication" (business rule from Ferose: extra work is civil/fabrication; 998898
+  on 2026-10-16). No match at all: refusal that lists the earlier codes; a code is never invented. The reply note
+  names every reused code so it can be checked on the confirm card.
 - Reply sanitising: `assistantText.ts` strips special tokens; `stripToolInternals` drops tool names,
   identifiers and "Source:" lines. Never name internal tools/fields; cite app pages.
 - Drive: reads limited to descendants of `GOOGLE_DRIVE_FOLDER_ID` = ZanF_DropBox on
@@ -180,6 +205,11 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
 8. Data: `RecdDelivery` mostly empty for Ethen's 29 sites; import from
    `Material_Delivery_Status_version_1.xlsx` awaits approval.
 9. Gaps: no advance section on vendor bill page; no `requestedByCustomer` badge; `Product.shape` too
-    coarse; no audit log for quotations/POs; agent can invent HSN codes (Zod rejects), no Drive upload,
+    coarse; no audit log for quotations/POs; a brand-new service name still needs the user to give an HSN (section 6), no Drive upload,
     no mic on Firefox/iOS; Expo/RN and Next 16 PostCSS advisories deferred.
 10. After the logo fix, re-check `pg_stat_statements` that queries selecting `logoDataUrl` stop growing.
+11. Agent provider chain was failing on 2026-10-16 (OpenAI out of credits, FreeLLM router and NVIDIA timing out):
+    top up OpenAI or put a reliable paid provider at priority 0 in Settings > Agent providers. Multi-round tool
+    turns (create invoice) need a fast model. Re-test a proforma with an "Extra work" line in a NEW thread.
+12. `apps/api/.vercel` links the wrong project (`api`, only holds previews): relink to `zan-app-api` (section 5).
+    Delete the BLOCKED deployment `dpl_Hmizg2WR1Jbu6rMdrPhLZnzyzYVY` when convenient (it never took traffic).
