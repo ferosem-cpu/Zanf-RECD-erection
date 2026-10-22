@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
@@ -36,6 +36,15 @@ interface PaymentMadeRow {
 function billOrderLabel(b: OpenBill) {
   const orderNumbers = Array.from(new Set((b.allocations ?? []).map((a) => a.order?.orderNumber).filter((v): v is string => !!v)));
   return orderNumbers.length ? ` · Order ${orderNumbers.join(", ")}` : "";
+}
+
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-3">
+      <dt className="text-xs font-medium text-gray-500">{label}</dt>
+      <dd className="text-right text-gray-900">{children}</dd>
+    </div>
+  );
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -74,6 +83,29 @@ export default function VendorPaymentsPage() {
   const [applyAmount, setApplyAmount] = useState("");
   const [applySaving, setApplySaving] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
+
+  // Detail drawer
+  const [detail, setDetail] = useState<PaymentMadeRow | null>(null);
+  const drawerCloseRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  function openDetail(row: PaymentMadeRow) {
+    returnFocusRef.current = document.activeElement as HTMLElement | null;
+    setDetail(row);
+  }
+  function closeDetail() {
+    setDetail(null);
+    returnFocusRef.current?.focus();
+  }
+  useEffect(() => {
+    if (!detail) return;
+    drawerCloseRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") closeDetail();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [detail]);
 
   function load() {
     api<PaymentMadeRow[]>("/bills/payments").then(setRows).catch((e) => setError(e instanceof Error ? e.message : "Failed"));
@@ -198,6 +230,7 @@ export default function VendorPaymentsPage() {
         rows={rows}
         rowKey={(r) => r.id}
         emptyMessage="No vendor payments recorded yet."
+        onRowClick={openDetail}
         columns={[
           { key: "supplier", label: "Supplier", accessor: (r) => r.supplier.name, alwaysVisible: true },
           { key: "paidDate", label: "Date", accessor: (r) => formatDate(r.paidDate), filterType: "text" },
@@ -266,9 +299,12 @@ export default function VendorPaymentsPage() {
                       <span className="value">{r.orderTags.map((t) => t.order.orderNumber).join(", ")}</span>
                     </div>
                   )}
-                  {!r.bill && canRecord && (
-                    <button onClick={() => openApply(r)} className="mt-2 text-xs font-medium text-[var(--theme-accent)] hover:underline">Apply to a bill</button>
-                  )}
+                  <div className="mt-2 flex gap-4">
+                    <button onClick={() => openDetail(r)} className="text-xs font-medium text-[var(--theme-accent)] hover:underline">View details</button>
+                    {!r.bill && canRecord && (
+                      <button onClick={() => openApply(r)} className="text-xs font-medium text-[var(--theme-accent)] hover:underline">Apply to a bill</button>
+                    )}
+                  </div>
                 </div>
               ))
             )}
@@ -276,6 +312,65 @@ export default function VendorPaymentsPage() {
         )}
       </DataTable>
 
+
+      {detail && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/40 print:hidden" onClick={closeDetail}>
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="vendor-payment-detail-title"
+            data-testid="vendor-payment-detail"
+            className="h-full w-full max-w-md overflow-y-auto bg-white p-5 shadow-2xl sm:p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 id="vendor-payment-detail-title" className="text-lg font-semibold">Vendor payment</h3>
+                <p className="text-sm text-gray-500">{detail.supplier.name}</p>
+              </div>
+              <button ref={drawerCloseRef} onClick={closeDetail} aria-label="Close details" className="text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+
+            <dl className="divide-y divide-gray-100 text-sm">
+              <DetailRow label="Amount"><span className="text-base font-semibold">{formatINR(detail.amount)}</span></DetailRow>
+              <DetailRow label="Date paid">{formatDate(detail.paidDate)}</DetailRow>
+              <DetailRow label="Method">{PAYMENT_METHOD_LABEL[detail.method] ?? detail.method}</DetailRow>
+              <DetailRow label="Reference">{detail.reference || <span className="text-gray-300">—</span>}</DetailRow>
+              <DetailRow label="Applied to">
+                {detail.bill ? (
+                  <Link href={`/finance/vendor-invoices/${detail.bill.id}`} className="font-mono text-xs text-[var(--theme-accent)] hover:underline">
+                    {detail.bill.billNumber}
+                  </Link>
+                ) : (
+                  <span className="font-medium text-amber-600">Standing advance</span>
+                )}
+              </DetailRow>
+              <DetailRow label="Order tag(s)">
+                {detail.orderTags.length ? (
+                  <div className="flex flex-wrap justify-end gap-1">
+                    {detail.orderTags.map((t) => (
+                      <span key={t.id} className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{t.order.orderNumber}</span>
+                    ))}
+                  </div>
+                ) : <span className="text-gray-300">—</span>}
+              </DetailRow>
+              <DetailRow label="Notes">{detail.notes || <span className="text-gray-300">—</span>}</DetailRow>
+            </dl>
+
+            <div className="mt-6 flex justify-end gap-3">
+              {!detail.bill && canRecord && (
+                <button
+                  onClick={() => { const row = detail; setDetail(null); openApply(row); }}
+                  className="btn-primary px-4 py-2 text-sm"
+                >
+                  Apply to a bill
+                </button>
+              )}
+              <button onClick={closeDetail} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Close</button>
+            </div>
+          </aside>
+        </div>
+      )}
 
       {open && (
         <div className="modal-backdrop" onClick={() => setOpen(false)}>

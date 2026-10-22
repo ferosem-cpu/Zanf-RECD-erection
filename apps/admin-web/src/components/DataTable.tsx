@@ -65,6 +65,8 @@ interface DataTableProps<T> {
   emptyMessage?: string;
   /** Render prop for the mobile card list, given the same filtered rows the desktop table shows. */
   children?: (filteredRows: T[]) => React.ReactNode;
+  /** Makes desktop rows clickable and keyboard-activatable (Enter/Space). Clicks on links/buttons inside a row are ignored. */
+  onRowClick?: (row: T) => void;
 }
 
 function defaultVisibility<T>(columns: DataTableColumn<T>[]): Record<string, boolean> {
@@ -92,7 +94,7 @@ function loadVisibility<T>(storageKey: string, columns: DataTableColumn<T>[]): R
   }
 }
 
-export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMessage = "No records.", children }: DataTableProps<T>) {
+export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMessage = "No records.", children, onRowClick }: DataTableProps<T>) {
   const [visible, setVisible] = useState<Record<string, boolean>>(() => loadVisibility(storageKey, columns));
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [colMenuOpen, setColMenuOpen] = useState(false);
@@ -297,7 +299,26 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredRows.map((row) => (
-                <tr key={rowKey(row)} className="hover:bg-gray-50/60">
+                <tr
+                  key={rowKey(row)}
+                  className={`hover:bg-gray-50/60 ${onRowClick ? "cursor-pointer focus:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset" : ""}`}
+                  {...(onRowClick
+                    ? {
+                        tabIndex: 0,
+                        onClick: (e: React.MouseEvent) => {
+                          if ((e.target as HTMLElement).closest("a,button,input,select,textarea")) return;
+                          onRowClick(row);
+                        },
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.target !== e.currentTarget) return;
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onRowClick(row);
+                          }
+                        },
+                      }
+                    : {})}
+                >
                   {visibleColumns.map((c) => (
                     <td
                       key={c.key}
