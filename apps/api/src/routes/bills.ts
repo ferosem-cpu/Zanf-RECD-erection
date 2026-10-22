@@ -602,7 +602,7 @@ billsRouter.post("/:id/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMEN
   if (attachErr) return res.status(400).json({ error: attachErr });
 
   const result = await prisma.$transaction(async (tx) => {
-    await tx.paymentMade.create({
+    const payment = await tx.paymentMade.create({
       data: {
         billId: bill.id,
         supplierId: bill.supplierId,
@@ -628,7 +628,7 @@ billsRouter.post("/:id/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMEN
         summary: `Payment recorded: Rs ${amount.toFixed(2)} (${data.method})${plan.tds.greaterThan(0) ? ` + TDS Rs ${plan.tds.toFixed(2)}` : ""}; Status: ${bill.status} -> ${newStatus}`,
       },
     });
-    return updated;
+    return { ...updated, paymentId: payment.id };
   });
   res.status(201).json(result);
 });

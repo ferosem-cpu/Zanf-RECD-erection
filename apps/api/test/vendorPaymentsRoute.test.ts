@@ -134,6 +134,39 @@ test("POST /bills/:id/payments (strict): cash + TDS may not exceed the balance",
   assert.equal((await req("/bills/b1/payments", post({ amount: 900, tdsAmount: 100, method: "cheque" }))).status, 201);
 });
 
+test("POST /bills/:id/payments with TDS: stores TDS, ref and files on the payment, settles the bill, returns paymentId", async (t) => {
+  const calls = fakePrisma(t, { permissions: [PERMISSION_KEY.RECORD_PAYMENTS], bill: approvedBill([{ id: "old", amount: D(300), tdsAmount: null }]) });
+  const req = await serve(t);
+  const res = await req("/bills/b1/payments", post({
+    amount: 630, tdsAmount: 70, tdsCertificateRef: "16A-9", method: "bank_transfer", reference: "UTR1",
+    attachments: [{ fileName: "advice.png", mimeType: "image/png", dataUrl: PNG }],
+  }));
+  assert.equal(res.status, 201);
+  const out = await res.json();
+  assert.equal(out.status, "paid");
+  assert.equal(out.paymentId, "pm1");
+  const row = calls["paymentMade.create"][0].data;
+  assert.equal([row.billId, row.amount.toString(), row.tdsAmount.toString(), row.tdsCertificateRef].join("|"), "b1|630|70|16A-9");
+  assert.equal(row.attachments.create.length, 1);
+  assert.equal(calls["bill.update"][0].data.status, "paid");
+  assert.match(calls["billAuditLog.create"][0].data.summary, /\+ TDS Rs 70\.00/);
+});
+
+test("POST /bills/:id/payments with TDS: excess is refused and nothing is written", async (t) => {
+  const calls = fakePrisma(t, { permissions: [PERMISSION_KEY.RECORD_PAYMENTS], bill: approvedBill([{ id: "old", amount: D(300), tdsAmount: D(100) }]) });
+  const req = await serve(t);
+  const cashPlusTds = await req("/bills/b1/payments", post({ amount: 601, tdsAmount: 0, method: "upi" }));
+  assert.equal(cashPlusTds.status, 400);
+  assert.match((await cashPlusTds.json()).error, /exceeds the outstanding balance/);
+  const tdsOnly = await req("/bills/b1/payments", post({ amount: 1, tdsAmount: 601, method: "upi" }));
+  assert.equal(tdsOnly.status, 400);
+  assert.match((await tdsOnly.json()).error, /TDS .* exceeds the bill's outstanding balance/);
+  const both = await req("/bills/b1/payments", post({ amount: 550, tdsAmount: 51, method: "upi" }));
+  assert.equal(both.status, 400);
+  assert.equal(calls["paymentMade.create"], undefined, "nothing written");
+  assert.equal(calls["bill.update"], undefined);
+});
+
 test("GET /bills/payments lists attachment metadata only - never the file bytes", async (t) => {
   const calls = fakePrisma(t, { permissions: [PERMISSION_KEY.VIEW_LEDGERS] });
   const req = await serve(t);

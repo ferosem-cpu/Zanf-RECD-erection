@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { formatINR, formatDate, BILL_STATUS_LABEL, PAYMENT_METHOD_LABEL, statusPillClass, canDeleteRejectedBill } from "@/lib/finance";
+import { AttachmentPicker, uploadAttachments } from "@/components/PaymentAttachments";
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; taxRatePct: string; lineTotal: string; }
 interface Allocation {
@@ -52,7 +53,10 @@ export default function VendorInvoiceDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [payOpen, setPayOpen] = useState(false);
-  const [pay, setPay] = useState({ amount: "", method: "bank_transfer", reference: "", paidDate: new Date().toISOString().slice(0, 10), notes: "" });
+  const emptyPay = () => ({ amount: "", tdsAmount: "", tdsCertificateRef: "", method: "bank_transfer", reference: "", paidDate: new Date().toISOString().slice(0, 10), notes: "" });
+  const [pay, setPay] = useState(emptyPay);
+  const [payFiles, setPayFiles] = useState<File[]>([]);
+  const [payError, setPayError] = useState<string | null>(null);
 
   function load() {
     if (!id) return;
@@ -90,20 +94,31 @@ export default function VendorInvoiceDetailPage() {
 
   async function submitPayment(e: React.FormEvent) {
     e.preventDefault();
-    setAction("payment"); setMsg(null);
+    setAction("payment"); setMsg(null); setPayError(null);
     try {
-      await api(`/bills/${id}/payments`, { method: "POST", body: JSON.stringify({
+      const tds = parseFloat(pay.tdsAmount) || 0;
+      const created = await api<{ paymentId?: string }>(`/bills/${id}/payments`, { method: "POST", body: JSON.stringify({
         amount: parseFloat(pay.amount) || 0, method: pay.method, reference: pay.reference || undefined,
         paidDate: new Date(pay.paidDate).toISOString(), notes: pay.notes || undefined,
+        tdsAmount: tds > 0 ? tds : undefined,
+        tdsCertificateRef: tds > 0 && pay.tdsCertificateRef ? pay.tdsCertificateRef : undefined,
       }) });
+      // The payment is saved; a failed file must never make the user record it twice.
+      const failed = created.paymentId ? await uploadAttachments(created.paymentId, payFiles) : payFiles.map((f) => f.name);
       setPayOpen(false);
-      setPay({ amount: "", method: "bank_transfer", reference: "", paidDate: new Date().toISOString().slice(0, 10), notes: "" });
-      setMsg("Payment recorded."); load();
-    } catch (err) { setMsg(err instanceof Error ? err.message : "Failed"); } finally { setAction(null); }
+      setPay(emptyPay());
+      setPayFiles([]);
+      setMsg(failed.length ? `Payment recorded, but these files were not attached (use Edit on the payment in Vendor Payments to retry): ${failed.join("; ")}` : "Payment recorded.");
+      load();
+    } catch (err) { setPayError(err instanceof Error ? err.message : "Failed"); } finally { setAction(null); }
   }
 
   if (error) return <p className="text-sm text-red-600 p-4">{error}</p>;
   if (!bill) return <p className="text-sm text-gray-500 p-4">Loading…</p>;
+
+  const payCash = parseFloat(pay.amount) || 0;
+  const payTds = parseFloat(pay.tdsAmount) || 0;
+  const payOver = payCash + payTds > parseFloat(bill.balance) + 0.01;
 
   const timeline = [
     ...bill.auditLogs.map((a) => ({ id: a.id, when: a.createdAt, who: a.actor.name, text: a.summary })),
@@ -231,7 +246,7 @@ export default function VendorInvoiceDetailPage() {
             </button>
           )}
           {canRecordPayment && (bill.status === "approved" || bill.status === "partially_paid") && (
-            <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" onClick={() => setPayOpen(true)}>Record payment</button>
+            <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm" onClick={() => { setPayError(null); setPayOpen(true); }}>Record payment</button>
           )}
 
           <div className="card p-4">
@@ -299,10 +314,16 @@ export default function VendorInvoiceDetailPage() {
                 </select>
                 <input type="date" className="field" value={pay.paidDate} onChange={(e) => setPay({ ...pay, paidDate: e.target.value })} />
                 <input placeholder="Reference" className="field" value={pay.reference} onChange={(e) => setPay({ ...pay, reference: e.target.value })} />
+                <input type="number" step="0.01" min="0" placeholder="TDS deducted (optional)" className="field" value={pay.tdsAmount} onChange={(e) => setPay({ ...pay, tdsAmount: e.target.value })} />
+                <input placeholder="TDS certificate / challan ref" className="field" value={pay.tdsCertificateRef} disabled={!payTds} onChange={(e) => setPay({ ...pay, tdsCertificateRef: e.target.value })} />
               </div>
+              <p className="text-xs text-gray-400">Outstanding {formatINR(bill.balance)}. TDS you withheld settles the bill along with the cash.</p>
+              {payOver && <p className="text-xs text-red-600">Cash plus TDS can&apos;t exceed the outstanding balance ({formatINR(bill.balance)}).</p>}
+              <AttachmentPicker files={payFiles} onChange={setPayFiles} />
+              {payError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{payError}</p>}
               <div className="flex justify-end gap-3">
                 <button type="button" onClick={() => setPayOpen(false)} className="rounded-lg border border-gray-300 px-4 py-2 text-sm">Cancel</button>
-                <button type="submit" disabled={!!action} className="btn-primary px-4 py-2 text-sm">{action === "payment" ? "Saving…" : "Record payment"}</button>
+                <button type="submit" disabled={!!action || payOver} className="btn-primary px-4 py-2 text-sm">{action === "payment" ? "Saving…" : "Record payment"}</button>
               </div>
             </form>
           </div>

@@ -5,10 +5,8 @@ import Link from "next/link";
 import { api, downloadFileFromApi, openFileFromApi } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { formatINR, formatDate, PAYMENT_METHOD_LABEL } from "@/lib/finance";
-import { captureFile } from "@/lib/fileCapture";
+import { MAX_ATTACHMENTS, fileSize, addFiles, uploadAttachments, PendingFiles, AttachmentPicker } from "@/components/PaymentAttachments";
 import { DataTable } from "@/components/DataTable";
-
-const MAX_ATTACHMENTS = 5;
 
 interface Supplier { id: string; name: string; }
 interface SiteOption { id: string; address: string | null; companyName: string | null; order: { id: string; orderNumber: string; customer: { id: string; name: string } } }
@@ -41,41 +39,7 @@ interface PaymentMadeRow {
 }
 
 const tdsOf = (r: PaymentMadeRow) => parseFloat(r.tdsAmount ?? "0") || 0;
-const fileSize = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 const attachmentPath = (paymentId: string, a: PaymentAttachment) => `/bills/payments/${paymentId}/attachments/${a.id}`;
-
-/** Uploads files one request each (keeps every body under the hosting size limit). Returns the
- * names that failed, so the payment itself is never lost because one file was rejected. */
-async function uploadAttachments(paymentId: string, files: File[]): Promise<string[]> {
-  const failed: string[] = [];
-  for (const file of files) {
-    try {
-      const captured = await captureFile(file);
-      await api(`/bills/payments/${paymentId}/attachments`, {
-        method: "POST",
-        body: JSON.stringify({ attachments: [{ fileName: file.name, mimeType: captured.mimeType, dataUrl: captured.dataUrl }] }),
-      });
-    } catch (err) {
-      failed.push(`${file.name} (${err instanceof Error ? err.message : "upload failed"})`);
-    }
-  }
-  return failed;
-}
-
-/** Picked-but-not-yet-uploaded files, with a remove button each. */
-function PendingFiles({ files, onRemove }: { files: File[]; onRemove: (i: number) => void }) {
-  if (files.length === 0) return null;
-  return (
-    <ul className="mt-2 space-y-1">
-      {files.map((f, i) => (
-        <li key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 rounded-lg bg-gray-50 px-3 py-1.5 text-xs text-gray-700">
-          <span className="truncate">{f.name} · {fileSize(f.size)}</span>
-          <button type="button" onClick={() => onRemove(i)} className="text-gray-400 hover:text-gray-600" aria-label={`Remove ${f.name}`}>✕</button>
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 /** Bill option label annotated with its own allocated order number(s), if any, so the admin
  * can visually match a tagged advance against the bill it's actually for. */
@@ -195,11 +159,6 @@ export default function VendorPaymentsPage() {
     setTdsCertificateRef("");
     setFiles([]);
     setOpen(true);
-  }
-
-  function addFiles(current: File[], picked: FileList | null, keep: number): File[] {
-    const next = [...current, ...Array.from(picked ?? [])];
-    return next.slice(0, Math.max(0, MAX_ATTACHMENTS - keep));
   }
 
   async function viewAttachment(paymentId: string, a: PaymentAttachment) {
@@ -674,18 +633,7 @@ export default function VendorPaymentsPage() {
                 <input className="field w-full" value={notes} onChange={(e) => setNotes(e.target.value)} />
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Attachments (optional - bank advice, cheque, TDS certificate; images or PDF, max {MAX_ATTACHMENTS})</label>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*,application/pdf"
-                  className="block w-full text-sm"
-                  disabled={files.length >= MAX_ATTACHMENTS}
-                  onChange={(e) => { setFiles(addFiles(files, e.target.files, 0)); e.target.value = ""; }}
-                />
-                <PendingFiles files={files} onRemove={(i) => setFiles(files.filter((_, j) => j !== i))} />
-              </div>
+              <AttachmentPicker files={files} onChange={setFiles} />
 
               {formError && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{formError}</p>}
               <div className="flex justify-end gap-3">
