@@ -14,6 +14,8 @@ import { assertOwnSite } from "../../routes/complaints";
 import { computeBillTotals } from "../../routes/bills";
 import { computeCustomerPoTotals } from "../../routes/customer-purchase-orders";
 import { isoDateIST } from "../istDates";
+import { listHsnCandidates, resolveHsnFromHistory } from "../hsnLookup";
+import { applyPercentSplits } from "../lineSplit";
 import type { AgentTool } from "./types";
 
 const VALID_EXPENSE_METHODS = Object.values(PAYMENT_METHOD).filter((m) => m !== "tds");
@@ -500,6 +502,9 @@ interface InvoiceLineItemInput {
   hsnCode: string;
   quantity: number;
   unitPrice: number;
+  /** Percentage split (see agent/lineSplit.ts): the app derives unitPrice from these. */
+  splitTotal?: number;
+  splitPct?: number;
   discountPct?: number;
   taxRatePct?: number;
 }
@@ -533,13 +538,15 @@ const createInvoiceTool: AgentTool = {
           type: "object",
           properties: {
             description: { type: "string" },
-            hsnCode: { type: "string", description: "REQUIRED - HSN/SAC code for GST. Never omit or guess; ask the user for the correct code if you don't know it for certain." },
+            hsnCode: { type: "string", description: "HSN/SAC code for GST. Leave it out unless the user gave one: the app then reuses the code from earlier invoices or saved billing items with the same line name. Never guess a code." },
             quantity: { type: "number" },
-            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax and discount." },
+            unitPrice: { type: "number", description: "Per-unit price in rupees, before tax and discount. Leave it out when using splitTotal + splitPct." },
+            splitTotal: { type: "number", description: "To divide an amount across lines by percentage: the total amount being divided (e.g. 65000). Give the same splitTotal on every line of that group. The app calculates each line's price - never do this arithmetic yourself." },
+            splitPct: { type: "number", description: "With splitTotal: this line's share in percent (e.g. 63.85). Quantity defaults to 1." },
             discountPct: { type: "number", description: "Discount percent, 0-100. Defaults to 0." },
             taxRatePct: { type: "number", description: "GST rate, e.g. 18. Defaults to 18 if omitted." },
           },
-          required: ["description", "hsnCode", "quantity", "unitPrice"],
+          required: ["description"],
         },
       },
       issueDate: { type: "string", description: "ISO date (YYYY-MM-DD). Defaults to today if omitted." },
@@ -553,6 +560,7 @@ const createInvoiceTool: AgentTool = {
     if (!auth.permissions.has(PERMISSION_KEY.MANAGE_INVOICES)) return forbidden("invoices");
     if (!auth.conversationId) return { error: "No active conversation - cannot propose a write action here." };
 
+    const hsnNotes: string[] = [];
     const docType = String(input.docType ?? "");
     if (!VALID_INVOICE_DOC_TYPES.includes(docType as (typeof VALID_INVOICE_DOC_TYPES)[number])) {
       return { error: `docType must be one of: ${VALID_INVOICE_DOC_TYPES.join(", ")}` };
@@ -561,7 +569,7 @@ const createInvoiceTool: AgentTool = {
     const customerName = input.customerName ? String(input.customerName) : null;
     const orderId = input.orderId ? String(input.orderId) : null;
     const quotationId = input.quotationId ? String(input.quotationId) : null;
-    const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as InvoiceLineItemInput[]) : [];
+    const lineItemsRaw = Array.isArray(input.lineItems) ? (input.lineItems as InvoiceLineItemInput[]).map((li) => ({ ...li })) : [];
     const issueDateStr = input.issueDate ? String(input.issueDate) : isoDateIST(new Date());
     const dueDateStr = input.dueDate ? String(input.dueDate) : null;
     const notes = input.notes ? String(input.notes) : null;
@@ -569,9 +577,29 @@ const createInvoiceTool: AgentTool = {
 
     if (!customerId && !customerName) return { error: "Provide either customerId or customerName." };
     if (lineItemsRaw.length === 0) return { error: "At least one line item is required." };
+    // Percentage splits are computed here, never by the model (see agent/lineSplit.ts).
+    const split = applyPercentSplits(lineItemsRaw);
+    if ("error" in split) return { error: split.error };
     for (const [i, li] of lineItemsRaw.entries()) {
       if (!li.description) return { error: `Line item ${i + 1}: description is required.` };
-      if (!li.hsnCode || !li.hsnCode.trim()) return { error: `Line item ${i + 1}: hsnCode is required - ask the user for the correct HSN/SAC code rather than guessing.` };
+      if (li.quantity === undefined || li.quantity === null) li.quantity = 1;
+      if (!li.hsnCode || !li.hsnCode.trim()) {
+        // No code given: reuse what earlier invoices / saved billing items used for this line.
+        const found = await resolveHsnFromHistory(String(li.description));
+        if (!found) {
+          const candidates = await listHsnCandidates();
+          const known = candidates.length
+            ? ` Codes used on earlier invoices: ${candidates.map((c) => `${c.hsnCode} = ${c.description} (${c.uses}x)`).join("; ")}.`
+            : "";
+          return {
+            error:
+              `Line item ${i + 1} ("${li.description}"): no HSN/SAC was given and none was found on earlier invoices or saved billing items.${known} ` +
+              "If one of those is clearly the same kind of work, retry with that code and tell the user which earlier line you took it from; otherwise ask the user. Never invent a code.",
+          };
+        }
+        li.hsnCode = found.hsnCode;
+        hsnNotes.push(`Line ${i + 1} ("${li.description}"): HSN/SAC ${found.hsnCode} reused from ${found.source}.`);
+      }
       if (!Number.isFinite(li.quantity) || li.quantity <= 0) return { error: `Line item ${i + 1}: quantity must be a positive number.` };
       if (!Number.isFinite(li.unitPrice) || li.unitPrice < 0) return { error: `Line item ${i + 1}: unitPrice must be a non-negative number.` };
     }
@@ -670,7 +698,10 @@ const createInvoiceTool: AgentTool = {
       status: "pending_confirmation",
       actionId: pending.id,
       preview,
-      note: "Prepared for review - waiting for the user to confirm or reject in the chat UI. This creates a DRAFT only (no invoice number) - do not say it has been created/issued.",
+      note:
+        "Prepared for review - waiting for the user to confirm or reject in the chat UI. This creates a DRAFT only (no invoice number) - do not say it has been created/issued." +
+        (hsnNotes.length ? ` HSN/SAC codes filled in from earlier records (tell the user so they can check): ${hsnNotes.join(" ")}` : "") +
+        (split.notes.length ? ` Percentage splits were calculated by the app (quote the preview's amounts, do not recompute): ${split.notes.join(" ")}` : ""),
     };
   },
 };

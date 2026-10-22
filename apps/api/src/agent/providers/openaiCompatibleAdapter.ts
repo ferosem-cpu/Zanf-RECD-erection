@@ -14,9 +14,15 @@ export interface OpenAICompatibleAdapterConfig {
   baseUrl?: string;
 }
 
-function toOpenAIMessages(
+/** Gemini's documented placeholder for a function call it did not generate itself (e.g. one made
+ * by another provider earlier in the same turn, before a fallback to Gemini). Without a
+ * signature on every historical tool call Gemini rejects the request with a bare HTTP 400. */
+export const GEMINI_FOREIGN_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
+
+export function toOpenAIMessages(
   systemPrompt: string,
   messages: UnifiedMessage[],
+  opts: { geminiCompat?: boolean } = {},
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   const result: OpenAI.Chat.ChatCompletionMessageParam[] = [{ role: "system", content: systemPrompt }];
   for (const m of messages) {
@@ -34,7 +40,12 @@ function toOpenAIMessages(
           // (e.g. extra_content.google.thought_signature) to each tool_call and REQUIRE them
           // echoed back verbatim on the next turn, or reject the request with a bare 400.
           // The OpenAI SDK's types don't model this, but it round-trips fine at runtime.
-          ...((tc.providerMetadata as object) ?? {}),
+          ...((tc.providerMetadata as object) ??
+            // A tool call with no stored metadata came from a provider that does not emit
+            // signatures (earlier round on a fallback chain). Gemini needs one anyway.
+            (opts.geminiCompat
+              ? { extra_content: { google: { thought_signature: GEMINI_FOREIGN_THOUGHT_SIGNATURE } } }
+              : {})),
         })) as OpenAI.Chat.ChatCompletionMessageToolCall[] | undefined,
       });
     } else {
@@ -107,7 +118,9 @@ export function createOpenAICompatibleAdapter(config: OpenAICompatibleAdapterCon
       try {
         const response = await client.chat.completions.create({
           model: config.model,
-          messages: toOpenAIMessages(params.systemPrompt, params.messages),
+          messages: toOpenAIMessages(params.systemPrompt, params.messages, {
+            geminiCompat: isGeminiBaseUrl(config.baseUrl),
+          }),
           tools: params.tools.map((t) => ({
             type: "function",
             function: { name: t.name, description: t.description, parameters: t.inputSchema },

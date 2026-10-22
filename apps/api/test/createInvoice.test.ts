@@ -24,6 +24,9 @@ test("create_invoice retains validation, permissions, totals and pending-only wr
   };
   replace("customer", { findUnique: async () => ({ id: "c1", name: "Acme", state: "Tamil Nadu" }) });
   replace("companySettings", { findUnique: async () => ({ state: "Tamil Nadu" }) });
+  // No earlier invoices or saved items: a line with no HSN/SAC must still be refused.
+  replace("savedLineItem", { findMany: async () => [] });
+  replace("invoiceLineItem", { findMany: async () => [], groupBy: async () => [] });
   replace("agentPendingAction", { create: async (args: any) => { pending.push(args.data); return { id: "action1" }; } });
   const invoiceWrite = t.mock.fn(async () => { throw new Error("Must not create before confirmation"); });
   replace("invoice", { create: invoiceWrite });
