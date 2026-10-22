@@ -231,7 +231,7 @@ export async function buildSupplierLedger(supplierId: string, from?: Date, to?: 
   });
   const payments = await prisma.paymentMade.findMany({
     where: { supplierId },
-    select: { id: true, amount: true, paidDate: true, bill: { select: { billNumber: true } } },
+    select: { id: true, amount: true, tdsAmount: true, paidDate: true, bill: { select: { billNumber: true } } },
   });
 
   const movements: RawMovement[] = [
@@ -243,15 +243,29 @@ export async function buildSupplierLedger(supplierId: string, from?: Date, to?: 
       debit: D(b.total),
       credit: ZERO,
     })),
-    ...payments.map((p): RawMovement => ({
-      date: p.paidDate,
-      type: "payment_made",
-      refNumber: p.bill?.billNumber ?? "Payment / advance",
-      refId: p.id,
-      debit: ZERO,
-      credit: D(p.amount),
-    })),
+    ...supplierPaymentMovements(payments),
   ];
 
   return buildStatement(supplier.id, supplier.name, D(supplier.openingBalance), supplier.openingBalanceDate, movements, from, to);
+}
+
+export interface LedgerPaymentMade {
+  id: string;
+  amount: Prisma.Decimal | string | number;
+  tdsAmount: Prisma.Decimal | string | number | null;
+  paidDate: Date;
+  bill: { billNumber: string } | null;
+}
+
+/** Credit movements for vendor payments (services/vendorPaymentTds.ts): a "payment_made" line for
+ * the cash and, when TDS was withheld, a separate "tds" line - both reduce what we owe the supplier,
+ * so total credit per payment = amount + tdsAmount, each rupee once. */
+export function supplierPaymentMovements(payments: LedgerPaymentMade[]): RawMovement[] {
+  return payments.flatMap((p) => {
+    const label = p.bill?.billNumber ?? "Payment / advance";
+    const tds = D(p.tdsAmount ?? 0);
+    const out: RawMovement[] = [{ date: p.paidDate, type: "payment_made", refNumber: label, refId: p.id, debit: ZERO, credit: D(p.amount) }];
+    if (tds.gt(ZERO)) out.push({ date: p.paidDate, type: "tds", refNumber: `TDS - ${label}`, refId: p.id, debit: ZERO, credit: tds });
+    return out;
+  });
 }

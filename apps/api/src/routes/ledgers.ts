@@ -7,7 +7,7 @@ import { buildCustomerLedger, buildSupplierLedger } from "../services/ledger";
 import { buildGstr1, buildGstr3b } from "../services/gstExport";
 import { buildCsv } from "../lib/csv";
 import { PAYMENT_HAS_TDS_WHERE } from "../services/paymentSplit";
-import { buildTdsRegister } from "../services/tdsRegister";
+import { buildTdsRegister, buildVendorTdsRegister } from "../services/tdsRegister";
 
 export const ledgersRouter = Router();
 ledgersRouter.use(authenticate);
@@ -67,9 +67,26 @@ ledgersRouter.get("/tds", async (req, res) => {
     orderBy: { receivedDate: "asc" },
   });
 
+  // TDS we withheld from suppliers (payable to the government) - a separate section with its own
+  // totals; the top-level rows/totals above stay customer-side (26AS) only.
+  const vendorPayments = await prisma.paymentMade.findMany({
+    where: { tdsAmount: { gt: 0 }, paidDate: { gte: from, lte: to } },
+    select: {
+      id: true,
+      amount: true,
+      tdsAmount: true,
+      tdsCertificateRef: true,
+      paidDate: true,
+      supplier: { select: { id: true, name: true, pan: true } },
+      bill: { select: { billNumber: true } },
+    },
+    orderBy: { paidDate: "asc" },
+  });
+
   res.json({
     fiscalYear: `${startYear}-${String(startYear + 1).slice(-2)}`,
     ...buildTdsRegister(payments),
+    tdsDeducted: buildVendorTdsRegister(vendorPayments),
   });
 });
 

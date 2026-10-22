@@ -635,13 +635,43 @@ export const customerPurchaseOrderExtractRequestSchema = z.object({
   mimeType: z.string().min(1),
 });
 
+/** Max supporting documents on one vendor payment. */
+export const PAYMENT_MADE_MAX_ATTACHMENTS = 5;
+
+/** One supporting document (bank advice, cheque scan, TDS certificate) for a vendor payment -
+ * a base64 data-URL, same convention and cap as Bill.attachmentUrl (images downscaled client-side). */
+export const paymentMadeAttachmentInputSchema = z.object({
+  fileName: z.string().trim().min(1).max(200),
+  mimeType: z.string().regex(/^(image\/[a-z0-9.+-]+|application\/pdf)$/i, "Only images or PDFs can be attached"),
+  dataUrl: z.string().startsWith("data:").max(6_000_000),
+});
+
+/** amount = cash paid; tdsAmount = TDS we withheld (mirrors paymentReceivedCreateSchema). Both
+ * settle the bill: bill balance = total - sum(amount + tdsAmount). */
 export const paymentMadeCreateSchema = z.object({
   billId: z.string().optional(),
   amount: z.number().positive("Amount must be > 0"),
+  tdsAmount: z.number().nonnegative().optional(),
+  tdsCertificateRef: z.string().max(200).optional(),
   method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]),
   reference: z.string().max(200).optional(),
   paidDate: z.string().datetime().optional(),
   notes: z.string().max(1000).optional(),
+  attachments: z.array(paymentMadeAttachmentInputSchema).max(PAYMENT_MADE_MAX_ATTACHMENTS).optional(),
+});
+
+/** PATCH /bills/payments/:id - edit a recorded vendor payment. The cash amount, supplier and
+ * bill are not editable here (they drive bill settlement and advance splitting); TDS is, and
+ * is re-validated against the bill. null clears an optional text field. */
+export const paymentMadeUpdateSchema = z.object({
+  method: z.enum(["bank_transfer", "upi", "cheque", "cash", "other"]).optional(),
+  reference: z.string().max(200).nullable().optional(),
+  paidDate: z.string().datetime().optional(),
+  notes: z.string().max(1000).nullable().optional(),
+  tdsAmount: z.number().nonnegative().optional(),
+  tdsCertificateRef: z.string().max(200).nullable().optional(),
+  attachments: z.array(paymentMadeAttachmentInputSchema).max(PAYMENT_MADE_MAX_ATTACHMENTS).optional(),
+  removeAttachmentIds: z.array(z.string().min(1)).optional(),
 });
 
 /**
@@ -656,10 +686,15 @@ export const paymentMadeCreateSchema = z.object({
  * does not restrict which bill the advance can later be applied to - so the admin can spot
  * the right advance later by matching order tags against a bill's own order allocation.
  */
-export const paymentMadeGeneralCreateSchema = paymentMadeCreateSchema.extend({
-  supplierId: z.string().min(1),
-  orderIds: z.array(z.string().min(1)).optional(),
-});
+export const paymentMadeGeneralCreateSchema = paymentMadeCreateSchema
+  .extend({
+    supplierId: z.string().min(1),
+    orderIds: z.array(z.string().min(1)).optional(),
+  })
+  .refine((d) => !!d.billId || !d.tdsAmount, {
+    message: "TDS must be tied to a bill - an advance carries no TDS",
+    path: ["tdsAmount"],
+  });
 
 /** POST /bills/:id/apply-advance: apply part or all of an existing unallocated PaymentMade
  * (billId still null) to this bill. */

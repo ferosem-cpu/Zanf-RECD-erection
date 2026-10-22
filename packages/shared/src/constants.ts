@@ -339,6 +339,8 @@ export const BILL_AUDIT_ACTION = {
   APPROVED: "approved",
   REJECTED: "rejected",
   PAYMENT_RECORDED: "payment_recorded",
+  /** A recorded vendor payment's TDS/details were edited (PATCH /bills/payments/:id). */
+  PAYMENT_EDITED: "payment_edited",
   CANCELLED: "cancelled",
   ALLOCATION_CHANGED: "allocation_changed",
   DELETED: "deleted",

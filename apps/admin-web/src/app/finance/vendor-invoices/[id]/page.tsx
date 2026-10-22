@@ -13,7 +13,7 @@ interface Allocation {
   order: { id: string; orderNumber: string; customer: { id: string; name: string } } | null;
   invoice: { id: string; invoiceNumber: string; docType: string } | null;
 }
-interface Payment { id: string; amount: string; method: string; reference?: string | null; paidDate: string; notes?: string | null; }
+interface Payment { id: string; amount: string; tdsAmount?: string | null; method: string; reference?: string | null; paidDate: string; notes?: string | null; }
 interface AuditLog { id: string; action: string; summary: string; createdAt: string; actor: { name: string }; }
 interface BillDetail {
   id: string; billNumber: string; status: string; billDate: string; dueDate?: string | null;
@@ -27,7 +27,11 @@ interface BillDetail {
   auditLogs: AuditLog[];
   verifiedBy?: { id: string; name: string } | null;
   approvedBy?: { id: string; name: string } | null;
+  /** Cash paid. */
   amountPaid: string;
+  /** TDS withheld on this bill's payments - settles the bill alongside the cash. */
+  tdsDeducted?: string;
+  /** total - (cash + TDS) */
   balance: string;
 }
 
@@ -103,7 +107,7 @@ export default function VendorInvoiceDetailPage() {
 
   const timeline = [
     ...bill.auditLogs.map((a) => ({ id: a.id, when: a.createdAt, who: a.actor.name, text: a.summary })),
-    ...bill.payments.map((p) => ({ id: `payment-${p.id}`, when: p.paidDate, who: PAYMENT_METHOD_LABEL[p.method] ?? p.method, text: `Payment recorded: ${formatINR(p.amount)}${p.reference ? ` (ref ${p.reference})` : ""}` })),
+    ...bill.payments.map((p) => ({ id: `payment-${p.id}`, when: p.paidDate, who: PAYMENT_METHOD_LABEL[p.method] ?? p.method, text: `Payment recorded: ${formatINR(p.amount)}${parseFloat(p.tdsAmount ?? "0") > 0 ? ` + TDS ${formatINR(p.tdsAmount!)}` : ""}${p.reference ? ` (ref ${p.reference})` : ""}` })),
   ].sort((a, b) => new Date(b.when).getTime() - new Date(a.when).getTime());
 
   return (
@@ -181,6 +185,7 @@ export default function VendorInvoiceDetailPage() {
               <Row label="Tax" value={formatINR(bill.taxAmount)} />
               <Row label="Total" value={formatINR(bill.total)} bold />
               <Row label="Paid" value={formatINR(bill.amountPaid)} />
+              {parseFloat(bill.tdsDeducted ?? "0") > 0 && <Row label="TDS deducted" value={formatINR(bill.tdsDeducted!)} />}
               <Row label="Balance" value={formatINR(bill.balance)} bold />
             </div>
           </div>

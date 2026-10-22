@@ -76,7 +76,11 @@ Prod migration history has drifted (DDL applied by hand via Supabase MCP). Never
 `prisma migrate deploy/dev` or `db push` against any database; write migrations only and flag them.
 15 prod migrations (`20260813122825` ... `20260829054500`) have no `_prisma_migrations` row, so
 `migrate deploy` would try to re-run them; backfill rows (SHA-256 of each `migration.sql`) first.
-No migrations pending (RLS migration applied 2026-10-11 with its row). Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
+No migrations pending on master (RLS migration applied 2026-10-11 with its row). Branch
+`feat/vendor-payment-detail` adds `20261022120000_vendor_payment_tds_attachments` (NOT applied):
+nullable `PaymentMade.tdsAmount` (default 0) + `tdsCertificateRef`, new `PaymentMadeAttachment`
+table with RLS on and anon/authenticated revoked (`docs/SECURITY-RLS.md`). It must be applied
+(manual path + history row) BEFORE the API that reads these columns is deployed. Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
 
 ## 5. Deploying
 Backend first: deploy `zan-app-api` and confirm it live BEFORE pushing dependent admin-web changes
@@ -152,8 +156,11 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
 - Overdue only with a due date strictly before today, IST calendar days (`services/ageing.ts`,
   `isPastDue`); no due date = "no_due_date", aged by bill/issue date. Ageing buckets also there.
 - Payables (`services/payables.ts`) = vendor bills Verified, Approved or Partially paid and not
-  rejected; outstanding = bill total (incl. GST) - vendor payments (vendor payments carry no TDS
-  field, so nothing else is deducted; verified in `payables.ts`). Rejected/cancelled/deleted/paid excluded.
+  rejected; outstanding = bill total (incl. GST) - what its vendor payments settle = cash `amount` +
+  TDS withheld `tdsAmount` (`services/vendorPaymentTds.ts`). Bills carry no TDS themselves, so TDS
+  lives only on `PaymentMade` and counts once; advances carry no TDS. Supplier ledger: a
+  `payment_made` line (cash) + a `tds` line; TDS register: separate `tdsDeducted` section (deducted
+  by us, payable to govt), never mixed into the 26AS totals. Rejected/cancelled/deleted/paid excluded.
   Purchase orders are commitments, not payables. A Rejected bill is "Rejected" only (no write-off
   wording). Deleting a rejected bill = soft delete (status `deleted`, number renamed, audit kept,
   refused with payments/debit notes), admin-only (Super Admin, Owner/Admin).
