@@ -6,7 +6,12 @@ Installation, Testing, Commissioning. Cloned from Platino on 2026-07-19 and NOT 
 Full pre-compaction handover (changelog, per-fix narratives): `git show 649ca2a:docs/HANDOVER.md`.
 Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
-## 1. Production state (2026-10-16)
+## 1. Production state (2026-10-22)
+- API = `dpl_G84WARJE6RR1amJ6J1jwxYAHvU2D` (22 Oct 2026, from master after merging `feat/vendor-payment-detail`
+  and `fix/agent-tuning-split-site-confirm`). Adds vendor payment detail drawer, optional TDS (amount +
+  certificate ref) and attachments on vendor payments (section 7 TDS rule). Rollback target:
+  `dpl_FL2AzQKMMTE9S8zZsfu67VDyrcuo` (needs no DB rollback: the migration is additive). admin-web = master push.
+  Pre-migration backup: `D:\Backups\zan-db\json-20261022-1430` (finance tables + `_prisma_migrations`).
 - API = `dpl_FL2AzQKMMTE9S8zZsfu67VDyrcuo` (19:46 IST, Oct 16 2026, from branch
   `fix/agent-tuning-split-site-confirm` commit `ef2a92c` on top of the deployment below). Adds: receivables /
   invoice search return each invoice's own site (`agent/invoiceSite.ts`); `create_invoice` lines accept
@@ -72,7 +77,7 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Before every push: `npm run build --workspace=packages/shared`; in `apps/api` `npx prisma generate`,
   `npx tsc --noEmit`, `npm run build`; in `apps/admin-web` `npx tsc --noEmit`, `npm run build`; root
   `npm test`. One-shot: `.claude-task/check.ps1` (local file, not committed).
-- Tests: node:test via tsx, mocks only. Current counts: API 181, admin-web 38. New test files must
+- Tests: node:test via tsx, mocks only. Current counts: API 222, admin-web 38. New test files must
   be added to the app's package.json "test" script. Lint is not set up.
 - Shared changes need a rebuild; a stale real copy in `apps/api/node_modules/@recd/shared` shadows the
   workspace link.
@@ -88,11 +93,10 @@ Prod migration history has drifted (DDL applied by hand via Supabase MCP). Never
 `prisma migrate deploy/dev` or `db push` against any database; write migrations only and flag them.
 15 prod migrations (`20260813122825` ... `20260829054500`) have no `_prisma_migrations` row, so
 `migrate deploy` would try to re-run them; backfill rows (SHA-256 of each `migration.sql`) first.
-No migrations pending on master (RLS migration applied 2026-10-11 with its row). Branch
-`feat/vendor-payment-detail` adds `20261022120000_vendor_payment_tds_attachments` (NOT applied):
-nullable `PaymentMade.tdsAmount` (default 0) + `tdsCertificateRef`, new `PaymentMadeAttachment`
-table with RLS on and anon/authenticated revoked (`docs/SECURITY-RLS.md`). It must be applied
-(manual path + history row) BEFORE the API that reads these columns is deployed. Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
+No migrations pending on master. `20261011110000_enable_rls_public_tables` (2026-10-11) and
+`20261022120000_vendor_payment_tds_attachments` (2026-10-22: `PaymentMade.tdsAmount`/`tdsCertificateRef`,
+`PaymentMadeAttachment` with RLS on, anon/authenticated revoked) are applied with history rows. The 3 WhatsApp (`20261011120000`-`140000`, branch `feat/whatsapp-m2`) are NOT on prod; they sort BEFORE
+`20261022120000`, so the reconcile must insert them out of order (manual apply + rows, never `migrate deploy`). Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
 
 ## 5. Deploying
 Backend first: deploy `zan-app-api` and confirm it live BEFORE pushing dependent admin-web changes
