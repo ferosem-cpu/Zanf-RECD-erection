@@ -5,7 +5,7 @@ import express from "express";
 import { Prisma } from "@prisma/client";
 import { PERMISSION_KEY, FINANCE_DOC_TYPE } from "@recd/shared";
 import { prisma } from "../src/lib/prisma";
-import { nextDocumentNumber, SEQUENCE_KEY } from "../src/services/documentNumber";
+import { nextDocumentNumber, SEQUENCE_KEY, fiscalYearFor, istDateString } from "../src/services/documentNumber";
 
 process.env.JWT_SECRET ||= "invoice-sequences-test-only-secret";
 
@@ -142,40 +142,92 @@ test("convert-to-tax: cancelled, draft, or tax-invoice sources are rejected (400
   assert.equal((await (await serve(t))("/invoices/x/convert-to-tax")).status, 404);
 });
 
-// ---- issue step keeps a user-chosen date -------------------------------------------------
-function fakeIssue(t: any) {
-  const calls: any = { upsert: [], update: [] };
-  fakePrisma(t, { id: "d1", docType: "tax_invoice", status: "draft", invoiceNumber: "DRAFT-x" });
-  replace(t, "documentSequence", { upsert: async (a: any) => { calls.upsert.push(a); return { lastNumber: 5 }; } });
+// ---- issue step: user-chosen date, validation, atomic claim -------------------------------
+const todayIst = () => istDateString(new Date());
+const addDays = (ymd: string, n: number) => new Date(Date.parse(`${ymd}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+
+function fakeIssue(t: any, opts: { sourceProforma?: { invoiceNumber: string; issueDate: Date } } = {}) {
+  const state = { status: "draft", counter: 4, upserts: 0, updates: [] as any[] };
+  const draft = () => ({ id: "d1", docType: "tax_invoice", status: "draft", invoiceNumber: "DRAFT-x", sourceProformaId: opts.sourceProforma ? "pi16" : null });
+  fakePrisma(t, null);
   const inv = (prisma as any).invoice;
-  inv.update = async (a: any) => { calls.update.push(a.data); return { id: "d1", ...a.data, customer: { contacts: [] } }; };
-  return calls;
+  // findUnique always sees the draft (simulates two requests racing past the pre-check)
+  inv.findUnique = async (a: any) => (a.where.id === "pi16" ? opts.sourceProforma ?? null : draft());
+  inv.updateMany = async (a: any) => {
+    await new Promise((r) => setTimeout(r, 5));
+    if (state.status !== a.where.status) return { count: 0 };
+    state.status = a.data.status;
+    return { count: 1 };
+  };
+  inv.update = async (a: any) => { state.updates.push(a.data); return { id: "d1", ...a.data, customer: { contacts: [] } }; };
+  replace(t, "documentSequence", { upsert: async (a: any) => { state.upserts++; state.counter++; (state as any).lastWhere = a.where; return { lastNumber: state.counter }; } });
+  return state;
 }
-const issue = async (t: any, body?: unknown) => {
+async function issuer(t: any) {
   const { invoicesRouter } = await import("../src/routes/invoices");
   const { signToken } = await import("../src/lib/jwt");
   const app = express(); app.use(express.json()); app.use("/invoices", invoicesRouter);
   const server = app.listen(0); t.after(() => server.close());
-  return fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/invoices/d1/issue`, {
-    method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${signToken({ userId: "u1", roleKey: "accounts" })}` },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-};
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/invoices/d1/issue`;
+  const auth = `Bearer ${signToken({ userId: "u1", roleKey: "accounts" })}`;
+  return (body?: unknown) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: auth }, body: body === undefined ? undefined : JSON.stringify(body) });
+}
 
-test("issue: user-chosen issueDate is kept; number still from the tax_invoice counter", async (t) => {
-  const calls = fakeIssue(t);
-  const res = await issue(t, { issueDate: "2026-10-20" });
+test("issue: chosen issueDate (today IST) kept; number from the tax_invoice counter", async (t) => {
+  const st = fakeIssue(t);
+  const res = await (await issuer(t))({ issueDate: todayIst() });
   assert.equal(res.status, 200);
-  assert.equal(calls.upsert[0].where.docType_fiscalYear.docType, "tax_invoice");
-  assert.equal(calls.upsert[0].where.docType_fiscalYear.fiscalYear, "2026-27");
-  assert.equal(calls.update[0].invoiceNumber, "INV/2026-27/0005");
-  assert.equal(calls.update[0].issueDate.toISOString().slice(0, 10), "2026-10-20");
+  assert.equal((st as any).lastWhere.docType_fiscalYear.docType, "tax_invoice");
+  assert.equal(st.updates[0].invoiceNumber, `INV/${fiscalYearFor(new Date())}/0005`);
+  assert.equal(istDateString(st.updates[0].issueDate), todayIst());
 });
 
-test("issue: no issueDate defaults to now; invalid date is 400", async (t) => {
-  const calls = fakeIssue(t);
+test("issue: no issueDate defaults to now", async (t) => {
+  const st = fakeIssue(t);
   const before = Date.now();
-  assert.equal((await issue(t)).status, 200);
-  assert.ok(Math.abs(calls.update[0].issueDate.getTime() - before) < 60_000);
-  assert.equal((await issue(t, { issueDate: "not-a-date" })).status, 400);
+  assert.equal((await (await issuer(t))()).status, 200);
+  assert.ok(Math.abs(st.updates[0].issueDate.getTime() - before) < 60_000);
+});
+
+test("issue: two concurrent issues -> one 200, one 409, counter used once (no gap)", async (t) => {
+  const st = fakeIssue(t);
+  const req = await issuer(t);
+  const [a, b] = await Promise.all([req(), req()]);
+  assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+  assert.equal(st.upserts, 1);
+  assert.equal(st.counter, 5);
+  assert.equal((await req()).status, 409, "issuing again later is also 409");
+  assert.equal(st.upserts, 1);
+});
+
+test("issue: bad format, impossible date, future date, previous FY (2025-26) are 400 and burn nothing", async (t) => {
+  const st = fakeIssue(t);
+  const req = await issuer(t);
+  for (const issueDate of ["23-10-2026", "2026-10-23T00:00:00Z", 20261023, "2026-02-30", addDays(todayIst(), 1), "2026-03-31", "2025-10-23"]) {
+    assert.equal((await req({ issueDate })).status, 400, String(issueDate));
+  }
+  assert.equal(st.upserts, 0);
+  assert.equal(st.status, "draft");
+});
+
+test("issue: date before the source proforma's IST issue date is rejected; same IST day passes", async (t) => {
+  // proforma issued at 01:07 UTC = 06:37 IST today -> its IST date is today
+  const piIssued = new Date(`${todayIst()}T01:07:19.870Z`);
+  const st = fakeIssue(t, { sourceProforma: { invoiceNumber: "PI/2026-27/0016", issueDate: piIssued } });
+  const req = await issuer(t);
+  const y = addDays(todayIst(), -1);
+  if (fiscalYearFor(new Date(`${y}T00:00:00Z`)) === fiscalYearFor(new Date())) {
+    const early = await req({ issueDate: y });
+    assert.equal(early.status, 400);
+    assert.match((await early.json()).error, /before proforma PI\/2026-27\/0016/);
+  }
+  assert.equal((await req({ issueDate: todayIst() })).status, 200);
+  assert.equal(st.upserts, 1);
+});
+
+test("IST boundaries: fiscal year and calendar date follow Asia/Kolkata, not UTC", () => {
+  assert.equal(fiscalYearFor(new Date("2026-03-31T18:29:59Z")), "2025-26"); // 23:59:59 IST 31 Mar
+  assert.equal(fiscalYearFor(new Date("2026-03-31T18:30:00Z")), "2026-27"); // 00:00 IST 1 Apr
+  assert.equal(istDateString(new Date("2026-10-14T19:00:00Z")), "2026-10-15");
+  assert.equal(istDateString(new Date("2026-10-15T01:07:19Z")), "2026-10-15"); // PI/0016 issue time
 });

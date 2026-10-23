@@ -17,7 +17,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
-import { nextDocumentNumber } from "../services/documentNumber";
+import { nextDocumentNumber, fiscalYearFor, istDateString } from "../services/documentNumber";
 import { isPastDue } from "../services/ageing";
 import { issuedCreditNoteTotal, netInvoiceTotal, deriveInvoiceStatus, recomputeInvoiceSettlement, settledFromAllocations } from "../services/settlement";
 
@@ -428,22 +428,52 @@ invoicesRouter.post("/:id/issue", requirePermission(PERMISSION_KEY.MANAGE_INVOIC
   }
 
   const docType = existing.docType === INVOICE_DOC_TYPE.TAX_INVOICE ? FINANCE_DOC_TYPE.TAX_INVOICE : FINANCE_DOC_TYPE.PROFORMA;
-  // Optional user-chosen issue date (e.g. re-entering a tax invoice already raised by hand);
-  // defaults to now. The number still comes from the counter, for that date's fiscal year.
+  // Optional user-chosen issue date (e.g. re-entering a tax invoice already raised by hand),
+  // "YYYY-MM-DD", judged on IST calendar dates; defaults to now.
+  const now = new Date();
+  const today = istDateString(now);
   const rawDate = req.body?.issueDate;
-  let issueDate = new Date();
+  let issueDate = now;
   if (rawDate !== undefined && rawDate !== null && rawDate !== "") {
-    issueDate = typeof rawDate === "string" ? new Date(rawDate) : new Date(NaN);
-    if (Number.isNaN(issueDate.getTime())) return res.status(400).json({ error: "Invalid issueDate" });
+    if (typeof rawDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+      return res.status(400).json({ error: "issueDate must be YYYY-MM-DD" });
+    }
+    issueDate = new Date(`${rawDate}T00:00:00.000Z`);
+    if (Number.isNaN(issueDate.getTime()) || issueDate.toISOString().slice(0, 10) !== rawDate) {
+      return res.status(400).json({ error: "issueDate is not a valid date" });
+    }
+    if (rawDate > today) return res.status(400).json({ error: "Issue date cannot be in the future" });
+    if (fiscalYearFor(issueDate) !== fiscalYearFor(now)) {
+      return res.status(400).json({ error: `Issue date must be in the current financial year (${fiscalYearFor(now)})` });
+    }
+    if (existing.sourceProformaId) {
+      const pi = await prisma.invoice.findUnique({ where: { id: existing.sourceProformaId }, select: { invoiceNumber: true, issueDate: true } });
+      if (pi && rawDate < istDateString(pi.issueDate)) {
+        return res.status(400).json({ error: `Issue date cannot be before proforma ${pi.invoiceNumber} (${istDateString(pi.issueDate)})` });
+      }
+    }
   }
-  const invoiceNumber = await prisma.$transaction((tx) => nextDocumentNumber(tx, docType, issueDate));
-  const invoice = await prisma.$transaction((tx) =>
-    tx.invoice.update({
-      where: { id },
-      data: { status: INVOICE_STATUS.ISSUED, invoiceNumber, issueDate },
-      include: { customer: { select: { id: true, name: true, contacts: { select: { id: true } } } } },
-    }),
-  );
+
+  // Claim the draft, allocate the number and set it in ONE transaction: a second concurrent
+  // Issue finds no draft row (count 0) and rolls back before touching the counter - no gap.
+  let invoiceNumber: string;
+  let invoice;
+  try {
+    invoice = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.invoice.updateMany({ where: { id, status: INVOICE_STATUS.DRAFT }, data: { status: INVOICE_STATUS.ISSUED } });
+      if (claimed.count === 0) throw Object.assign(new Error("Invoice was already issued"), { status: 409 });
+      invoiceNumber = await nextDocumentNumber(tx, docType, issueDate);
+      return tx.invoice.update({
+        where: { id },
+        data: { invoiceNumber, issueDate },
+        include: { customer: { select: { id: true, name: true, contacts: { select: { id: true } } } } },
+      });
+    });
+  } catch (e: any) {
+    if (e?.status === 409) return res.status(409).json({ error: e.message });
+    throw e;
+  }
+  invoiceNumber = invoice.invoiceNumber;
 
   const contact = invoice.customer.contacts[0];
   if (contact) {
