@@ -920,6 +920,11 @@ model Invoice {
   createdBy      User      @relation("InvoiceCreator", fields: [createdById], references: [id])
   cancelledAt    DateTime?
   cancelReason   String?
+  /// Set on a tax invoice created via "Convert to tax invoice": the proforma it came from.
+  /// Unique, so a proforma can be converted at most once.
+  sourceProformaId String?  @unique
+  sourceProforma   Invoice? @relation("ProformaConversion", fields: [sourceProformaId], references: [id], onDelete: SetNull)
+  convertedTo      Invoice? @relation("ProformaConversion")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 

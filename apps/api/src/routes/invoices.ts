@@ -36,6 +36,8 @@ async function invoiceSummary(tx: Prisma.TransactionClient, id: string) {
       },
       order: { select: { id: true, orderNumber: true } },
       quotation: { select: { id: true, quoteNumber: true } },
+      sourceProforma: { select: { id: true, invoiceNumber: true, issueDate: true } },
+      convertedTo: { select: { id: true, invoiceNumber: true, status: true } },
       lineItems: { orderBy: { sortOrder: "asc" } },
       // The legacy `payments` relation only shows payments still carrying THIS invoice's id
       // (true for the single-invoice sugar route, not for a payment split across invoices via
@@ -342,6 +344,81 @@ invoicesRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), as
   res.json(invoice);
 });
 
+/** "15 Oct 2026" - fixed en-GB style, IST, independent of server locale. */
+export function formatDocDate(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("day")} ${get("month")} ${get("year")}`;
+}
+
+/**
+ * Convert an issued proforma into a DRAFT tax invoice (copy of customer, order, quotation,
+ * place of supply, line items, discount, taxes, totals, terms). The tax invoice number is
+ * allocated later by the normal POST /:id/issue step from the separate tax_invoice series.
+ */
+invoicesRouter.post("/:id/convert-to-tax", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  try {
+    const created = await prisma.$transaction(async (tx) => {
+      const src = await tx.invoice.findUnique({
+        where: { id },
+        include: { lineItems: { orderBy: { sortOrder: "asc" } }, convertedTo: { select: { id: true } } },
+      });
+      if (!src) throw Object.assign(new Error("Invoice not found"), { status: 404 });
+      if (src.docType !== INVOICE_DOC_TYPE.PROFORMA) throw Object.assign(new Error("Only proforma invoices can be converted"), { status: 400 });
+      if (src.status === INVOICE_STATUS.CANCELLED || src.cancelledAt) throw Object.assign(new Error("Cancelled proforma cannot be converted"), { status: 400 });
+      if (src.status === INVOICE_STATUS.DRAFT) throw Object.assign(new Error("Issue the proforma before converting it"), { status: 400 });
+      if (src.convertedTo) throw Object.assign(new Error("This proforma has already been converted"), { status: 409 });
+
+      const ref = `Against Proforma Invoice ${src.invoiceNumber} dated ${formatDocDate(src.issueDate)}`;
+      return tx.invoice.create({
+        data: {
+          docType: INVOICE_DOC_TYPE.TAX_INVOICE,
+          invoiceNumber: `DRAFT-${crypto.randomUUID()}`,
+          customerId: src.customerId,
+          orderId: src.orderId,
+          quotationId: src.quotationId,
+          status: INVOICE_STATUS.DRAFT,
+          issueDate: new Date(),
+          dueDate: src.dueDate,
+          placeOfSupply: src.placeOfSupply,
+          subtotal: src.subtotal,
+          discountAmount: src.discountAmount,
+          cgstAmount: src.cgstAmount,
+          sgstAmount: src.sgstAmount,
+          igstAmount: src.igstAmount,
+          total: src.total,
+          notes: src.notes ? `${ref}\n\n${src.notes}` : ref,
+          terms: src.terms,
+          sourceProformaId: src.id,
+          createdById: req.auth!.userId,
+          lineItems: {
+            create: src.lineItems.map((l) => ({
+              productId: l.productId,
+              description: l.description,
+              hsnCode: l.hsnCode,
+              quantity: l.quantity,
+              unitPrice: l.unitPrice,
+              discountPct: l.discountPct,
+              taxRatePct: l.taxRatePct,
+              lineTotal: l.lineTotal,
+              sortOrder: l.sortOrder,
+            })),
+          },
+        },
+        include: { lineItems: true },
+      });
+    });
+    res.status(201).json(created);
+  } catch (e: any) {
+    if (e?.status) return res.status(e.status).json({ error: e.message });
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return res.status(409).json({ error: "This proforma has already been converted" });
+    }
+    throw e;
+  }
+});
+
 invoicesRouter.post("/:id/issue", requirePermission(PERMISSION_KEY.MANAGE_INVOICES), async (req: AuthenticatedRequest, res) => {
   const id = asString(req.params.id);
   const existing = await prisma.invoice.findUnique({ where: { id } });
@@ -351,11 +428,19 @@ invoicesRouter.post("/:id/issue", requirePermission(PERMISSION_KEY.MANAGE_INVOIC
   }
 
   const docType = existing.docType === INVOICE_DOC_TYPE.TAX_INVOICE ? FINANCE_DOC_TYPE.TAX_INVOICE : FINANCE_DOC_TYPE.PROFORMA;
-  const invoiceNumber = await prisma.$transaction((tx) => nextDocumentNumber(tx, docType));
+  // Optional user-chosen issue date (e.g. re-entering a tax invoice already raised by hand);
+  // defaults to now. The number still comes from the counter, for that date's fiscal year.
+  const rawDate = req.body?.issueDate;
+  let issueDate = new Date();
+  if (rawDate !== undefined && rawDate !== null && rawDate !== "") {
+    issueDate = typeof rawDate === "string" ? new Date(rawDate) : new Date(NaN);
+    if (Number.isNaN(issueDate.getTime())) return res.status(400).json({ error: "Invalid issueDate" });
+  }
+  const invoiceNumber = await prisma.$transaction((tx) => nextDocumentNumber(tx, docType, issueDate));
   const invoice = await prisma.$transaction((tx) =>
     tx.invoice.update({
       where: { id },
-      data: { status: INVOICE_STATUS.ISSUED, invoiceNumber, issueDate: new Date() },
+      data: { status: INVOICE_STATUS.ISSUED, invoiceNumber, issueDate },
       include: { customer: { select: { id: true, name: true, contacts: { select: { id: true } } } } },
     }),
   );
