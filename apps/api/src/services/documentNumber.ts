@@ -10,17 +10,16 @@ const PREFIX_MAP: Record<FinanceDocType, string> = {
 };
 
 /**
- * Proforma and Tax Invoice share ONE running counter per fiscal year, keyed as "invoice"
- * below - not two independent series. Only the display prefix (PI/ vs INV/) tells them
- * apart; the number itself keeps incrementing across both types in whatever order they're
- * issued, since a proforma commonly precedes its own tax invoice and the business wants one
- * continuous document count rather than two counters that both restart at 0001. Quotation
- * and Purchase Order are unaffected - each keeps its own independent sequence.
+ * Every document type has its own independent counter per fiscal year. Proforma (PI/) and
+ * Tax Invoice (INV/) used to share one "invoice" counter, which made tax invoice numbers jump
+ * (INV/2026-27/0018 after INV/2026-27/0004). GST needs the tax invoice series to be
+ * consecutive on its own, so they are now separate: "proforma" and "tax_invoice". The legacy
+ * "invoice" row in DocumentSequence is left untouched for history and is no longer used.
  */
-const SEQUENCE_KEY: Record<FinanceDocType, string> = {
+export const SEQUENCE_KEY: Record<FinanceDocType, string> = {
   [FINANCE_DOC_TYPE.QUOTATION]: FINANCE_DOC_TYPE.QUOTATION,
-  [FINANCE_DOC_TYPE.PROFORMA]: "invoice",
-  [FINANCE_DOC_TYPE.TAX_INVOICE]: "invoice",
+  [FINANCE_DOC_TYPE.PROFORMA]: "proforma",
+  [FINANCE_DOC_TYPE.TAX_INVOICE]: "tax_invoice",
   [FINANCE_DOC_TYPE.PURCHASE_ORDER]: FINANCE_DOC_TYPE.PURCHASE_ORDER,
   [FINANCE_DOC_TYPE.CREDIT_NOTE]: FINANCE_DOC_TYPE.CREDIT_NOTE,
 };
