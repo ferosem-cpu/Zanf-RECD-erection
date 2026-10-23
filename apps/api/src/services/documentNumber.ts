@@ -24,11 +24,18 @@ export const SEQUENCE_KEY: Record<FinanceDocType, string> = {
   [FINANCE_DOC_TYPE.CREDIT_NOTE]: FINANCE_DOC_TYPE.CREDIT_NOTE,
 };
 
-/** Indian fiscal year: April–March. A date in Jan 2027 → "2026-27". */
+/** Calendar date in India (Asia/Kolkata) as "YYYY-MM-DD". */
+export function istDateString(date: Date): string {
+  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+}
+
+/**
+ * Indian fiscal year April–March, decided on the IST calendar date (so 31 Mar 19:00 UTC,
+ * which is 1 Apr 00:30 IST, already belongs to the new year). A date in Jan 2027 → "2026-27".
+ */
 export function fiscalYearFor(date: Date): string {
-  const y = date.getFullYear();
-  const startsInPrevious = date.getMonth() < 3; // Jan–Mar belongs to the previous FY start
-  const startYear = startsInPrevious ? y - 1 : y;
+  const [y, m] = istDateString(date).split("-").map(Number);
+  const startYear = m < 4 ? y - 1 : y;
   return `${startYear}-${String(startYear + 1).slice(-2)}`;
 }
 
