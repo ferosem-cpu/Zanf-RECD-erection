@@ -44,6 +44,8 @@ interface InvoiceDetail {
   notes?: string | null;
   terms?: string | null;
   cancelReason?: string | null;
+  sourceProforma?: { id: string; invoiceNumber: string; issueDate: string } | null;
+  convertedTo?: { id: string; invoiceNumber: string; status: string } | null;
   customer: { id: string; name: string };
   lineItems: LineItem[];
   payments: Payment[];
@@ -75,10 +77,27 @@ export default function InvoiceDetailPage() {
   }
   useEffect(load, [id, canManage]);
 
+  // Issue date chosen at issue time (defaults to today) - lets an invoice already raised by
+  // hand be re-entered with its real date. The number still comes from the server counter.
+  const [issueOn, setIssueOn] = useState(() => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }));
+  // Prefill with the draft's own issue date (editable via Edit, or right here) so a date set
+  // on the draft is not silently replaced; a fresh/converted draft carries today's date.
+  useEffect(() => {
+    if (inv?.status === "draft" && inv.issueDate) setIssueOn(new Date(inv.issueDate).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }));
+  }, [inv?.id, inv?.status, inv?.issueDate]);
   async function issue() {
     setAction("issue"); setMsg(null);
-    try { await api(`/invoices/${id}/issue`, { method: "POST", body: "{}" }); setMsg("Invoice issued."); load(); }
+    try { await api(`/invoices/${id}/issue`, { method: "POST", body: JSON.stringify({ issueDate: issueOn }) }); setMsg("Invoice issued."); load(); }
     catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); } finally { setAction(null); }
+  }
+  async function convertToTax() {
+    if (!inv) return;
+    if (!window.confirm(`Create a draft tax invoice from ${inv.invoiceNumber}? It gets its tax invoice number when you issue it.`)) return;
+    setAction("convert"); setMsg(null);
+    try {
+      const created = await api<{ id: string }>(`/invoices/${id}/convert-to-tax`, { method: "POST", body: "{}" });
+      router.push(`/invoices/${created.id}`);
+    } catch (e) { setMsg(e instanceof Error ? e.message : "Failed"); setAction(null); }
   }
   async function cancel() {
     const reason = window.prompt("Reason for cancellation?");
@@ -280,6 +299,16 @@ export default function InvoiceDetailPage() {
           <a href="/invoices" className="text-xs text-gray-500 hover:text-gray-700">← Back to invoices</a>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight mt-1" style={{ color: "var(--text-heading)" }}>{inv.invoiceNumber}</h1>
           <p className="text-sm text-gray-500">{inv.docType === "tax_invoice" ? "Tax invoice" : "Proforma"} · {inv.customer.name}</p>
+          {inv.sourceProforma && (
+            <p className="text-sm text-gray-500" data-testid="source-proforma">
+              Against <Link href={`/invoices/${inv.sourceProforma.id}`} className="font-mono text-[var(--theme-accent)] hover:underline">{inv.sourceProforma.invoiceNumber}</Link>
+            </p>
+          )}
+          {inv.convertedTo && (
+            <p className="text-sm text-gray-500" data-testid="converted-to">
+              Converted to <Link href={`/invoices/${inv.convertedTo.id}`} className="font-mono text-[var(--theme-accent)] hover:underline">{inv.convertedTo.status === "draft" ? "Draft" : inv.convertedTo.invoiceNumber}</Link>
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className={statusPillClass(inv.status)}>{INVOICE_STATUS_LABEL[inv.status] ?? inv.status}</span>
@@ -413,7 +442,14 @@ export default function InvoiceDetailPage() {
       )}
 
       {canManage && inv.status === "draft" && (
-        <button className="btn-primary px-4 py-2 text-sm" disabled={!!action} onClick={issue}>Issue invoice</button>
+        <span className="inline-flex items-center gap-2">
+          <label className="text-xs text-gray-500">Issue date</label>
+          <input type="date" className="field" value={issueOn} onChange={(e) => setIssueOn(e.target.value)} />
+          <button className="btn-primary px-4 py-2 text-sm" disabled={!!action || !issueOn} onClick={issue}>Issue invoice</button>
+        </span>
+      )}
+      {canManage && inv.docType === "proforma" && inv.status !== "draft" && inv.status !== "cancelled" && !inv.convertedTo && (
+        <button className="btn-primary px-4 py-2 text-sm" disabled={!!action} onClick={convertToTax}>Convert to tax invoice</button>
       )}
       {canManage && (inv.status === "draft" || inv.status === "issued") && (
         <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-red-600" disabled={!!action} onClick={cancel}>Cancel invoice</button>
