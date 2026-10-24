@@ -17,6 +17,30 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Primary Super Admin `ferosem@gmail.com` is Google-only (`apps/api/src/lib/authPolicy.ts`).
 - Local `.env` has real Zoho SMTP creds: local smoke tests send real mail. Never read/print env files.
 
+## 1a. WhatsApp M2 test status (branch `feat/whatsapp-m2`, 2026-10-24) - TEST ONLY, nothing on prod
+- Packaging fix `f375ec7`: `npm run vercel:patch` (apps/api) runs between `vercel build` and
+  `vercel deploy --prebuilt` = step 6 below, automated. Verified by a real preview deploy (`/health` 200).
+- Neon test DB "whatsapp bridge" (free, ap-southeast-1): all 35 branch migrations + master's
+  `20261011110000` and `20261022120000` applied; small seed/test data. 4 WA tables have RLS on and no
+  anon/authenticated grants. 36 older tables have RLS OFF there (test DB only; prod state differs).
+- Test preview = `vercel deploy --prebuilt --target=preview` of project `api` with per-deployment `-e`
+  overrides only: `DATABASE_URL` (Neon pooler + `pgbouncer=true`), `DIRECT_URL` (Neon direct),
+  `WHATSAPP_BRIDGE_KEYS` (test key id `watest1`), `AGENT_SECRETS_KEY` (test key). No project env changes.
+  Current: `dpl_8qDxVgvTsDMiGrY3qQUFnnnQ2pCS`. Test secrets live only on the coordinator box.
+- Results (signed requests, no real WhatsApp): ingest 202 accept; nonce replay 401; duplicate messageId
+  returns original decision, no second job; unknown sender ignore/dropped; `/wa` path kept (`/api/wa` 404);
+  turn runs in background, retries capped at 3, lease 90 s; reply lands in `/wa/outbox` (~11.5 s for
+  "how many open orders?" -> correct answer, 1 open order).
+- Test LLM: FreeLLMAPI router `https://freellmapi-ferose.duckdns.org/v1` (OpenAI-compatible), model
+  `gemini-3-flash-preview`, backup `gemini-3.5-flash`. `gpt-oss-120b` fails 413 (prompt too large).
+  DeepSeek / Qwen Coder / GLM / MiniMax / Nemotron Ultra need provider keys added in the router dashboard first.
+- ChatGPT Coder verdict: PASS with conditions: (1) lock-contention test; (2) real Go bridge signer in M4;
+  (3) 15-object reconcile precheck on the live DB right before WA migrations (`docs/whatsapp/MIGRATION-RECONCILE.md`);
+  (4) clean up watest keys/rows (`watest_map_919500245599`, `watest_llm_freellm`, `watest-*` inbound/outbox) and
+  test previews; (5) on 413, fall back to the next provider.
+- Next options: fix conditions 1/5, then M3/M4 bridge test against the preview; or prod reconcile + WA
+  migrations (needs Ferose's approval and a backup, per the reconcile doc).
+
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
   agent/), `apps/admin-web` (Next 15 App Router, Tailwind), `apps/mobile` (Expo, never runtime-tested,
