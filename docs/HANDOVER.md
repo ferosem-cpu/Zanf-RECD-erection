@@ -18,6 +18,8 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Local `.env` has real Zoho SMTP creds: local smoke tests send real mail. Never read/print env files.
 
 ## 1a. WhatsApp M2 test status (branch `feat/whatsapp-m2`, 2026-10-24) - TEST ONLY, nothing on prod
+
+- **Condition 3 DONE (24 Oct, 3:53 PM IST):** live DB schema already matched; 3 WhatsApp rows added to `_prisma_migrations` (now 23). Schema backup: `D:\Backups\zan-db\20261024-1545`. **Do not** run prod deploy or `prisma migrate deploy` until the 15 Aug migrations' history rows are reconciled and this branch is merged with master.
 - Packaging fix `f375ec7`: `npm run vercel:patch` (apps/api) runs between `vercel build` and
   `vercel deploy --prebuilt` = step 6 below, automated. Verified by a real preview deploy (`/health` 200).
 - Neon test DB "whatsapp bridge" (free, ap-southeast-1): all 35 branch migrations + master's
