@@ -50,6 +50,11 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - **patest/old-preview cleanup DONE 24 Oct 2026 (Ferose OK 18:53 IST):** Neon: deleted 11 `patest-*` inbound + 1 outbox (now 0/0). Vercel `api`: deleted 56 old (12 Oct) `feat/whatsapp-m2` PREVIEW deployments; 1 old branch Production-target (errored) deploy of `api` and today's fresh branch preview kept. zan-app-api untouched; app.zanf.org + /health 200.
 - **AI keys 24 Oct 2026:** new Gemini key given to Gemini Coder (CLI verified). Free LLM API key unchanged (primary `gemini-3-flash-preview`, backup `auto`). OpenAI + NVIDIA keys not rotated.
 - Open (AI keys): paste new Gemini key into Zan app AI settings, then revoke the old one; disable OpenAI + NVIDIA keys if unused.
+- **M5 (WhatsApp bridge on OCI) PLANNED 24 Oct, ChatGPT Coder PASS; nothing installed.** Target VM-A (freellmapi-vm, Always Free). Bridge `D:\Apps\zan-wa-bridge` @ `5b9c93a`.
+  Steps: 1 trusted-bridge risk sign-off; 2 build binaries + record hashes; 3 read-only VM-A recheck; 4 install (not started); 5 prod `WHATSAPP_BRIDGE_KEYS` with Ferose OK, all mappings off; 6 QR pairing with Ferose; 7 start service + health, MemoryMax, router check; 8 log everything.
+  ChatGPT Coder conditions: private repo push first, deploy only hash-matched binary; session store owned by zan-wa, 0600, no bodies/full numbers in logs; DB nonce store (WhatsappBridgeNonce, confirmed); optional Vercel Firewall rule VM-A IP only on /wa/* (needs Ferose OK); systemd MemoryMax; spare number safer than 9500245599 (ban risk).
+  Free API bot: keep a direct Gemini provider in the app as fallback independent of VM-A; at step 7 check router still answers in ~3 s.
+- M5 open (Ferose): which address is VM-A + OK to SSH; which number to pair; trusted-bridge risk sign-off.
 - Branch merged with master (24 Oct): 38 migrations. **No prod deploy / `prisma migrate deploy`** until the
   15 Aug `_prisma_migrations` rows on prod are reconciled.
 - Conditions: 1 lock-contention PASS; 2 real Go signer (M4) PASS incl. claim/ack; 3 DONE on prod (3 WA history
