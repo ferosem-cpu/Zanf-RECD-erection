@@ -48,6 +48,22 @@ export function istDayStart(ymd: string): Date | undefined {
   return Number.isNaN(d.getTime()) || isoDateIST(d) !== ymd ? undefined : d;
 }
 
+/** Inclusive IST day range from optional yyyy-mm-dd bounds, as a Prisma date filter. */
+export function istDayRange(from: unknown, to: unknown): { range?: { gte?: Date; lt?: Date } } | { error: string } {
+  const range: { gte?: Date; lt?: Date } = {};
+  if (from != null && from !== "") {
+    const d = istDayStart(String(from).trim());
+    if (!d) return { error: "scheduledFrom must be a valid yyyy-mm-dd date" };
+    range.gte = d;
+  }
+  if (to != null && to !== "") {
+    const d = istDayStart(String(to).trim());
+    if (!d) return { error: "scheduledTo must be a valid yyyy-mm-dd date" };
+    range.lt = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+  }
+  return range.gte || range.lt ? { range } : {};
+}
+
 /** Excl.-GST part of an invoice's outstanding balance. The finance pages only show receivables
  * incl. GST, so the agent's excl.-GST basis is: apportion each invoice's outstanding by that
  * invoice's own taxable share (subtotal / total; subtotal is already after line discounts).
@@ -1107,19 +1123,27 @@ const searchWorkOrders: AgentTool = {
   description:
     "Search internal work orders (field-crew task dispatch) by title or work order number. " +
     "Returns id, workOrderNumber, title, taskType, status, assignedTo, scheduledDate, site. " +
-    "totalCount and byStatus cover ALL matching work orders, not just the listed rows.",
+    "totalCount and byStatus cover ALL matching work orders, not just the listed rows. " +
+    "scope is 'assigned_to_you' only when the result is limited to the asking user's own work orders.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "Title or work order number (partial match)." },
       status: { type: "string", description: "Optional filter: draft | assigned | in_progress | completed | cancelled" },
+      assignedToMe: { type: "boolean", description: "true for my / mine / assigned-to-me questions: only work orders assigned to the asking user, whatever their permissions." },
+      scheduledFrom: { type: "string", description: "Optional yyyy-mm-dd (IST): scheduledDate on or after this day. For 'today' pass today's date as both scheduledFrom and scheduledTo." },
+      scheduledTo: { type: "string", description: "Optional yyyy-mm-dd (IST): scheduledDate on or before this day (inclusive)." },
     },
   },
   handler: async (input, auth) => {
     if (!hasAny(auth, [PERMISSION_KEY.MANAGE_WORK_ORDERS, PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS])) return forbidden("work orders");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const where: Prisma.WorkOrderWhereInput = auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS) ? {} : { assignedToId: auth.userId };
+    const mine = input.assignedToMe === true || !auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS);
+    const where: Prisma.WorkOrderWhereInput = mine ? { assignedToId: auth.userId } : {};
+    const scheduled = istDayRange(input.scheduledFrom, input.scheduledTo);
+    if ("error" in scheduled) return { error: scheduled.error };
+    if (scheduled.range) where.scheduledDate = scheduled.range;
     // WhatsApp only: engineers see work orders on their assigned sites, on top of the rule above.
     if (waIsScoped(auth)) where.site = { is: waSiteWhere(auth)! };
     if (status) where.status = status;
@@ -1135,6 +1159,7 @@ const searchWorkOrders: AgentTool = {
     ]);
     const summary = statusBreakdown(groups);
     return {
+      scope: mine ? "assigned_to_you" : "all",
       ...listMeta(workOrders.length, summary.totalCount),
       byStatus: summary.byStatus,
       results: workOrders.map((w) => ({
@@ -1151,12 +1176,14 @@ const searchComplaints: AgentTool = {
   description:
     "Search customer complaints by ticket number or customer name. Returns id, ticketNumber, " +
     "customer, category, severity, status, assignedTo. totalCount and byStatus cover ALL " +
-    "matching complaints, not just the listed rows.",
+    "matching complaints, not just the listed rows. scope is 'assigned_to_you' only when the " +
+    "result is limited to the asking user's own complaints.",
   inputSchema: {
     type: "object",
     properties: {
       query: { type: "string", description: "Ticket number or customer name (partial match)." },
       status: { type: "string", description: "Optional filter: open | in_progress | resolved | closed (see COMPLAINT_STATUS)" },
+      assignedToMe: { type: "boolean", description: "true for my / mine / assigned-to-me questions: only complaints assigned to the asking user, whatever their permissions." },
     },
   },
   handler: async (input, auth) => {
@@ -1170,10 +1197,9 @@ const searchComplaints: AgentTool = {
       return forbidden("complaints");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const where: Prisma.ComplaintWhereInput = {};
-    if (!auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW)) {
-      where.assignedToId = auth.userId;
-    }
+    const mine = input.assignedToMe === true ||
+      (!auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW));
+    const where: Prisma.ComplaintWhereInput = mine ? { assignedToId: auth.userId } : {};
     // WhatsApp only: engineers see complaints on their assigned sites, on top of the rule above.
     if (waIsScoped(auth)) where.site = { is: waSiteWhere(auth)! };
     if (status) where.status = status;
@@ -1189,6 +1215,7 @@ const searchComplaints: AgentTool = {
     ]);
     const summary = statusBreakdown(groups);
     return {
+      scope: mine ? "assigned_to_you" : "all",
       ...listMeta(complaints.length, summary.totalCount),
       byStatus: summary.byStatus,
       results: complaints.map((c) => ({
