@@ -34,7 +34,12 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Test LLM: FreeLLMAPI router `https://freellmapi-ferose.duckdns.org/v1` (OpenAI-compatible), model
   `gemini-3-flash-preview`, backup `gemini-3.5-flash`. `gpt-oss-120b` fails 413 (prompt too large).
   DeepSeek / Qwen Coder / GLM / MiniMax / Nemotron Ultra need provider keys added in the router dashboard first.
-- ChatGPT Coder verdict: PASS with conditions: (1) lock-contention test; (2) real Go bridge signer in M4;
+- Condition 1 lock-contention test (2026-10-24): PASS. 2 and 3 concurrent ingests from one sender: all
+  accepted, turns ran strictly one at a time (advisory-lock claim + per-sender block), exactly one correct
+  reply each, no stuck leases. Notes: a blocked turn waits for the next `/wa/outbox` poll after 20 s
+  (`RESTART_AFTER_MS`, no self-kick on completion); ingests with identical `createdAt` can run out of
+  arrival order (`whatsappBridgeStore.ts:47` uses `lt` only, no tiebreak).
+- ChatGPT Coder verdict: PASS with conditions: (1) lock-contention test (done, above); (2) real Go bridge signer in M4;
   (3) 15-object reconcile precheck on the live DB right before WA migrations (`docs/whatsapp/MIGRATION-RECONCILE.md`);
   (4) clean up watest keys/rows (`watest_map_919500245599`, `watest_llm_freellm`, `watest-*` inbound/outbox) and
   test previews; (5) on 413, fall back to the next provider.
