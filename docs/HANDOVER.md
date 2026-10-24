@@ -55,16 +55,16 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   order/invoice/site questions must use lookup tools this turn; 413 falls through to the next provider.
 - Chain guard (runs under `waitUntil`, no `maxDuration` set): chains only if elapsed + 55 s turn budget + 5 s
   fits `WA_FUNCTION_MAX_DURATION_MS` (default 60 s).
-- Before M6: Ferose to decide maxDuration (e.g. 300 s with Fluid Compute) + matching WA_FUNCTION_MAX_DURATION_MS; until then fix 2 (immediate chaining) is effectively off.
+- maxDuration: Ferose OK'd 300 s. `apps/api/vercel.json` sets `api/index.js` maxDuration 300 (needs Fluid Compute on zan-app-api). At prod deploy also set env WA_FUNCTION_MAX_DURATION_MS=300000; until both are live, immediate chaining stays off.
 - Test setup: Neon test DB "whatsapp bridge" (ap-southeast-1); preview `dpl_8qDxVgvTsDMiGrY3qQUFnnnQ2pCS` with
   per-deployment `-e` overrides only (no project env changes); test LLM FreeLLMAPI router. Packaging:
   `npm run vercel:patch` between `vercel build` and `vercel deploy --prebuilt`. Test secrets only on the box.
 - `whatsappBridgeStore.pg.test.ts` needs `WA_PG_TEST_URL` and TCP 5432 (box blocks 5432; run from the PC).
-- **August migration history reconcile (PLAN, NOT RUN) - 24 Oct 2026.** Nothing has been run yet.
+- **August migration history reconcile: APPLIED on live 24 Oct 2026 5:15 PM IST (Ferose OK).** Pre-check: live had 23 rows, none of the 15, all 18 August tables present, 15 checksums matched git. After: count 38. Next: `migrate diff` against live/restored DDL must be empty before any prod deploy (needs PC).
   Finding: the 15 Aug migrations with no live `_prisma_migrations` row are all fully applied on live (250 objects checked
   read-only: columns, unique indexes, constraints/FKs, `BackupMethod` enum, seeded permissions, Bill default, RLS). Fix is
   history rows only: 23 -> 38 (= all 38 migrations on master + this branch). SQL: [`docs/sql/2026-10-24-august-history-reconcile.sql`](sql/2026-10-24-august-history-reconcile.sql).
-  Count guard added in 2216ae1: a `DO $$ ... RAISE EXCEPTION` before `COMMIT` rolls the transaction back unless the count is 38. ChatGPT Coder PASS on 37d96ea (condition 1) and 2216ae1. Waiting for Ferose's OK; not run.
+  Count guard added in 2216ae1: a `DO $$ ... RAISE EXCEPTION` before `COMMIT` rolls the transaction back unless the count is 38. ChatGPT Coder PASS on 37d96ea (condition 1) and 2216ae1. Applied (see above).
 
   | Migration | SHA-256 (LF, as git stores) |
   |---|---|
