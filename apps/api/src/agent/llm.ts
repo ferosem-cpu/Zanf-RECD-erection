@@ -45,7 +45,26 @@ export interface RunAgentTurnParams {
   /** Awaited after the turn produces ANY reply (plain answer, timeout, error fallback); false or
    * a throw replaces the reply with "" (silent). WhatsApp re-checks sender access here. */
   finalCheck?: () => Promise<boolean>;
+  /** Test seams; production uses the DB providers and sendWithFallback. */
+  _deps?: { loadProviders?: () => Promise<AgentLlmProvider[]>; send?: typeof sendWithFallback };
 }
+
+/** A plain reply claiming the assistant has no tools/access, although tools were offered. Seen
+ * live on WhatsApp 24 Oct (primary model skipped the tool call and said "I currently don't have
+ * the tools to access that information"). */
+export function isNoToolsRefusal(text: string): boolean {
+  const t = text.replace(/[’‘]/g, "'").toLowerCase();
+  return /(do not|don't|dont|doesn't) (currently )?have (the |any )?(necessary |required )?(tools?|access)\b/.test(t) ||
+    /(currently )?(don't|do not) have access to (that|this|your|the)/.test(t) ||
+    /\b(i'm|i am) (unable|not able) to access (that|this|your|the)/.test(t) ||
+    /\bno (access to|tools? (to|for))\b/.test(t);
+}
+
+export const NO_TOOLS_NUDGE: UnifiedMessage = {
+  role: "user",
+  content: "(System note, not from the user: you DO have tools for Zan-APP data in this conversation. " +
+    "Do not say you lack tools or access. Call the most relevant search tool now for the user's last message, then answer from its result.)",
+};
 
 export interface RunAgentTurnResult {
   reply: string;
@@ -64,7 +83,8 @@ async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnRes
   const { systemPrompt, tools, onToolCall } = params;
   const unifiedTools = toUnifiedTools(tools);
 
-  const providers = await loadActiveProvidersInOrder();
+  const providers = await (params._deps?.loadProviders ?? loadActiveProvidersInOrder)();
+  const send = params._deps?.send ?? sendWithFallback;
   if (providers.length === 0) {
     throw new Error(
       "No LLM provider is configured for the agent yet. Add one under Settings > Agent providers.",
@@ -77,6 +97,8 @@ async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnRes
   const deadline = params.deadline ?? new AgentDeadline();
   const timer = createTurnTimer();
   const timedOut = new Set<string>();
+  let nudged = false;
+  let pendingNudge = false;
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     if (deadline.expired()) {
@@ -88,7 +110,10 @@ async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnRes
     let response: SendMessageResult;
     const llmStarted = Date.now();
     try {
-      response = await sendWithFallback(providers, adapters, { systemPrompt, messages: history, tools: unifiedTools }, deadline, timedOut);
+      const messages = pendingNudge ? [...history, NO_TOOLS_NUDGE] : history;
+      pendingNudge = false;
+      response = await send(providers, adapters, { systemPrompt, messages, tools: unifiedTools }, deadline, timedOut,
+        (row) => timer.provider(`${row.name.trim()}/${row.model}`));
       timer.llm(Date.now() - llmStarted);
     } catch (err) {
       timer.llm(Date.now() - llmStarted);
@@ -100,6 +125,16 @@ async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnRes
       console.error(`[agent:error] later round failed: ${(err as Error).message}`);
       const reply = `${AGENT_FRIENDLY_ERROR}. Anything I already prepared is shown above.`;
       return { reply, history: [...history, { role: "assistant", content: reply }] };
+    }
+
+    // One retry when the model claims it has no tools although tools were offered: the refusal
+    // is dropped (not stored, not sent) and the next round carries a one-off nudge.
+    if (response.toolCalls.length === 0 && !nudged && unifiedTools.length > 0 && turn + 1 < MAX_TOOL_TURNS &&
+        !deadline.expired() && isNoToolsRefusal(response.text)) {
+      nudged = true;
+      pendingNudge = true;
+      timer.note("no_tools_refusal_retry");
+      continue;
     }
 
     history = [...history, { role: "assistant", content: response.text, toolCalls: response.toolCalls }];
