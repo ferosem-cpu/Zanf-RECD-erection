@@ -59,6 +59,11 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   Prisma binaryTargets include `rhel-openssl-3.0.x`. Print/PDF: verify with a real PDF render.
 - Always include `Order.lineItems` in order/site queries. PATCH responses are thin echoes: reload
   with GET. Documents: gap-free numbers per FY (`nextDocumentNumber`); GST via `computeDocumentTotals`.
+  Invoices: separate `DocumentSequence` counters `tax_invoice` (INV/) and `proforma` (PI/) per FY; the
+  legacy shared `invoice` row is no longer used (left untouched). "Convert to tax invoice" creates a
+  DRAFT tax invoice with `sourceProformaId` (unique: a proforma converts once). The number is taken at
+  issue, in one transaction with the status change (no burnt numbers), with a validated `issueDate`
+  (IST, current FY, not in the future, not before the proforma).
 - Modules: Orders/Sites/SITC, Customers/Products/Vendors, Finance (quotations, invoices, POs,
   expenses, work orders, vendor bills), Accounting-Lite (ledgers, credit/debit notes, payments + TDS,
   GST aids), customer portal, notifications, reports, backups (Drive + Vercel cron).
@@ -93,7 +98,9 @@ Prod migration history has drifted (DDL applied by hand via Supabase MCP). Never
 `prisma migrate deploy/dev` or `db push` against any database; write migrations only and flag them.
 15 prod migrations (`20260813122825` ... `20260829054500`) have no `_prisma_migrations` row, so
 `migrate deploy` would try to re-run them; backfill rows (SHA-256 of each `migration.sql`) first.
-No migrations pending on master. `20261011110000_enable_rls_public_tables` (2026-10-11) and
+No migrations pending on master. `20261023120000_invoice_separate_sequences` (`Invoice.sourceProformaId`
++ seeds `tax_invoice`/`proforma` counters for 2026-27) was applied in prod BY HAND with its
+`_prisma_migrations` row; never `prisma migrate deploy` on prod (the 3 WhatsApp migrations are unapplied there). `20261011110000_enable_rls_public_tables` (2026-10-11) and
 `20261022120000_vendor_payment_tds_attachments` (2026-10-22: `PaymentMade.tdsAmount`/`tdsCertificateRef`,
 `PaymentMadeAttachment` with RLS on, anon/authenticated revoked) are applied with history rows. The 3 WhatsApp (`20261011120000`-`140000`, branch `feat/whatsapp-m2`) are NOT on prod; they sort BEFORE
 `20261022120000`, so the reconcile must insert them out of order (manual apply + rows, never `migrate deploy`). Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
