@@ -54,7 +54,8 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   Steps: 1 trusted-bridge risk sign-off; 2 build binaries + record hashes; 3 read-only VM-A recheck; 4 install (not started); 5 prod `WHATSAPP_BRIDGE_KEYS` with Ferose OK, all mappings off; 6 QR pairing with Ferose; 7 start service + health, MemoryMax, router check; 8 log everything.
   ChatGPT Coder conditions: private repo push first, deploy only hash-matched binary; session store owned by zan-wa, 0600, no bodies/full numbers in logs; DB nonce store (WhatsappBridgeNonce, confirmed); optional Vercel Firewall rule VM-A IP only on /wa/* (needs Ferose OK); systemd MemoryMax; spare number safer than 9500245599 (ban risk).
   Free API bot: keep a direct Gemini provider in the app as fallback independent of VM-A; at step 7 check router still answers in ~3 s.
-- M5 open (Ferose): which address is VM-A + OK to SSH; which number to pair; trusted-bridge risk sign-off.
+- **M5 Ferose answers 24 Oct 19:39 IST:** SSH to VM-A with freellmapi_key: yes. Pair number: 9500245599, the MAIN number (Ferose's choice; accepts ban risk). "I accept the trusted-bridge risk" (step 1 DONE).
+- Before pairing: Ferose checks how many devices are linked to 9500245599 (max 4); D:\Apps\WhatsMeow may hold a session on it (do not touch WhatsMeow).
 - Branch merged with master (24 Oct): 38 migrations. **No prod deploy / `prisma migrate deploy`** until the
   15 Aug `_prisma_migrations` rows on prod are reconciled.
 - Conditions: 1 lock-contention PASS; 2 real Go signer (M4) PASS incl. claim/ack; 3 DONE on prod (3 WA history
