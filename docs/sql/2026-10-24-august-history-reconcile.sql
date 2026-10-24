@@ -1,5 +1,5 @@
 -- August migration history reconcile (PLAN, NOT RUN) - 2026-10-24. History rows only; requires Ferose's OK.
--- If the count is not 38, ROLLBACK instead of COMMIT.
+-- If the count is not 38, the DO block raises and the whole transaction rolls back.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '30s';
@@ -48,5 +48,5 @@ WHERE NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name='20260
 INSERT INTO "_prisma_migrations" (id, checksum, finished_at, migration_name, logs, rolled_back_at, started_at, applied_steps_count)
 SELECT '63477f27-04fc-4471-8770-6f08676a0850','44ac8c2b138fe2c88527bae09b6cf31e9b6e769c8ad867b5808ebcdff427e590',now(),'20260829054500_add_backup_settings_and_log',NULL,NULL,now(),1
 WHERE NOT EXISTS (SELECT 1 FROM "_prisma_migrations" WHERE migration_name='20260829054500_add_backup_settings_and_log');
-SELECT count(*) FROM "_prisma_migrations"; -- expect 38; if not 38 -> ROLLBACK;
+DO $$ BEGIN IF (SELECT count(*) FROM "_prisma_migrations") <> 38 THEN RAISE EXCEPTION 'expected 38 _prisma_migrations rows'; END IF; END $$;
 COMMIT;
