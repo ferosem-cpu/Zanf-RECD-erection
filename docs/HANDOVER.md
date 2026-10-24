@@ -56,6 +56,9 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Chain guard (runs under `waitUntil`, no `maxDuration` set): chains only if elapsed + 55 s turn budget + 5 s
   fits `WA_FUNCTION_MAX_DURATION_MS` (default 60 s).
 - maxDuration: Ferose OK'd 300 s. `apps/api/vercel.json` sets `api/index.js` maxDuration 300 (needs Fluid Compute on zan-app-api). At prod deploy also set env WA_FUNCTION_MAX_DURATION_MS=300000; until both are live, immediate chaining stays off.
+- migrate diff (prisma@5) vs 1545 DDL backup, restored to scratch PG17: only DROP TABLE company_settings / employees after FK fix.
+- company_settings and employees are on live OUTSIDE Prisma: LEAVE THEM ALONE. Never generate or apply a migration that drops them.
+- PaymentReceived.invoice FK aligned to live: schema now `onDelete: Restrict` (no migration needed; live already RESTRICT).
 - Test setup: Neon test DB "whatsapp bridge" (ap-southeast-1); preview `dpl_8qDxVgvTsDMiGrY3qQUFnnnQ2pCS` with
   per-deployment `-e` overrides only (no project env changes); test LLM FreeLLMAPI router. Packaging:
   `npm run vercel:patch` between `vercel build` and `vercel deploy --prebuilt`. Test secrets only on the box.

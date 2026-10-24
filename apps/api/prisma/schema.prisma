@@ -978,7 +978,7 @@ model InvoiceLineItem {
 model PaymentReceived {
   id           String   @id @default(cuid())
   invoiceId    String?
-  invoice      Invoice? @relation(fields: [invoiceId], references: [id])
+  invoice      Invoice? @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
   customerId   String
   customer     Customer @relation(fields: [customerId], references: [id])
   amount       Decimal  @db.Decimal(12, 2)
