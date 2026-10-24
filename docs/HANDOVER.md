@@ -52,10 +52,15 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   `watest9` 401 (ingest and outbox). Only accepted nonces stored in `WhatsappBridgeNonce`. Ids `watest-m4-*`.
 - M4 claim/ack (real signer): outbox poll 200, `POST /wa/outbox/:id/claim` 200 (text+sendBy), `POST /wa/ack`
   200 ok -> row `sent`; ack with wrong key / bad sig 401 (row stayed `sending`). Id `watest-m4ack-*`.
-- Pre-M6 fixes (ChatGPT Coder): `(createdAt,id)` tiebreak at `whatsappBridgeStore.ts:47`; kick next turn
-  after `completeJob`; agent must fetch fresh data for order/invoice/site questions (M4 saw a reply reuse
-  history: "replay first" answered with the open-orders count).
-- Still open: conditions 3, 4, 5. Prod reconcile + WA migrations need Ferose's approval and a backup.
+- **Condition 5 DONE (24 Oct, Neon only):** `watest_llm_freellm` stays `gemini-3-flash-preview` (priority 0); backup row
+  `watest_llm_freellm_auto` (same key/baseUrl, model `auto`, priority 1) added - the schema has no fallback-model column,
+  so the backup model is the next-priority provider row. Signed `/wa/ingest` `watest-c5-1792838222` -> 202 accept, job done, 1 reply.
+- **Pre-M6 fixes DONE (code, tests):** (1) claim ordering ties on `(createdAt, id)`; (2) after a terminal `completeJob`
+  the sender's next queued job runs at once (`nextQueuedJob`, up to `MAX_KICK_CHAIN`=3; poll stays the backstop);
+  (3) WhatsApp addendum: order/invoice/site questions must use lookup tools this turn, never chat history;
+  (4) 413 falls through to the next provider/backup and that provider is skipped for the rest of the request.
+- Still open: condition 4 (clean up `watest*` keys/rows incl. `watest_llm_freellm_auto`, test previews); reconcile the
+  15 Aug `_prisma_migrations` rows on prod and merge master into this branch before any prod deploy.
 
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
