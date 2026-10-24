@@ -54,6 +54,24 @@ test("pg: claim ordering per sender and lease expiry", { skip }, async () => {
   await store.completeJob(second.id, "t3", { status: "done" }, null, null);
 });
 
+test("pg: equal createdAt is ordered by id; nextQueuedJob follows the same order", { skip }, async () => {
+  const store = createPrismaBridgeStore(db());
+  const x = (await store.insertInbound(inbound("e1", `${RUN}-mE`))).row;
+  const y = (await store.insertInbound(inbound("e2", `${RUN}-mE`))).row;
+  const at = new Date();
+  await db().whatsappInbound.updateMany({ where: { id: { in: [x.id, y.id] } }, data: { createdAt: at } });
+  const [lo, hi] = x.id < y.id ? [x, y] : [y, x];
+  assert.equal(await store.nextQueuedJob(`${RUN}-mE`), lo.id);
+  const now = new Date();
+  assert.equal(await store.claimJob(hi.id, "th", now, LEASE, 3), null, "higher id waits");
+  assert.ok(await store.claimJob(lo.id, "tl", now, LEASE, 3));
+  assert.equal(await store.nextQueuedJob(`${RUN}-mE`), hi.id);
+  await store.completeJob(lo.id, "tl", { status: "done" }, null, null);
+  assert.ok(await store.claimJob(hi.id, "th", now, LEASE, 3));
+  await store.completeJob(hi.id, "th", { status: "done" }, null, null);
+  assert.equal(await store.nextQueuedJob(`${RUN}-mE`), null);
+});
+
 test("pg: concurrent claims never exceed the cap of 2 (expected globally only when no other WhatsApp jobs are running)", { skip }, async () => {
   const store = createPrismaBridgeStore(db());
   const jobs = [];

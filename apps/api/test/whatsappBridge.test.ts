@@ -38,7 +38,8 @@ function fakeStore() {
     async claimJob(id, token, now, leaseMs, max) {
       const j = inbound.find((r) => r.id === id);
       if (!j || !j.mappingId || j.attempts >= max) return null;
-      if (inbound.some((e) => e.id !== id && e.mappingId === j.mappingId && ((e.createdAt < j.createdAt && (e.status === "received" || e.status === "processing")) || (e.status === "processing" && !!e.leaseUntil && e.leaseUntil >= now)))) return null;
+      const earlier = (e: InboundRow) => e.createdAt < j.createdAt || (e.createdAt.getTime() === j.createdAt.getTime() && e.id < j.id);
+      if (inbound.some((e) => e.id !== id && e.mappingId === j.mappingId && ((earlier(e) && (e.status === "received" || e.status === "processing")) || (e.status === "processing" && !!e.leaseUntil && e.leaseUntil >= now)))) return null;
       if (inbound.filter((e) => e.id !== id && e.status === "processing" && !!e.leaseUntil && e.leaseUntil >= now).length >= MAX_CONCURRENT_TURNS) return null;
       const ok = j.status === "received" || (j.status === "processing" && !!j.leaseUntil && j.leaseUntil < now);
       if (!ok) return null;
@@ -61,6 +62,11 @@ function fakeStore() {
       return inbound
         .filter((j) => (j.status === "processing" && !!j.leaseUntil && j.leaseUntil < now) || (j.status === "received" && j.decision === "accept" && j.createdAt.getTime() < now.getTime() - restartAfterMs))
         .slice(0, limit);
+    },
+    async nextQueuedJob(mappingId) {
+      const q = inbound.filter((j) => j.mappingId === mappingId && j.status === "received" && j.decision === "accept")
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return q[0]?.id ?? null;
     },
     async failStaleJob(id) {
       const j = inbound.find((r) => r.id === id);
@@ -457,4 +463,38 @@ test("Idempotency-Key is required (after auth) on ingest, claim and ack; malform
   const unsigned = await fetch(base + "/wa/ack", { method: "POST", body: "{}" });
   assert.equal(unsigned.status, 401, "auth still comes first");
   assert.equal(fs_.inbound.length, 0);
+});
+
+test("claim: equal createdAt is ordered by id (stable per-sender order)", async () => {
+  const a = await seed("t1", "mA");
+  const b = await seed("t2", "mA"); // same clock -> same createdAt
+  assert.equal(a.createdAt.getTime(), b.createdAt.getTime());
+  assert.equal(await fs_.store.claimJob(b.id, "tb", clock(), 90_000, 3), null, "later id waits");
+  assert.ok(await fs_.store.claimJob(a.id, "ta", clock(), 90_000, 3));
+});
+
+test("after a turn completes, the sender's next queued turn starts at once (no poll needed)", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let first = true;
+  turnBehaviour = async (p) => {
+    if (first) { first = false; await gate; }
+    const text = `reply to ${String(p.history.at(-1)?.content)}`;
+    return { reply: text, history: [...p.history, { role: "assistant", content: text }] };
+  };
+  await call("POST", "/wa/ingest", msg("q1", { text: "one" }));
+  nowMs += 5;
+  await call("POST", "/wa/ingest", msg("q2", { text: "two" }));
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(fs_.inbound[1].status, "received", "second turn is blocked while the first runs");
+  release();
+  await settle();
+  assert.deepEqual(fs_.inbound.map((j) => j.status), ["done", "done"]);
+  assert.deepEqual(fs_.outbox.map((o) => o.text), ["reply to one", "reply to two"]);
+  assert.equal(runs.length, 2);
+});
+
+test("WhatsApp prompt tells the agent to fetch fresh order/invoice/site data, not reuse chat history", () => {
+  assert.match(WHATSAPP_PROMPT_ADDENDUM, /orders, invoices or sites, call the lookup tools in THIS turn/);
+  assert.match(WHATSAPP_PROMPT_ADDENDUM, /never\s+answer from earlier messages/);
 });

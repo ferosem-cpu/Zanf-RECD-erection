@@ -44,7 +44,9 @@ export function createPrismaBridgeStore(prisma: PrismaClient): WaBridgeStore {
           mappingId: job.mappingId,
           id: { not: id },
           OR: [
+            // Earlier by (createdAt, id): equal createdAt falls back to id, so the order is total and stable.
             { createdAt: { lt: job.createdAt }, status: { in: ["received", "processing"] } },
+            { createdAt: job.createdAt, id: { lt: id }, status: { in: ["received", "processing"] } },
             { status: "processing", leaseUntil: { gte: now } },
           ],
         },
@@ -84,7 +86,16 @@ export function createPrismaBridgeStore(prisma: PrismaClient): WaBridgeStore {
   },
 
   async listStaleJobs(now, restartAfterMs, limit) {
-    return (await prisma.whatsappInbound.findMany({ where: staleWhere(now, restartAfterMs), orderBy: { createdAt: "asc" }, take: limit })).map(asInbound);
+    return (await prisma.whatsappInbound.findMany({ where: staleWhere(now, restartAfterMs), orderBy: [{ createdAt: "asc" }, { id: "asc" }], take: limit })).map(asInbound);
+  },
+
+  async nextQueuedJob(mappingId) {
+    const r = await prisma.whatsappInbound.findFirst({
+      where: { mappingId, status: "received", decision: "accept" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true },
+    });
+    return r?.id ?? null;
   },
 
   async failStaleJob(id, now) {

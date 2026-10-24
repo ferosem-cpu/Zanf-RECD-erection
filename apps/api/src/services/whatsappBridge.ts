@@ -17,6 +17,9 @@ export const MAX_JOB_AGE_MS = 3 * 60_000;
 export const RESTART_AFTER_MS = 20_000;
 export const MAX_HISTORY_MESSAGES = 30;
 export const MAX_REPLY_CHARS = 1500;
+/** After a turn completes, up to this many queued turns for the same sender are started straight away
+ * in the same background task (the /wa/outbox poll after RESTART_AFTER_MS stays as the backstop). */
+export const MAX_KICK_CHAIN = 3;
 export const NEUTRAL_FAILURE_REPLY = "Sorry, I couldn't complete that. Please try again.";
 
 export const WHATSAPP_PROMPT_ADDENDUM = `
@@ -24,7 +27,9 @@ export const WHATSAPP_PROMPT_ADDENDUM = `
 You are replying over WhatsApp. Answer in 1-3 short sentences of plain text (no markdown, tables or \
 bullet lists). You are read-only here: never propose or offer to create, change or send anything, and \
 if asked to, say briefly that it can be done in the Zan app. If a tool says information is not \
-available over WhatsApp, say so briefly and do not try to work around it.`;
+available over WhatsApp, say so briefly and do not try to work around it. For any question about \
+orders, invoices or sites, call the lookup tools in THIS turn and answer from their result; never \
+answer from earlier messages in this chat, which may be out of date.`;
 
 export interface InboundRow {
   id: string;
@@ -82,6 +87,8 @@ export interface WaBridgeStore {
   releaseJob(id: string, token: string): Promise<void>;
   /** Jobs that need attention now: stale processing leases and received rows older than the restart delay. */
   listStaleJobs(now: Date, restartAfterMs: number, limit: number): Promise<InboundRow[]>;
+  /** Earliest received+accepted job for the mapping, by (createdAt, id); null when none is queued. */
+  nextQueuedJob(mappingId: string): Promise<string | null>;
   /** Unfenced, only if still stale: -> failed. Returns whether this call did it. */
   failStaleJob(id: string, now: Date): Promise<boolean>;
   getConversation(userId: string): Promise<{ id: string; messages: unknown }>;
@@ -201,15 +208,28 @@ export function createBridgeService(deps: BridgeDeps) {
     if (row) await store.insertOutboxIfAbsent(row);
   }
 
-  async function processJob(jobId: string): Promise<void> {
+  /** Runs one job; when it reaches a terminal state, starts the sender's next queued job right away. */
+  async function processJob(jobId: string, chain = 0): Promise<void> {
+    const mappingId = await runJob(jobId);
+    if (!mappingId || chain >= MAX_KICK_CHAIN) return;
+    const next = await store.nextQueuedJob(mappingId).catch(() => null);
+    if (next && next !== jobId) await processJob(next, chain + 1);
+  }
+
+  /** Returns the job's mappingId once the job is terminal (done/dropped/failed), else null. */
+  async function runJob(jobId: string): Promise<string | null> {
     const token = deps.newToken();
     const job = await store.claimJob(jobId, token, deps.now(), JOB_LEASE_MS, MAX_ATTEMPTS);
-    if (!job || !job.text) return;
+    if (!job || !job.text) return null;
+    const finish = async (
+      patch: { status: "done" | "dropped" | "failed" },
+      outbox: NewOutbox | null,
+      conversation: { id: string; messages: UnifiedMessage[] } | null,
+    ): Promise<string | null> => ((await store.completeJob(job.id, token, patch, outbox, conversation)) ? job.mappingId : null);
     try {
       const open = await reopen(job);
       if (!open.ok || open.decision.mapping.id !== job.mappingId) {
-        await store.completeJob(job.id, token, { status: "dropped" }, null, null);
-        return;
+        return await finish({ status: "dropped" }, null, null);
       }
       const { turn, decision } = open;
       const conv = await store.getConversation(decision.mapping.userId);
@@ -235,11 +255,10 @@ export function createBridgeService(deps: BridgeDeps) {
       });
       const reply = deps.sanitizeReply(result.reply ?? "").trim().slice(0, MAX_REPLY_CHARS);
       if (!reply || turn.revokedReason() !== null) {
-        await store.completeJob(job.id, token, { status: "done" }, null, null);
-        return;
+        return await finish({ status: "done" }, null, null);
       }
-      await store.completeJob(
-        job.id, token, { status: "done" },
+      return await finish(
+        { status: "done" },
         {
           inboundId: job.id, mappingId: decision.mapping.id, waGroup: decision.group, recipientPhone: decision.mapping.phoneE164,
           recipientLid: decision.mapping.lid, text: reply, expiresAt: new Date(deps.now().getTime() + OUTBOX_TTL_MS),
@@ -250,10 +269,10 @@ export function createBridgeService(deps: BridgeDeps) {
       console.error("whatsapp job error", job.id, err instanceof Error ? err.name : "error");
       if (job.attempts >= MAX_ATTEMPTS) {
         const neutral = await neutralOutbox(job).catch(() => null);
-        await store.completeJob(job.id, token, { status: "failed" }, neutral, null).catch(() => undefined);
-      } else {
-        await store.releaseJob(job.id, token).catch(() => undefined);
+        return await finish({ status: "failed" }, neutral, null).catch(() => null);
       }
+      await store.releaseJob(job.id, token).catch(() => undefined);
+      return null;
     }
   }
 

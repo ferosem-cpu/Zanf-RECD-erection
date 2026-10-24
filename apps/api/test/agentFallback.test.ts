@@ -4,7 +4,7 @@ import type { AgentLlmProvider } from "@prisma/client";
 import { sendWithFallback } from "../src/agent/sendWithFallback";
 import { AgentDeadline, LLM_ATTEMPT_CAP_MS, FALLBACK_RESERVE_MS } from "../src/agent/timeouts";
 import { agentErrorBody, AGENT_FRIENDLY_ERROR } from "../src/agent/friendlyError";
-import type { LlmAdapter } from "../src/agent/providers/types";
+import { ProviderCallError, type LlmAdapter } from "../src/agent/providers/types";
 
 console.error = () => {};
 
@@ -12,11 +12,12 @@ const row = (id: string, name: string, priority: number) =>
   ({ id, name, priority, model: "m", baseUrl: null, updatedAt: new Date(1) }) as unknown as AgentLlmProvider;
 const params = { systemPrompt: "s", messages: [], tools: [] };
 
-function fake(behaviour: "timeout" | "ok", seen: number[]): LlmAdapter {
+function fake(behaviour: "timeout" | "ok" | "413", seen: number[]): LlmAdapter {
   return {
     async sendMessage(p) {
       seen.push(p.timeoutMs ?? -1);
       if (behaviour === "timeout") throw new Error("Request timed out.");
+      if (behaviour === "413") throw new ProviderCallError("413 Request Entity Too Large", "P", { status: 413 });
       return { text: "answer", toolCalls: [] };
     },
   } as LlmAdapter;
@@ -87,4 +88,25 @@ test("every provider failing: the thrown error becomes only the friendly bubble 
   assert.equal(body.error, AGENT_FRIENDLY_ERROR);
   assert.match(body.errorId, /^[0-9a-f]{8}$/);
   assert.ok(!/Free LLM|OpenAI|timed out/i.test(JSON.stringify(body)));
+});
+
+test("a 413 from the primary falls through to the backup model, and is skipped on later rounds", async () => {
+  const seenA: number[] = [];
+  const seenB: number[] = [];
+  const adapters = new Map<string, LlmAdapter>([["a", fake("413", seenA)], ["b", fake("ok", seenB)]]);
+  const providers = [row("a", "gemini-3-flash-preview", 0), row("b", "auto", 1)];
+  const skip = new Set<string>();
+  const d = new AgentDeadline(55_000, () => 0);
+  assert.equal((await sendWithFallback(providers, adapters, params, d, skip)).text, "answer");
+  assert.equal((await sendWithFallback(providers, adapters, params, d, skip)).text, "answer");
+  assert.equal(seenA.length, 1);
+  assert.equal(seenB.length, 2);
+});
+
+test("a 413 on every provider still ends in the normal all-failed error", async () => {
+  const adapters = new Map<string, LlmAdapter>([["a", fake("413", [])], ["b", fake("413", [])]]);
+  await assert.rejects(
+    sendWithFallback([row("a", "P", 0), row("b", "F", 1)], adapters, params, new AgentDeadline(55_000, () => 0)),
+    /All configured LLM providers failed[\s\S]*HTTP 413/,
+  );
 });

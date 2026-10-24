@@ -2,8 +2,16 @@ import type { AgentLlmProvider } from "@prisma/client";
 import type { UnifiedMessage, UnifiedToolSchema, LlmAdapter, SendMessageResult } from "./providers/types";
 import { formatProviderFailures, providersToAttempt, recordProviderFailure, type ProviderFailure } from "./providers/providerHealth";
 import { createAdapterForRow } from "./providers/factory";
+import { httpStatusOf } from "./providers/types";
 import type { AgentDeadline } from "./timeouts";
 import { sendCleaned } from "./assistantText";
+
+/** HTTP 413: the request (prompt + tools) is too large for this provider/model. It is handled like
+ * any other failure (the next provider/backup model is tried), and since the history only grows
+ * within a request, the provider is also skipped for the rest of this request, like a timeout. */
+export function isPayloadTooLarge(err: unknown): boolean {
+  return httpStatusOf(err) === 413 || httpStatusOf((err as { cause?: unknown } | null)?.cause) === 413;
+}
 
 function isTimeoutError(err: unknown): boolean {
   const e = err as { name?: string; message?: string } | null;
@@ -15,7 +23,7 @@ export async function sendWithFallback(
   adapters: Map<string, LlmAdapter>,
   params: { systemPrompt: string; messages: UnifiedMessage[]; tools: UnifiedToolSchema[] },
   deadline: AgentDeadline,
-  /** Providers that timed out earlier in this same request; later rounds go straight past them. */
+  /** Providers that timed out (or returned 413) earlier in this same request; later rounds go straight past them. */
   timedOut: Set<string> = new Set(),
 ): Promise<SendMessageResult> {
   const failures: ProviderFailure[] = [];
@@ -46,7 +54,7 @@ export async function sendWithFallback(
       const send = () => adapter!.sendMessage({ ...params, timeoutMs: deadline.attemptTimeoutMs(hasFallback) });
       return await sendCleaned(send, () => !deadline.expired());
     } catch (err) {
-      if (isTimeoutError(err)) timedOut.add(providerRow.id);
+      if (isTimeoutError(err) || isPayloadTooLarge(err)) timedOut.add(providerRow.id);
       failures.push(recordProviderFailure(providerRow, err, "chat", { primary }));
     }
   }
