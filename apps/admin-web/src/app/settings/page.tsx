@@ -20,6 +20,7 @@ import { apiAssetUrl, downscaleImageToDataUrl } from "@/lib/images";
 import AgentProvidersSettings from "@/components/AgentProvidersSettings";
 import AgentVisibilitySettings from "@/components/AgentVisibilitySettings";
 import BackupSettings from "@/components/BackupSettings";
+import WhatsappMappingsSettings from "@/components/WhatsappMappingsSettings";
 
 export default function SettingsPage() {
   const [activeTheme, setActiveTheme] = useState("slate");
@@ -494,6 +495,7 @@ export default function SettingsPage() {
       {/* ── In-app agent LLM providers ──────────────────────────────────── */}
       <AgentProvidersSettings />
       <AgentVisibilitySettings />
+      <WhatsappMappingsSettings />
       <BackupSettings />
 
       <section className="card p-4 sm:p-6">
