@@ -14,6 +14,7 @@ import { settledFromAllocations, netInvoiceTotal } from "../../services/settleme
 import { paymentCashAndTds, normalizePaymentMethod } from "../../services/paymentSplit";
 import { LIST_LIMIT, listMeta, listPage } from "../listResult";
 import { isoDateIST } from "../istDates";
+import { invoiceSiteInfo, invoiceSiteSelect } from "../invoiceSite";
 import { isPastDue, istStartOfDay } from "../../services/ageing";
 import type { AgentTool, AgentAuthContext } from "./types";
 import { waOrderWhere, waEventWhere, waSiteVisible, waSiteWhere, waIsScoped } from "../whatsapp/siteScope";
@@ -331,7 +332,8 @@ const searchInvoices: AgentTool = {
   name: "search_invoices",
   description:
     "Search invoices (proforma or tax invoice) by invoice number or customer name. Lists up to " +
-    "15 rows: id, invoiceNumber, docType, customer, status, issueDate, dueDate, taxableValue " +
+    "15 rows: id, invoiceNumber, docType, customer, site (the invoice's own site - see siteSource / " +
+    "siteFromLineDescription; never reuse one row's site for another), status, issueDate, dueDate, taxableValue " +
     "(EXCL. GST), gstAmount, total (INCL. GST), creditNoteTotal (sum of issued credit notes against " +
     "it), netTotal (total INCL. GST minus credit notes - it is NOT a before-GST figure), amountPaid, " +
     "balance (incl. GST, net of credit notes, after allocated payments and pro-rated TDS), " +
@@ -372,6 +374,7 @@ const searchInvoices: AgentTool = {
       },
       include: {
         customer: { select: { name: true } },
+        ...invoiceSiteSelect,
         // paymentAllocations (not the legacy `payments` relation) is the complete picture
         // since Phase C - a payment split across invoices or carrying TDS would otherwise
         // be undercounted here, same fix already applied to the REST routes.
@@ -390,6 +393,7 @@ const searchInvoices: AgentTool = {
         id: inv.id,
         invoiceNumber: inv.status === "draft" ? `DRAFT-${inv.id}` : inv.invoiceNumber,
         docType: inv.docType, customer: inv.customer.name, status: inv.status,
+        ...invoiceSiteInfo(inv),
         issueDate: inv.issueDate, dueDate: inv.dueDate,
         // Stored document fields: subtotal = taxable value after line discounts (excl. GST);
         // GST = cgst + sgst + igst; total = subtotal + GST.

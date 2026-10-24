@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { api, setToken, clearToken } from "@/lib/apiClient";
+import { apiAssetUrl } from "@/lib/images";
 import { useRouter } from "next/navigation";
 import { isSessionRejected, retryDelayMs, sessionWaitsForSettings } from "@/lib/sessionRetry";
 
@@ -66,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // after it: on a cold API the two used to queue one behind the other. The .catch keeps an
     // unused/failed request from surfacing as an unhandled rejection; the result is only applied
     // below once /auth/me has accepted the session.
-    const settingsRequest = api<{ themeKey: string; logoDataUrl: string | null; customColors: any }>("/settings")
+    const settingsRequest = api<{ themeKey: string; logoUrl: string | null; customColors: any }>("/settings")
       .then((settings) => ({ settings }), (error: unknown) => ({ error }));
 
     let data: UserSession;
@@ -124,8 +125,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (settings.themeKey) {
           saveThemeKey(settings.themeKey);
         }
-        if (settings.logoDataUrl) {
-          saveLogo(settings.logoDataUrl);
+        if (settings.logoUrl) {
+          saveLogo(apiAssetUrl(settings.logoUrl)!);
         } else {
           clearLogo();
         }

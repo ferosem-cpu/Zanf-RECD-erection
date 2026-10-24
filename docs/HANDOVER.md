@@ -6,11 +6,37 @@ Installation, Testing, Commissioning. Cloned from Platino on 2026-07-19 and NOT 
 Full pre-compaction handover (changelog, per-fix narratives): `git show 649ca2a:docs/HANDOVER.md`.
 Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
-## 1. Production state (2026-10-10)
-- API code = master `649ca2a` (fix 14). Deployment `dpl_8ai5M6GjkauRGno4byPe9xh6sb1j` (18:59 IST,
-  Oct 10 2026). Rollback target: `dpl_CaYkxaNLkckQZbFBDE5JYmyHVT93` (fix 13). The docs merge moves
-  master but not the API code.
-- admin-web auto-deploys from master (`app.zanf.org`). API is deployed manually (section 5).
+## 1. Production state (2026-10-22)
+- API = `dpl_G84WARJE6RR1amJ6J1jwxYAHvU2D` (22 Oct 2026, from master after merging `feat/vendor-payment-detail`
+  and `fix/agent-tuning-split-site-confirm`). Adds vendor payment detail drawer, optional TDS (amount +
+  certificate ref) and attachments on vendor payments (section 7 TDS rule). Rollback target:
+  `dpl_FL2AzQKMMTE9S8zZsfu67VDyrcuo` (needs no DB rollback: the migration is additive). admin-web = master push.
+  Pre-migration backup: `D:\Backups\zan-db\json-20261022-1430` (finance tables + `_prisma_migrations`).
+- API = `dpl_FL2AzQKMMTE9S8zZsfu67VDyrcuo` (19:46 IST, Oct 16 2026, from branch
+  `fix/agent-tuning-split-site-confirm` commit `ef2a92c` on top of the deployment below). Adds: receivables /
+  invoice search return each invoice's own site (`agent/invoiceSite.ts`); `create_invoice` lines accept
+  `splitTotal` + `splitPct` and the app computes the amounts (`agent/lineSplit.ts`); prompt rules against
+  "no tools" give-ups. Rollback target: `dpl_2x3jbxyvZccZSjM8gt3tNTtKKWqg`.
+  Deploy gotcha: patch EVERY `*.func` recursively (there are two: `functions/index.func` and
+  `functions/api/index.func`) and write `.vc-config.json` WITHOUT a BOM (`Set-Content -Encoding UTF8` adds one
+  and `vercel deploy` fails "Unexpected token" before uploading).
+- Previous API = `dpl_2x3jbxyvZccZSjM8gt3tNTtKKWqg` (17:24 IST, Oct 16 2026): master code (`182517e`, same as `5c3dbc6`)
+  plus 3 agent fixes from branch `deploy/agent-fixes-on-prod` (not yet merged to master): Gemini fallback
+  accepts tool calls made by another provider (placeholder thought signature); `create_invoice` reuses
+  HSN/SAC from earlier invoices, "Extra ..." lines default to the fabrication code (section 6); prompt no
+  longer asks for HSN up front. Rollback target: `dpl_49cApBVUavTvvbZxDwFpo6X3AqQ5` (logo egress, `5c3dbc6`,
+  20:47 IST Oct 11); before that `dpl_8ai5M6GjkauRGno4byPe9xh6sb1j` (fix 14).
+- admin-web auto-deploys from master (`app.zanf.org`): `dpl_EnkCXpEgppRFudaP1ey8mJ9d14HX` (20:48 IST,
+  Oct 11). Rollback: `dpl_47SeBbfRbSMzJhfa3hte2orzQzkS`. API is deployed manually (section 5).
+- 2026-10-11 RLS fix: RLS on + anon/authenticated grants revoked on the 25 public Zan tables
+  (migration `20261011110000_enable_rls_public_tables`, applied in prod with its history row; ebiz
+  tables untouched). Runbook: `docs/SECURITY-RLS.md`. Pre-change JSON backup (64 tables, 1,263 rows,
+  `grants-before.json`, emergency-only `rollback-exact.sql`): `D:\Backups\zan-db\json-20261011-1725\` (private ACL).
+- 2026-10-11 logo egress fix live (section 2): stored logo shrunk 2.45 MB -> 52 KB PNG (md5 of data URL
+  `ed0fa8e6...`); original kept at `D:\Backups\zan-db\logo-original.png`.
+- WhatsApp assistant: M1/M2/M3 on local branches `feat/whatsapp-m*` (+ bridge `D:\Apps\zan-wa-bridge`),
+  reviewed, NOT merged/deployed/migrated. Next: Neon preview DB trial.
+- Agent/session handover: `.claude-task\HERMES-HANDOVER.md` (local only, not committed).
 - Repo `github.com/ferosem-cpu/Zanf-RECD-erection`, branch `master`. Local ports: API 4011, web 6011.
 - DB: Supabase `zan-app` (`ap-south-1`). Vercel team `ferose-salahudeen-s-projects`; CLI user
   `ferosem-1321`. Projects `admin-web` (git-connected) and `zan-app-api` (`bom1`, `zan-app-api.vercel.app`).
@@ -19,49 +45,21 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
 ## 1a. WhatsApp M2 test status (branch `feat/whatsapp-m2`, 2026-10-24) - TEST ONLY, nothing on prod
 
-- **Condition 3 DONE (24 Oct, 3:53 PM IST):** live DB schema already matched; 3 WhatsApp rows added to `_prisma_migrations` (now 23). Schema backup: `D:\Backups\zan-db\20261024-1545`. **Do not** run prod deploy or `prisma migrate deploy` until the 15 Aug migrations' history rows are reconciled and this branch is merged with master.
-- Packaging fix `f375ec7`: `npm run vercel:patch` (apps/api) runs between `vercel build` and
-  `vercel deploy --prebuilt` = step 6 below, automated. Verified by a real preview deploy (`/health` 200).
-- Neon test DB "whatsapp bridge" (free, ap-southeast-1): all 35 branch migrations + master's
-  `20261011110000` and `20261022120000` applied; small seed/test data. 4 WA tables have RLS on and no
-  anon/authenticated grants. 36 older tables have RLS OFF there (test DB only; prod state differs).
-- Test preview = `vercel deploy --prebuilt --target=preview` of project `api` with per-deployment `-e`
-  overrides only: `DATABASE_URL` (Neon pooler + `pgbouncer=true`), `DIRECT_URL` (Neon direct),
-  `WHATSAPP_BRIDGE_KEYS` (test key id `watest1`), `AGENT_SECRETS_KEY` (test key). No project env changes.
-  Current: `dpl_8qDxVgvTsDMiGrY3qQUFnnnQ2pCS`. Test secrets live only on the coordinator box.
-- Results (signed requests, no real WhatsApp): ingest 202 accept; nonce replay 401; duplicate messageId
-  returns original decision, no second job; unknown sender ignore/dropped; `/wa` path kept (`/api/wa` 404);
-  turn runs in background, retries capped at 3, lease 90 s; reply lands in `/wa/outbox` (~11.5 s for
-  "how many open orders?" -> correct answer, 1 open order).
-- Test LLM: FreeLLMAPI router `https://freellmapi-ferose.duckdns.org/v1` (OpenAI-compatible), model
-  `gemini-3-flash-preview`, backup `gemini-3.5-flash`. `gpt-oss-120b` fails 413 (prompt too large).
-  DeepSeek / Qwen Coder / GLM / MiniMax / Nemotron Ultra need provider keys added in the router dashboard first.
-- Condition 1 lock-contention test (2026-10-24): PASS. 2 and 3 concurrent ingests from one sender: all
-  accepted, turns ran strictly one at a time (advisory-lock claim + per-sender block), exactly one correct
-  reply each, no stuck leases. Notes: a blocked turn waits for the next `/wa/outbox` poll after 20 s
-  (`RESTART_AFTER_MS`, no self-kick on completion); ingests with identical `createdAt` can run out of
-  arrival order (`whatsappBridgeStore.ts:47` uses `lt` only, no tiebreak).
-- ChatGPT Coder verdict: PASS with conditions: (1) lock-contention test (done, above); (2) real Go bridge signer in M4 (done, below);
-  (3) 15-object reconcile precheck on the live DB right before WA migrations (`docs/whatsapp/MIGRATION-RECONCILE.md`);
-  (4) clean up watest keys/rows (`watest_map_919500245599`, `watest_llm_freellm`, `watest-*` inbound/outbox) and
-  test previews; (5) on 413, fall back to the next provider.
-- M4 real-signer test (2026-10-24): PASS. Go harness calling `zan-wa-bridge` `internal/zan.SignRequest`
-  (commit 5b9c93a, copy on box, bridge repo untouched, no WA pairing), sent via `vercel curl`. Valid -> 202
-  accept, exactly 1 outbox reply; tampered body 401; bad signature 401; ts -301/-330 s 401, +310/+330 s 401
-  (+301 s arrived ~3 s later, inside the window, accepted - expected); replayed nonce 401; wrong key id
-  `watest9` 401 (ingest and outbox). Only accepted nonces stored in `WhatsappBridgeNonce`. Ids `watest-m4-*`.
-- M4 claim/ack (real signer): outbox poll 200, `POST /wa/outbox/:id/claim` 200 (text+sendBy), `POST /wa/ack`
-  200 ok -> row `sent`; ack with wrong key / bad sig 401 (row stayed `sending`). Id `watest-m4ack-*`.
-- **Condition 5 DONE (24 Oct, Neon only):** `watest_llm_freellm` stays `gemini-3-flash-preview` (priority 0); backup row
-  `watest_llm_freellm_auto` (same key/baseUrl, model `auto`, priority 1) added - the schema has no fallback-model column,
-  so the backup model is the next-priority provider row. Signed `/wa/ingest` `watest-c5-1792838222` -> 202 accept, job done, 1 reply.
-- **Pre-M6 fixes DONE (code, tests):** (1) claim ordering ties on `(createdAt, id)`; (2) after a terminal `completeJob`
-  the sender's next queued job runs at once (`nextQueuedJob`, up to `MAX_KICK_CHAIN`=3; poll stays the backstop);
-  (3) WhatsApp addendum: order/invoice/site questions must use lookup tools this turn, never chat history;
-  (4) 413 falls through to the next provider/backup and that provider is skipped for the rest of the request.
-- Chain time guard (runs under `waitUntil`, no `maxDuration` set): next turn chains only if elapsed + 55 s turn budget + 5 s fits `WA_FUNCTION_MAX_DURATION_MS` (default 60 s) - so by default only the first turn runs inline, the rest via the poll; raising maxDuration is Ferose's call.
-- Still open: condition 4 (clean up `watest*` keys/rows incl. `watest_llm_freellm_auto`, test previews); reconcile the
-  15 Aug `_prisma_migrations` rows on prod and merge master into this branch before any prod deploy.
+- Branch merged with master (24 Oct): 38 migrations. **No prod deploy / `prisma migrate deploy`** until the
+  15 Aug `_prisma_migrations` rows on prod are reconciled.
+- Conditions: 1 lock-contention PASS; 2 real Go signer (M4) PASS incl. claim/ack; 3 DONE on prod (3 WA history
+  rows only, now 23; schema backup `D:\Backups\zan-db\20261024-1545`); 5 DONE on Neon (primary
+  `gemini-3-flash-preview`, backup row `watest_llm_freellm_auto` model `auto`, priority 1 - no fallback-model column).
+  Open: 4 = clean up `watest*` keys/rows (incl. `watest_llm_freellm_auto`, `watest-*` inbound/outbox) and test previews.
+- Pre-M6 fixes DONE: `(createdAt, id)` claim tiebreak; chain next queued turn after `completeJob` (max 3);
+  order/invoice/site questions must use lookup tools this turn; 413 falls through to the next provider.
+- Chain guard (runs under `waitUntil`, no `maxDuration` set): chains only if elapsed + 55 s turn budget + 5 s
+  fits `WA_FUNCTION_MAX_DURATION_MS` (default 60 s).
+- Before M6: Ferose to decide maxDuration (e.g. 300 s with Fluid Compute) + matching WA_FUNCTION_MAX_DURATION_MS; until then fix 2 (immediate chaining) is effectively off.
+- Test setup: Neon test DB "whatsapp bridge" (ap-southeast-1); preview `dpl_8qDxVgvTsDMiGrY3qQUFnnnQ2pCS` with
+  per-deployment `-e` overrides only (no project env changes); test LLM FreeLLMAPI router. Packaging:
+  `npm run vercel:patch` between `vercel build` and `vercel deploy --prebuilt`. Test secrets only on the box.
+- `whatsappBridgeStore.pg.test.ts` needs `WA_PG_TEST_URL` and TCP 5432 (box blocks 5432; run from the PC).
 
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
@@ -79,11 +77,21 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   Prisma binaryTargets include `rhel-openssl-3.0.x`. Print/PDF: verify with a real PDF render.
 - Always include `Order.lineItems` in order/site queries. PATCH responses are thin echoes: reload
   with GET. Documents: gap-free numbers per FY (`nextDocumentNumber`); GST via `computeDocumentTotals`.
+  Invoices: separate `DocumentSequence` counters `tax_invoice` (INV/) and `proforma` (PI/) per FY; the
+  legacy shared `invoice` row is no longer used (left untouched). "Convert to tax invoice" creates a
+  DRAFT tax invoice with `sourceProformaId` (unique: a proforma converts once). The number is taken at
+  issue, in one transaction with the status change (no burnt numbers), with a validated `issueDate`
+  (IST, current FY, not in the future, not before the proforma).
 - Modules: Orders/Sites/SITC, Customers/Products/Vendors, Finance (quotations, invoices, POs,
   expenses, work orders, vendor bills), Accounting-Lite (ledgers, credit/debit notes, payments + TDS,
   GST aids), customer portal, notifications, reports, backups (Drive + Vercel cron).
 - Crons (`apps/api/vercel.json`): conversation cleanup 03:00 UTC, scheduled backup 19:30 UTC. Both
   fail closed without `CRON_SECRET`.
+- Company logo/signature (egress fix): `CompanySettings.logoDataUrl`/`signatoryDataUrl` are omitted from every
+  Prisma query (global `omit`, preview feature `omitApi`, `lib/prisma.ts`); only `services/companyAssets.ts` reads them.
+  `/settings` returns `logoUrl`/`signatureUrl` (`/settings/logo?v=<md5>`, hash computed in SQL). `GET /settings/logo` and
+  `/settings/signature` are public, ETag + immutable cache, 10-min in-memory cache. PUT rejects an image data URL over
+  300 KB (400); admin-web downscales to ~600 px PNG first. Never add the columns back to a `select`/response.
 - Env vars (api): `DATABASE_URL`, `JWT_SECRET` (API throws at boot if unset), `CRON_SECRET`,
   `AGENT_SECRETS_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_DRIVE_*` (CLIENT_ID/SECRET/REFRESH_TOKEN/FOLDER_ID),
   `SMTP_*`, `EMAIL_FROM_ADDRESS`. admin-web: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_GOOGLE_CLIENT_ID`.
@@ -92,7 +100,7 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Before every push: `npm run build --workspace=packages/shared`; in `apps/api` `npx prisma generate`,
   `npx tsc --noEmit`, `npm run build`; in `apps/admin-web` `npx tsc --noEmit`, `npm run build`; root
   `npm test`. One-shot: `.claude-task/check.ps1` (local file, not committed).
-- Tests: node:test via tsx, mocks only. Current counts: API 176, admin-web 35. New test files must
+- Tests: node:test via tsx, mocks only. Current counts: API 222, admin-web 38. New test files must
   be added to the app's package.json "test" script. Lint is not set up.
 - Shared changes need a rebuild; a stale real copy in `apps/api/node_modules/@recd/shared` shadows the
   workspace link.
@@ -108,7 +116,12 @@ Prod migration history has drifted (DDL applied by hand via Supabase MCP). Never
 `prisma migrate deploy/dev` or `db push` against any database; write migrations only and flag them.
 15 prod migrations (`20260813122825` ... `20260829054500`) have no `_prisma_migrations` row, so
 `migrate deploy` would try to re-run them; backfill rows (SHA-256 of each `migration.sql`) first.
-No migrations pending. Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
+No migrations pending on master. `20261023120000_invoice_separate_sequences` (`Invoice.sourceProformaId`
++ seeds `tax_invoice`/`proforma` counters for 2026-27) was applied in prod BY HAND with its
+`_prisma_migrations` row; never `prisma migrate deploy` on prod (the 3 WhatsApp migrations are unapplied there). `20261011110000_enable_rls_public_tables` (2026-10-11) and
+`20261022120000_vendor_payment_tds_attachments` (2026-10-22: `PaymentMade.tdsAmount`/`tdsCertificateRef`,
+`PaymentMadeAttachment` with RLS on, anon/authenticated revoked) are applied with history rows. The 3 WhatsApp (`20261011120000`-`140000`, branch `feat/whatsapp-m2`) are NOT on prod; they sort BEFORE
+`20261022120000`, so the reconcile must insert them out of order (manual apply + rows, never `migrate deploy`). Prod `DATABASE_URL` is a Sensitive Vercel var; use the Supabase connector.
 
 ## 5. Deploying
 Backend first: deploy `zan-app-api` and confirm it live BEFORE pushing dependent admin-web changes
@@ -140,6 +153,18 @@ Never deploy, merge to master or open a PR without Ferose's explicit approval.
 10. Rollback: `npx vercel rollback <previous dpl id or url>` (or
     `npx vercel alias set <previous url> zan-app-api.vercel.app`); then report.
 
+**Lessons from the 2026-10-16 deploy:**
+- Dirty main tree (WhatsApp WIP had a changed `vercel.json` rewrite, `tsconfig.json`, `schema.prisma`)? Do not
+  build it. `git worktree add D:\Apps\zanf-deploy -b <branch> <prod sha>`, cherry-pick only the fixes, `npm ci`,
+  then run steps 2-9 from that worktree's `apps/api`. Build was 21 min cold, upload 52 s.
+- `apps/api/.vercel/project.json` in the main repo links the project `api` (`prj_FsLs...`), NOT `zan-app-api`
+  (`prj_yf9RGAw5mnBhJdVi9lDCJncdkrnS`, team `team_psJwhw81rjDAba1sPZSBqxzZ`). Write the right link before `vercel
+  pull` and check `projectName` in `.vercel/project.json` afterwards.
+- A production deploy came back BLOCKED (docs "team configuration") while HEAD was authored by
+  `Claude <noreply@anthropic.com>`; the same tree redeployed fine once the commits were authored by the team
+  member (no rebuild needed). Deploy only from commits authored by a Vercel team member. A BLOCKED deploy never
+  takes the alias; stop the waiting CLI and do not retry blindly.
+
 **Ignored Build Step:** `zan-app-api` has `commandForIgnoringBuildStep` = `exit 0` and an empty Root
 Directory. Git-triggered builds failed "No entrypoint found"; setting Root Directory = `apps/api`
 would make git builds succeed and auto-promote WITHOUT the step-6 patch, and clash with the
@@ -153,22 +178,25 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
 - Chat bubble hidden until Super Admin enables roles in Settings > Agent Visibility (Customer toggle
   OFF in prod, deliberate). Needs a provider in Settings > Agent providers (`AgentLlmProvider`, keys
   AES-256-GCM with `AGENT_SECRETS_KEY`).
-- Provider order: active rows by `priority` ascending (`providers/factory.ts`), with fallback. Prod:
-  Gemini priority 1 (OpenAI-compat base URL; Gemini URLs use native `:generateContent` for PDFs),
-  NVIDIA priority 2 (HTTP 410, see section 8), plus an OpenAI fallback row per the fix 12 logs
-  (rows not verified against production). A 410 provider is skipped 60 min, an out-of-quota 429 for
-  15 min (`providerHealth.ts`; cleared when the row is edited). Final error lists the primary's first.
-- Time caps (`timeouts.ts`, env-overridable): request budget `AGENT_REQUEST_BUDGET_MS` 55 s; one LLM
-  call 30 s (`AGENT_LLM_CALL_TIMEOUT_MS`); a provider with a fallback behind it gets 25 s per round
-  (`AGENT_LLM_ATTEMPT_CAP_MS`) and never the last 20 s (`AGENT_FALLBACK_RESERVE_MS`); no new call
-  with under 4 s left; tool call 25 s; extraction 40 s; max 8 tool turns; chat calls use SDK retries 0;
-  a timed-out provider is skipped for the rest of the request. `vercel.json` sets no maxDuration
-  (not verified against the plan limit). API 500 body: `{error, errorId}`, details only in logs.
-- Timing: `npx vercel logs <url>` lines `agent_turn_timing {json}` (rounds, llmMs, tools, totalMs,
-  outcome; no inputs or text). Slow answers are LLM rounds, not tools.
+- Provider order: active rows by `priority` ascending (`providers/factory.ts`), with fallback. Prod rows seen in
+  the runtime errors on 2026-10-16: `Free LLM API` priority 0 (model `auto` until 2026-10-16 evening, then set to `codestral-latest`: with `auto` the router (FreeLLM VM) first tried dead Google models (404 "no longer available") and Cohere (15 s abort), so a call took 16-23 s and hit our 25 s per-attempt cap; codestral answers in 1-5 s. The router has only one working route, so it can answer 429 "all models exhausted" when rate-limited), `Open AI `
+  priority 1 (`gpt-5.6-luna`, out of credits, HTTP 429), `NVIDIA` priority 2 (timeouts; earlier HTTP 410, see
+  section 8), `Gemini` priority 3 (`models/gemini-3.5-flash-lite`). Gemini URLs use native `:generateContent` for PDFs.
+  A 410 provider is skipped 60 min, an out-of-quota 429 for 15 min (`providerHealth.ts`; cleared when the row is
+  edited). Final error lists the primary's first. Gemini (OpenAI-compat) rejects a history containing tool calls it
+  did not make (bare 400) unless each has a thought signature: `toOpenAIMessages` echoes the stored one and uses the
+  placeholder `skip_thought_signature_validator` for calls from other providers (test `geminiForeignToolCalls`).
+- Time caps in `timeouts.ts` (env-overridable): request 55 s, LLM call 30 s, 25 s per round when a fallback
+  exists, max 8 tool turns. API 500 body `{error, errorId}`. Timing: `agent_turn_timing` lines in `npx vercel logs`.
 - Tools (`tools/`) mirror their REST route's permissions and refuse customers where the route does.
   Write tools are confirm-gated and draft-only (`AgentPendingAction`); no Accounting writes, no
   edit tools. Test prompt/tool fixes in a NEW thread. Threads over 30 days are deleted by cron.
+- `create_invoice` takes `hsnCode` as optional: `agent/hsnLookup.ts` fills a missing code from an active saved
+  billing item of the same name, else the most-used code on earlier invoice lines with the same service name (text
+  before ` - ` / ` – `; tie goes to the newest invoice). A line starting "Extra"/"Additional" with no match takes the
+  code of "Dismantling & Mechanical Fabrication" (business rule from Ferose: extra work is civil/fabrication; 998898
+  on 2026-10-16). No match at all: refusal that lists the earlier codes; a code is never invented. The reply note
+  names every reused code so it can be checked on the confirm card.
 - Reply sanitising: `assistantText.ts` strips special tokens; `stripToolInternals` drops tool names,
   identifiers and "Source:" lines. Never name internal tools/fields; cite app pages.
 - Drive: reads limited to descendants of `GOOGLE_DRIVE_FOLDER_ID` = ZanF_DropBox on
@@ -191,8 +219,11 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
 - Overdue only with a due date strictly before today, IST calendar days (`services/ageing.ts`,
   `isPastDue`); no due date = "no_due_date", aged by bill/issue date. Ageing buckets also there.
 - Payables (`services/payables.ts`) = vendor bills Verified, Approved or Partially paid and not
-  rejected; outstanding = bill total (incl. GST) - vendor payments (vendor payments carry no TDS
-  field, so nothing else is deducted; verified in `payables.ts`). Rejected/cancelled/deleted/paid excluded.
+  rejected; outstanding = bill total (incl. GST) - what its vendor payments settle = cash `amount` +
+  TDS withheld `tdsAmount` (`services/vendorPaymentTds.ts`). Bills carry no TDS themselves, so TDS
+  lives only on `PaymentMade` and counts once; advances carry no TDS. Supplier ledger: a
+  `payment_made` line (cash) + a `tds` line; TDS register: separate `tdsDeducted` section (deducted
+  by us, payable to govt), never mixed into the 26AS totals. Rejected/cancelled/deleted/paid excluded.
   Purchase orders are commitments, not payables. A Rejected bill is "Rejected" only (no write-off
   wording). Deleting a rejected bill = soft delete (status `deleted`, number renamed, audit kept,
   refused with payments/debit notes), admin-only (Super Admin, Owner/Admin).
@@ -214,14 +245,16 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
    idempotent migration if wanted.
 6. Decide whether GSTR-3B 4A ITC (`gstExport.ts`) and site vendor costs (`routes/sites.ts`) should
    count Verified bills (they use Approved+).
-7. Intermittent browser `net::ERR_FAILED` never reached the API (client/network side); if it recurs
-   capture the console line + Network entry. Management user should sign out/in and re-check Orders,
-   Sites, Customers.
-8. Needs real-user click-through: order value auto-fill, Accounting-Lite A-D, vendor advances, DataTable
+7. Needs real-user click-through: order value auto-fill, Accounting-Lite A-D, vendor advances, DataTable
    columns/print, Drive folder creation, reports, multi-product order, order edit.
-9. Data: `RecdDelivery` mostly empty for Ethen's 29 sites; import from
+8. Data: `RecdDelivery` mostly empty for Ethen's 29 sites; import from
    `Material_Delivery_Status_version_1.xlsx` awaits approval.
-10. Gaps: no advance section on vendor bill page; no `requestedByCustomer` badge; `Product.shape` too
-    coarse; no audit log for quotations/POs; agent can invent HSN codes (Zod rejects), no Drive upload,
-    no mic on Firefox/iOS; Expo/RN and Next 16 PostCSS advisories deferred; vendor Vercel MCP
-    connectors cannot see the projects; untried: plain `vercel deploy --prod` (remote build) for the API.
+9. Gaps: no advance section on vendor bill page; no `requestedByCustomer` badge; `Product.shape` too
+    coarse; no audit log for quotations/POs; a brand-new service name still needs the user to give an HSN (section 6), no Drive upload,
+    no mic on Firefox/iOS; Expo/RN and Next 16 PostCSS advisories deferred.
+10. After the logo fix, re-check `pg_stat_statements` that queries selecting `logoDataUrl` stop growing.
+11. Agent provider chain was failing on 2026-10-16 (OpenAI out of credits, FreeLLM router and NVIDIA timing out):
+    top up OpenAI or put a reliable paid provider at priority 0 in Settings > Agent providers. Multi-round tool
+    turns (create invoice) need a fast model. Re-test a proforma with an "Extra work" line in a NEW thread.
+12. `apps/api/.vercel` links the wrong project (`api`, only holds previews): relink to `zan-app-api` (section 5).
+    Delete the BLOCKED deployment `dpl_Hmizg2WR1Jbu6rMdrPhLZnzyzYVY` when convenient (it never took traffic).

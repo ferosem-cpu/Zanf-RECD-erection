@@ -20,11 +20,25 @@ interface TdsRow {
   legacyTdsEntry?: boolean;
 }
 interface CustomerTotal { customerId: string; customerName: string; grossAmount: number; tdsAmount: number; }
+/** TDS we withheld on vendor payments (payable to the government) - separate from the 26AS rows. */
+interface VendorTdsRow {
+  paymentId: string;
+  date: string;
+  supplierId: string;
+  supplierName: string;
+  supplierPan?: string | null;
+  billNumber?: string | null;
+  cashPaid: string;
+  tdsAmount: string;
+  tdsCertificateRef?: string | null;
+}
+interface SupplierTotal { supplierId: string; supplierName: string; supplierPan?: string | null; cashPaid: number; tdsAmount: number; }
 interface TdsResponse {
   fiscalYear: string;
   rows: TdsRow[];
   totalsByCustomer: CustomerTotal[];
   grandTotalTds: number;
+  tdsDeducted?: { rows: VendorTdsRow[]; totalsBySupplier: SupplierTotal[]; grandTotalTds: number };
 }
 
 /** Indian fiscal years from 2024-25 up to the one containing today, newest first. */
@@ -68,12 +82,15 @@ export default function TdsReportPage() {
             ? () =>
                 downloadCsv(
                   `tds-register-${fy}`,
-                  ["Date", "Customer", "Invoice(s)", "Gross", "TDS", "Certificate Ref"],
-                  data.rows.map((r) => [formatDate(r.date), r.customerName, r.invoiceNumbers.join(", "), r.grossAmount, r.tdsAmount, r.tdsCertificateRef ?? ""]),
+                  ["Direction", "Date", "Party", "Invoice(s) / Bill", "Gross / cash", "TDS", "Certificate Ref"],
+                  [
+                    ...data.rows.map((r) => ["Deducted by customer (26AS)", formatDate(r.date), r.customerName, r.invoiceNumbers.join(", "), r.grossAmount, r.tdsAmount, r.tdsCertificateRef ?? ""]),
+                    ...(data.tdsDeducted?.rows ?? []).map((r) => ["Deducted by us (vendor)", formatDate(r.date), r.supplierName, r.billNumber ?? "", r.cashPaid, r.tdsAmount, r.tdsCertificateRef ?? ""]),
+                  ],
                 )
             : undefined
         }
-        exportDisabled={!data || data.rows.length === 0}
+        exportDisabled={!data || (data.rows.length === 0 && !data.tdsDeducted?.rows.length)}
       />
       <ReportPrintHeader company={company} title="TDS Register" subtitle={`FY ${fy} — for 26AS reconciliation`} />
 
@@ -147,6 +164,66 @@ export default function TdsReportPage() {
               </table>
             </div>
           </div>
+
+          {data.tdsDeducted && (
+            <section className="space-y-3 print:break-before-page" data-testid="tds-deducted-section">
+              <div>
+                <h2 className="text-lg font-semibold" style={{ color: "var(--text-heading)" }}>TDS deducted by us (vendor payments)</h2>
+                <p className="text-sm text-gray-500">
+                  Tax we withheld from suppliers, payable to the government. Kept apart from the 26AS figures above; each vendor bill is settled by cash paid + TDS.
+                </p>
+              </div>
+              <div className="kpi-tile max-w-xs">
+                <p className="text-xs text-gray-500">Total TDS deducted</p>
+                <p className="text-xl font-semibold mt-1">{formatINR(data.tdsDeducted.grandTotalTds)}</p>
+              </div>
+              <div className="card overflow-hidden print:border-0 print:shadow-none">
+                <div className="table-scroll">
+                  <table className="w-full border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 print:bg-transparent">
+                        <th className="px-4 py-3">Date</th>
+                        <th className="px-4 py-3">Supplier</th>
+                        <th className="px-4 py-3">PAN</th>
+                        <th className="px-4 py-3">Bill</th>
+                        <th className="px-4 py-3 text-right">Cash paid</th>
+                        <th className="px-4 py-3 text-right">TDS</th>
+                        <th className="px-4 py-3">Certificate ref</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {data.tdsDeducted.rows.map((r) => (
+                        <tr key={r.paymentId}>
+                          <td className="px-4 py-3 whitespace-nowrap">{formatDate(r.date)}</td>
+                          <td className="px-4 py-3">{r.supplierName}</td>
+                          <td className="px-4 py-3 text-gray-500 font-mono text-xs">{r.supplierPan ?? "—"}</td>
+                          <td className="px-4 py-3 text-gray-500 font-mono text-xs">{r.billNumber ?? "—"}</td>
+                          <td className="px-4 py-3 text-right">{formatINR(r.cashPaid)}</td>
+                          <td className="px-4 py-3 text-right font-semibold">{formatINR(r.tdsAmount)}</td>
+                          <td className="px-4 py-3 text-gray-500">{r.tdsCertificateRef ?? "—"}</td>
+                        </tr>
+                      ))}
+                      {data.tdsDeducted.rows.length === 0 && (
+                        <tr><td colSpan={7} className="px-4 py-8 text-center text-gray-400">No TDS deducted on vendor payments in FY {fy}.</td></tr>
+                      )}
+                    </tbody>
+                    {data.tdsDeducted.totalsBySupplier.length > 0 && (
+                      <tfoot>
+                        {data.tdsDeducted.totalsBySupplier.map((s) => (
+                          <tr key={s.supplierId} className="bg-gray-50 text-xs font-medium print:bg-transparent">
+                            <td className="px-4 py-2" colSpan={4}>Total — {s.supplierName}</td>
+                            <td className="px-4 py-2 text-right">{formatINR(s.cashPaid)}</td>
+                            <td className="px-4 py-2 text-right">{formatINR(s.tdsAmount)}</td>
+                            <td />
+                          </tr>
+                        ))}
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              </div>
+            </section>
+          )}
         </>
       )}
     </div>

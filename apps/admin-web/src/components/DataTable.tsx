@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/apiClient";
+import { apiAssetUrl, printWhenReady } from "@/lib/images";
 
 interface Company {
   legalName?: string | null;
@@ -12,7 +13,7 @@ interface Company {
   website?: string | null;
   phone?: string | null;
   documentFooterNote?: string | null;
-  logoDataUrl?: string | null;
+  logoUrl?: string | null;
 }
 
 /** "City, Pin Code" / "City" / "Pin Code" - whichever parts are set. */
@@ -64,6 +65,8 @@ interface DataTableProps<T> {
   emptyMessage?: string;
   /** Render prop for the mobile card list, given the same filtered rows the desktop table shows. */
   children?: (filteredRows: T[]) => React.ReactNode;
+  /** Makes desktop rows clickable and keyboard-activatable (Enter/Space). Clicks on links/buttons inside a row are ignored. */
+  onRowClick?: (row: T) => void;
 }
 
 function defaultVisibility<T>(columns: DataTableColumn<T>[]): Record<string, boolean> {
@@ -91,7 +94,7 @@ function loadVisibility<T>(storageKey: string, columns: DataTableColumn<T>[]): R
   }
 }
 
-export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMessage = "No records.", children }: DataTableProps<T>) {
+export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMessage = "No records.", children, onRowClick }: DataTableProps<T>) {
   const [visible, setVisible] = useState<Record<string, boolean>>(() => loadVisibility(storageKey, columns));
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [colMenuOpen, setColMenuOpen] = useState(false);
@@ -202,7 +205,7 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
           </button>
         )}
         <button
-          onClick={() => window.print()}
+          onClick={() => void printWhenReady()}
           className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -296,7 +299,26 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredRows.map((row) => (
-                <tr key={rowKey(row)} className="hover:bg-gray-50/60">
+                <tr
+                  key={rowKey(row)}
+                  className={`hover:bg-gray-50/60 ${onRowClick ? "cursor-pointer focus:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset" : ""}`}
+                  {...(onRowClick
+                    ? {
+                        tabIndex: 0,
+                        onClick: (e: React.MouseEvent) => {
+                          if ((e.target as HTMLElement).closest("a,button,input,select,textarea")) return;
+                          onRowClick(row);
+                        },
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.target !== e.currentTarget) return;
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onRowClick(row);
+                          }
+                        },
+                      }
+                    : {})}
+                >
                   {visibleColumns.map((c) => (
                     <td
                       key={c.key}
@@ -324,7 +346,7 @@ export function DataTable<T>({ storageKey, title, columns, rows, rowKey, emptyMe
       <div className="hidden print:block print-doc datatable-print">
         <div className="print-header">
           <div className="print-co-block">
-            {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
+            {company?.logoUrl ? <img src={apiAssetUrl(company.logoUrl)!} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
             <div className="print-co-name">{company?.legalName ?? "Your Company"}</div>
             <address>
               {company?.address}

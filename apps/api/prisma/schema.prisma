@@ -9,7 +9,8 @@
 // live in packages/shared/src/constants.ts and must match the seed data.
 
 generator client {
-  provider      = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["omitApi"]
   binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
@@ -98,6 +99,7 @@ model User {
   billsApproved        Bill[]             @relation("BillApprover")
   billAuditLogs        BillAuditLog[]     @relation("BillAuditActor")
   paymentsMade         PaymentMade[]      @relation("PaymentMadeRecorder")
+  paymentMadeAttachments PaymentMadeAttachment[] @relation("PaymentMadeAttachmentUploader")
   expensesRecorded     Expense[]          @relation("ExpenseRecorder")
   invoiceEdits         InvoiceEditLog[]   @relation("InvoiceEditor")
   backupsTriggered     BackupLog[]        @relation("BackupTriggeredBy")
@@ -919,6 +921,11 @@ model Invoice {
   createdBy      User      @relation("InvoiceCreator", fields: [createdById], references: [id])
   cancelledAt    DateTime?
   cancelReason   String?
+  /// Set on a tax invoice created via "Convert to tax invoice": the proforma it came from.
+  /// Unique, so a proforma can be converted at most once.
+  sourceProformaId String?  @unique
+  sourceProforma   Invoice? @relation("ProformaConversion", fields: [sourceProformaId], references: [id], onDelete: SetNull)
+  convertedTo      Invoice? @relation("ProformaConversion")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -1242,7 +1249,14 @@ model PaymentMade {
   bill         Bill?     @relation(fields: [billId], references: [id])
   supplierId   String
   supplier     Supplier  @relation(fields: [supplierId], references: [id])
+  /// Cash actually paid to the supplier.
   amount       Decimal   @db.Decimal(12, 2)
+  /// TDS we withheld from the supplier on this payment (we remit it to the government) -
+  /// mirrors PaymentReceived.tdsAmount. Settles the bill alongside the cash: bill balance =
+  /// total - sum(amount + tdsAmount) (see services/vendorPaymentTds.ts). Only allowed on a
+  /// bill-linked payment, never on an advance. Nullable for the additive migration; null = 0.
+  tdsAmount    Decimal?  @db.Decimal(12, 2) @default(0)
+  tdsCertificateRef String?
   method       String
   reference    String?
   paidDate     DateTime
@@ -1251,7 +1265,27 @@ model PaymentMade {
   recordedBy   User      @relation("PaymentMadeRecorder", fields: [recordedById], references: [id])
   createdAt    DateTime  @default(now())
 
-  orderTags PaymentOrderTag[]
+  orderTags   PaymentOrderTag[]
+  attachments PaymentMadeAttachment[]
+}
+
+/// Supporting documents for a vendor payment (bank advice, cheque scan, TDS certificate).
+/// Same storage convention as Bill.attachmentUrl (base64 data-URL in the row, client-side
+/// downscaled, ~4MB cap). dataUrl is omitted from every query by default (lib/prisma.ts) so
+/// lists never drag file bytes over the wire; only the download endpoint reads it.
+model PaymentMadeAttachment {
+  id            String      @id @default(cuid())
+  paymentMadeId String
+  paymentMade   PaymentMade @relation(fields: [paymentMadeId], references: [id], onDelete: Cascade)
+  fileName      String
+  mimeType      String
+  sizeBytes     Int
+  dataUrl       String
+  uploadedById  String
+  uploadedBy    User        @relation("PaymentMadeAttachmentUploader", fields: [uploadedById], references: [id])
+  createdAt     DateTime    @default(now())
+
+  @@index([paymentMadeId])
 }
 
 /// Optional tag linking a vendor payment/advance to the order(s) the work was for. Lets an

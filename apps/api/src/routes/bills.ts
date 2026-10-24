@@ -18,20 +18,42 @@ import {
   billExtractRequestSchema,
   paymentMadeCreateSchema,
   paymentMadeGeneralCreateSchema,
+  paymentMadeUpdateSchema,
+  paymentMadeAttachmentInputSchema,
+  PAYMENT_MADE_MAX_ATTACHMENTS,
   advanceApplicationCreateSchema,
 } from "@recd/shared";
+import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, requireRole, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
 import { computeDocumentTotals } from "../services/taxCalc";
 import { extractBillFromFile, findSupplierCandidates, ExtractionUnavailableError } from "../agent/billExtraction";
 import { archivedBillNumber, duplicateBillNumberMessage, rejectedBillDeleteBlocker } from "../services/billDelete";
+import { billPaymentTotals, planVendorPayment, vendorTdsEditError } from "../services/vendorPaymentTds";
+import { attachmentCreateRows, attachmentMetaSelect, attachmentsError, contentDisposition, decodeDataUrl } from "../services/paymentMadeAttachments";
 
 export const billsRouter = Router();
 billsRouter.use(authenticate);
 
 const CAPTURE = [PERMISSION_KEY.RECORD_VENDOR_INVOICE, PERMISSION_KEY.APPROVE_VENDOR_INVOICE];
 const APPROVE = PERMISSION_KEY.APPROVE_VENDOR_INVOICE;
+/** Who can see vendor payments (same as GET /bills/payments has always used). */
+const VIEW_PAYMENTS = [PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.APPROVE_VENDOR_INVOICE, PERMISSION_KEY.VIEW_LEDGERS];
+
+/** amountPaid = cash, tdsDeducted = TDS withheld, balance = total - (cash + TDS). */
+function billPaymentFigures(total: Prisma.Decimal, payments: { amount: Prisma.Decimal; tdsAmount: Prisma.Decimal | null }[]) {
+  const { cash, tds, settled } = billPaymentTotals(payments);
+  return { amountPaid: cash, tdsDeducted: tds, amountSettled: settled, balance: new Prisma.Decimal(total).minus(settled) };
+}
+
+const paymentListInclude = {
+  supplier: { select: { id: true, name: true } },
+  bill: { select: { id: true, billNumber: true } },
+  orderTags: { include: { order: { select: { id: true, orderNumber: true } } } },
+  // Metadata only - the file bytes (dataUrl) are omitted globally in lib/prisma.ts.
+  attachments: { select: attachmentMetaSelect, orderBy: { createdAt: "asc" as const } },
+};
 
 export type BillLineInput = { description: string; hsnCode?: string | null; quantity: number; unitPrice: number; taxRatePct: number };
 type BillAllocationInput = { siteId?: string | null; orderId?: string | null; invoiceId?: string | null; amount: number; notes?: string | null };
@@ -123,17 +145,16 @@ billsRouter.get("/", requirePermission(...CAPTURE), async (req, res) => {
 
   const bills = await prisma.bill.findMany({
     where,
+    // The scan (base64) and raw AI extraction are detail-only - never drag them through a list.
+    omit: { attachmentUrl: true, extractionRaw: true },
     include: {
       supplier: { select: { id: true, name: true } },
-      payments: { select: { amount: true } },
+      payments: { select: { amount: true, tdsAmount: true } },
       allocations: { include: allocationDetail },
     },
     orderBy: { createdAt: "desc" },
   });
-  const rows = bills.map((b) => {
-    const paid = b.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-    return { ...b, amountPaid: paid, balance: new Prisma.Decimal(b.total).minus(paid), payments: undefined };
-  });
+  const rows = bills.map((b) => ({ ...b, ...billPaymentFigures(b.total, b.payments), payments: undefined }));
   res.json(rows);
 });
 
@@ -234,20 +255,131 @@ billsRouter.post("/extract", requirePermission(...CAPTURE), async (req, res) => 
 // All vendor payments (and standing advances) across suppliers/bills - powers the Vendor
 // Payments admin page, mirroring GET /payments for customers. Registered before GET /:id so
 // "/bills/payments" isn't swallowed by the :id param route.
-billsRouter.get("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS, PERMISSION_KEY.APPROVE_VENDOR_INVOICE, PERMISSION_KEY.VIEW_LEDGERS), async (req, res) => {
+billsRouter.get("/payments", requirePermission(...VIEW_PAYMENTS), async (req, res) => {
   const where: Record<string, unknown> = {};
   if (typeof req.query.supplierId === "string") where.supplierId = req.query.supplierId;
 
   const payments = await prisma.paymentMade.findMany({
     where,
-    include: {
-      supplier: { select: { id: true, name: true } },
-      bill: { select: { id: true, billNumber: true } },
-      orderTags: { include: { order: { select: { id: true, orderNumber: true } } } },
-    },
+    include: paymentListInclude,
     orderBy: { paidDate: "desc" },
   });
   res.json(payments);
+});
+
+billsRouter.get("/payments/:id", requirePermission(...VIEW_PAYMENTS), async (req, res) => {
+  const payment = await prisma.paymentMade.findUnique({ where: { id: asString(req.params.id) }, include: paymentListInclude });
+  if (!payment) return res.status(404).json({ error: "Payment not found" });
+  res.json(payment);
+});
+
+// The only route that reads attachment bytes. ?download=1 forces a download; otherwise images
+// and PDFs open inline in the browser. Private cache: finance documents, behind auth.
+billsRouter.get("/payments/:id/attachments/:attachmentId", requirePermission(...VIEW_PAYMENTS), async (req, res) => {
+  const attachment = await prisma.paymentMadeAttachment.findUnique({
+    where: { id: asString(req.params.attachmentId) },
+    omit: { dataUrl: false },
+  });
+  if (!attachment || attachment.paymentMadeId !== asString(req.params.id)) return res.status(404).json({ error: "Attachment not found" });
+  res.setHeader("Content-Type", attachment.mimeType);
+  res.setHeader("Content-Disposition", contentDisposition(attachment.fileName, req.query.download !== "1"));
+  res.setHeader("Cache-Control", "private, max-age=300");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.send(decodeDataUrl(attachment.dataUrl));
+});
+
+// Add attachments to an existing payment - one file per request keeps each body under the
+// hosting request-size limit, so the UI uploads files one by one after the payment is saved.
+billsRouter.post("/payments/:id/attachments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  const parsed = z.object({ attachments: z.array(paymentMadeAttachmentInputSchema).min(1).max(PAYMENT_MADE_MAX_ATTACHMENTS) }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const payment = await prisma.paymentMade.findUnique({ where: { id }, include: { _count: { select: { attachments: true } } } });
+  if (!payment) return res.status(404).json({ error: "Payment not found" });
+  const err = attachmentsError(parsed.data.attachments, payment._count.attachments);
+  if (err) return res.status(400).json({ error: err });
+  await prisma.paymentMadeAttachment.createMany({
+    data: attachmentCreateRows(parsed.data.attachments, req.auth!.userId).map((a) => ({ ...a, paymentMadeId: id })),
+  });
+  const updated = await prisma.paymentMade.findUnique({ where: { id }, include: paymentListInclude });
+  res.status(201).json(updated);
+});
+
+billsRouter.delete("/payments/:id/attachments/:attachmentId", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS), async (req, res) => {
+  const { count } = await prisma.paymentMadeAttachment.deleteMany({
+    where: { id: asString(req.params.attachmentId), paymentMadeId: asString(req.params.id) },
+  });
+  if (count === 0) return res.status(404).json({ error: "Attachment not found" });
+  res.status(204).end();
+});
+
+// Edit a recorded vendor payment: method/reference/date/notes, TDS (+ certificate ref) and
+// attachments. The cash amount, supplier and bill stay fixed (they drive settlement and advance
+// splitting - delete-and-re-record is not offered either). A TDS change is re-validated against
+// the bill, re-derives the bill's status and is written to the bill's audit trail.
+billsRouter.patch("/payments/:id", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  const parsed = paymentMadeUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  const data = parsed.data;
+
+  const payment = await prisma.paymentMade.findUnique({
+    where: { id },
+    include: { bill: { include: { payments: { select: { id: true, amount: true, tdsAmount: true } } } }, attachments: { select: { id: true } } },
+  });
+  if (!payment) return res.status(404).json({ error: "Payment not found" });
+
+  const oldTds = new Prisma.Decimal(payment.tdsAmount ?? 0);
+  const newTds = data.tdsAmount !== undefined ? new Prisma.Decimal(String(data.tdsAmount)) : oldTds;
+  const tdsChanged = !newTds.equals(oldTds);
+  if (tdsChanged) {
+    const others = payment.bill ? payment.bill.payments.filter((p) => p.id !== id) : [];
+    const err = vendorTdsEditError({
+      billTotal: payment.bill ? payment.bill.total : null,
+      otherSettled: billPaymentTotals(others).settled,
+      cash: payment.amount,
+      newTds,
+    });
+    if (err) return res.status(400).json({ error: err });
+  }
+
+  const removeIds = (data.removeAttachmentIds ?? []).filter((a) => payment.attachments.some((x) => x.id === a));
+  const incoming = data.attachments ?? [];
+  const attachErr = attachmentsError(incoming, payment.attachments.length - removeIds.length);
+  if (attachErr) return res.status(400).json({ error: attachErr });
+
+  const updated = await prisma.$transaction(async (tx) => {
+    if (removeIds.length) await tx.paymentMadeAttachment.deleteMany({ where: { id: { in: removeIds }, paymentMadeId: id } });
+    const row = await tx.paymentMade.update({
+      where: { id },
+      data: {
+        method: data.method,
+        reference: data.reference,
+        paidDate: data.paidDate ? new Date(data.paidDate) : undefined,
+        notes: data.notes,
+        tdsAmount: tdsChanged ? newTds : undefined,
+        tdsCertificateRef: data.tdsCertificateRef,
+        attachments: incoming.length ? { create: attachmentCreateRows(incoming, req.auth!.userId) } : undefined,
+      },
+      include: paymentListInclude,
+    });
+    if (payment.bill && tdsChanged) {
+      const bill = payment.bill;
+      const settled = billPaymentTotals(bill.payments.map((p) => (p.id === id ? { ...p, tdsAmount: newTds } : p))).settled;
+      const newStatus = deriveBillStatus(new Prisma.Decimal(bill.total), settled);
+      await tx.bill.update({ where: { id: bill.id }, data: { status: newStatus } });
+      await tx.billAuditLog.create({
+        data: {
+          billId: bill.id,
+          actorId: req.auth!.userId,
+          action: BILL_AUDIT_ACTION.PAYMENT_EDITED,
+          summary: `Payment of Rs ${new Prisma.Decimal(payment.amount).toFixed(2)} edited: TDS Rs ${oldTds.toFixed(2)} -> Rs ${newTds.toFixed(2)}; Status: ${bill.status} -> ${newStatus}`,
+        },
+      });
+    }
+    return row;
+  });
+  res.json(updated);
 });
 
 // --- Detail / edit -----------------------------------------------------------
@@ -255,8 +387,7 @@ billsRouter.get("/:id", requirePermission(...CAPTURE), async (req: Authenticated
   const id = asString(req.params.id);
   const bill = await prisma.bill.findUnique({ where: { id }, include: billDetailInclude });
   if (!bill) return res.status(404).json({ error: "Bill not found" });
-  const paid = bill.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
-  res.json({ ...bill, amountPaid: paid, balance: new Prisma.Decimal(bill.total).minus(paid) });
+  res.json({ ...bill, ...billPaymentFigures(bill.total, bill.payments) });
 });
 
 billsRouter.patch("/:id", requirePermission(...CAPTURE), async (req: AuthenticatedRequest, res) => {
@@ -460,27 +591,33 @@ billsRouter.post("/:id/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMEN
   if (![BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID].includes(bill.status as never)) {
     return res.status(400).json({ error: "Only an approved (or partially paid) vendor invoice can receive payments" });
   }
-  const paidBefore = bill.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+  const paidBefore = billPaymentTotals(bill.payments).settled;
   const outstanding = new Prisma.Decimal(bill.total).minus(paidBefore);
   const amount = new Prisma.Decimal(String(data.amount));
-  if (amount.greaterThan(outstanding)) {
-    return res.status(400).json({ error: "Payment exceeds the outstanding balance" });
-  }
+  // Strict route: cash + TDS must fit in the outstanding balance (no advance split here).
+  const plan = planVendorPayment({ outstanding, cash: amount, tds: data.tdsAmount, allowAdvance: false });
+  if (!plan.ok) return res.status(400).json({ error: plan.error });
+  const attachments = data.attachments ?? [];
+  const attachErr = attachmentsError(attachments, 0);
+  if (attachErr) return res.status(400).json({ error: attachErr });
 
   const result = await prisma.$transaction(async (tx) => {
-    await tx.paymentMade.create({
+    const payment = await tx.paymentMade.create({
       data: {
         billId: bill.id,
         supplierId: bill.supplierId,
         amount,
+        tdsAmount: plan.tds,
+        tdsCertificateRef: data.tdsCertificateRef,
         method: data.method,
         reference: data.reference,
         paidDate: data.paidDate ? new Date(data.paidDate) : new Date(),
         notes: data.notes,
         recordedById: req.auth!.userId,
+        attachments: attachments.length ? { create: attachmentCreateRows(attachments, req.auth!.userId) } : undefined,
       },
     });
-    const newPaid = paidBefore.plus(amount);
+    const newPaid = paidBefore.plus(amount).plus(plan.tds);
     const newStatus = deriveBillStatus(new Prisma.Decimal(bill.total), newPaid);
     const updated = await tx.bill.update({ where: { id: bill.id }, data: { status: newStatus } });
     await tx.billAuditLog.create({
@@ -488,10 +625,10 @@ billsRouter.post("/:id/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMEN
         billId: id,
         actorId: req.auth!.userId,
         action: BILL_AUDIT_ACTION.PAYMENT_RECORDED,
-        summary: `Payment recorded: Rs ${amount.toFixed(2)} (${data.method}); Status: ${bill.status} -> ${newStatus}`,
+        summary: `Payment recorded: Rs ${amount.toFixed(2)} (${data.method})${plan.tds.greaterThan(0) ? ` + TDS Rs ${plan.tds.toFixed(2)}` : ""}; Status: ${bill.status} -> ${newStatus}`,
       },
     });
-    return updated;
+    return { ...updated, paymentId: payment.id };
   });
   res.status(201).json(result);
 });
@@ -521,9 +658,13 @@ billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
 
   const amount = new Prisma.Decimal(String(data.amount));
   const paidDate = data.paidDate ? new Date(data.paidDate) : new Date();
+  const attachments = data.attachments ?? [];
+  const attachErr = attachmentsError(attachments, 0);
+  if (attachErr) return res.status(400).json({ error: attachErr });
+  const attachmentCreate = attachments.length ? { create: attachmentCreateRows(attachments, req.auth!.userId) } : undefined;
 
   if (!data.billId) {
-    // Pure advance - no bill to validate against.
+    // Pure advance - no bill to validate against, and no TDS (the schema refuses TDS without a bill).
     const created = await prisma.paymentMade.create({
       data: {
         supplierId: data.supplierId,
@@ -534,10 +675,11 @@ billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
         notes: data.notes,
         recordedById: req.auth!.userId,
         orderTags: orderIds.length ? { create: orderIds.map((orderId) => ({ orderId })) } : undefined,
+        attachments: attachmentCreate,
       },
-      include: { orderTags: { include: { order: { select: { id: true, orderNumber: true } } } } },
+      include: paymentListInclude,
     });
-    return res.status(201).json(created);
+    return res.status(201).json({ ...created, paymentId: created.id, advancePaymentId: created.id });
   }
 
   const billId = data.billId;
@@ -547,28 +689,38 @@ billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
   if (![BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID].includes(bill.status as never)) {
     return res.status(400).json({ error: "Only an approved (or partially paid) vendor invoice can receive payments" });
   }
-  const paidBefore = bill.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+  const paidBefore = billPaymentTotals(bill.payments).settled;
   const outstanding = new Prisma.Decimal(bill.total).minus(paidBefore);
-  const appliedAmount = Prisma.Decimal.min(amount, outstanding.isNegative() ? new Prisma.Decimal(0) : outstanding);
-  const advanceAmount = amount.minus(appliedAmount);
+  // TDS settles the bill first-class; cash fills the rest and any excess cash becomes an advance.
+  const plan = planVendorPayment({ outstanding, cash: amount, tds: data.tdsAmount });
+  if (!plan.ok) return res.status(400).json({ error: plan.error });
+  const { appliedCash: appliedAmount, advanceCash: advanceAmount, tds } = plan;
+  const tdsNote = tds.greaterThan(0) ? ` + TDS Rs ${tds.toFixed(2)}` : "";
 
   const result = await prisma.$transaction(async (tx) => {
-    if (appliedAmount.greaterThan(0)) {
-      await tx.paymentMade.create({
+    let paymentId: string | null = null;
+    let advancePaymentId: string | null = null;
+    // A bill row is needed whenever cash or TDS lands on the bill (TDS-only rows are allowed).
+    if (appliedAmount.greaterThan(0) || tds.greaterThan(0)) {
+      const row = await tx.paymentMade.create({
         data: {
           billId,
           supplierId: data.supplierId,
           amount: appliedAmount,
+          tdsAmount: tds,
+          tdsCertificateRef: data.tdsCertificateRef,
           method: data.method,
           reference: data.reference,
           paidDate,
           notes: data.notes,
           recordedById: req.auth!.userId,
+          attachments: attachmentCreate,
         },
       });
+      paymentId = row.id;
     }
-    if (advanceAmount.greaterThan(0.01)) {
-      await tx.paymentMade.create({
+    if (advanceAmount.greaterThan(0)) {
+      const row = await tx.paymentMade.create({
         data: {
           supplierId: data.supplierId,
           amount: advanceAmount,
@@ -578,21 +730,24 @@ billsRouter.post("/payments", requirePermission(PERMISSION_KEY.RECORD_PAYMENTS),
           notes: data.notes ? `${data.notes} (advance)` : "Advance (paid alongside a bill payment)",
           recordedById: req.auth!.userId,
           orderTags: orderIds.length ? { create: orderIds.map((orderId) => ({ orderId })) } : undefined,
+          // Documents go on the bill row; only when nothing landed on the bill do they sit here.
+          attachments: paymentId ? undefined : attachmentCreate,
         },
       });
+      advancePaymentId = row.id;
     }
-    const newPaid = paidBefore.plus(appliedAmount);
+    const newPaid = paidBefore.plus(appliedAmount).plus(tds);
     const newStatus = deriveBillStatus(new Prisma.Decimal(bill.total), newPaid);
     const updated = await tx.bill.update({ where: { id: billId }, data: { status: newStatus } });
-    const summary = advanceAmount.greaterThan(0.01)
-      ? `Payment recorded: Rs ${appliedAmount.toFixed(2)} (${data.method}) against this bill, Rs ${advanceAmount.toFixed(2)} held as a supplier advance; Status: ${bill.status} -> ${newStatus}`
-      : `Payment recorded: Rs ${appliedAmount.toFixed(2)} (${data.method}); Status: ${bill.status} -> ${newStatus}`;
+    const summary = advanceAmount.greaterThan(0)
+      ? `Payment recorded: Rs ${appliedAmount.toFixed(2)} (${data.method})${tdsNote} against this bill, Rs ${advanceAmount.toFixed(2)} held as a supplier advance; Status: ${bill.status} -> ${newStatus}`
+      : `Payment recorded: Rs ${appliedAmount.toFixed(2)} (${data.method})${tdsNote}; Status: ${bill.status} -> ${newStatus}`;
     await tx.billAuditLog.create({
       data: { billId, actorId: req.auth!.userId, action: BILL_AUDIT_ACTION.PAYMENT_RECORDED, summary },
     });
-    return updated;
+    return { bill: updated, paymentId: paymentId ?? advancePaymentId, advancePaymentId };
   });
-  res.status(201).json({ ...result, advanceAmount });
+  res.status(201).json({ ...result.bill, advanceAmount, tdsAmount: tds, paymentId: result.paymentId, advancePaymentId: result.advancePaymentId });
 });
 
 // Apply part or all of an existing, still-unallocated supplier advance (a PaymentMade with
@@ -618,7 +773,8 @@ billsRouter.post("/:id/apply-advance", requirePermission(PERMISSION_KEY.RECORD_P
   if (advance.billId) return res.status(400).json({ error: "This payment is already applied to a bill" });
   if (advance.supplierId !== bill.supplierId) return res.status(400).json({ error: "Advance does not belong to this bill's supplier" });
 
-  const paidBefore = bill.payments.reduce((s, p) => s.plus(p.amount), new Prisma.Decimal(0));
+  // Settled = cash + TDS (vendorPaymentTds.ts). Advances never carry TDS, so the applied part is cash only.
+  const paidBefore = billPaymentTotals(bill.payments).settled;
   const outstanding = new Prisma.Decimal(bill.total).minus(paidBefore);
   const applyAmount = new Prisma.Decimal(String(data.amount));
   if (applyAmount.greaterThan(outstanding.plus(0.01))) {

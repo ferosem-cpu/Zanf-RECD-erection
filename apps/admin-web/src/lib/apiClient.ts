@@ -155,7 +155,23 @@ export function warmUpApi(): void {
 // Like `api()` above, but for an endpoint that responds with a file (Content-Disposition:
 // attachment) rather than a JSON envelope - e.g. POST /backup/run. Triggers a normal browser
 // download via a Blob, same mechanism as lib/csvExport.ts's downloadCsv.
-export async function downloadFileFromApi(path: string, options: RequestInit = {}): Promise<void> {
+export async function downloadFileFromApi(path: string, options: RequestInit = {}, filenameOverride?: string): Promise<void> {
+  const res = await fetchFile(path, options);
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = filenameOverride || (match ? match[1] : "download");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function fetchFile(path: string, options: RequestInit = {}): Promise<Response> {
   const token = getToken();
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
@@ -169,16 +185,21 @@ export async function downloadFileFromApi(path: string, options: RequestInit = {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ? JSON.stringify(body.error) : `Request failed: ${res.status}`);
   }
-  const disposition = res.headers.get("Content-Disposition") || "";
-  const match = disposition.match(/filename="?([^"]+)"?/);
-  const filename = match ? match[1] : "download";
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  return res;
+}
+
+/** Opens an authenticated file endpoint (image/PDF) in a new tab. The tab is opened before the
+ * fetch so popup blockers treat it as part of the click. */
+export async function openFileFromApi(path: string): Promise<void> {
+  const tab = window.open("", "_blank");
+  try {
+    const blob = await (await fetchFile(path)).blob();
+    const url = URL.createObjectURL(blob);
+    if (tab) tab.location.href = url;
+    else window.location.href = url;
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (err) {
+    tab?.close();
+    throw err;
+  }
 }

@@ -10,10 +10,11 @@ import { splitPayment } from "../../services/paymentSplit";
 import { settledFromAllocations } from "../../services/settlement";
 import { ageingBucket, documentAgeing, emptyAgeing } from "../../services/ageing";
 import {
-  PAYABLE_BILL_STATUSES, AWAITING_VERIFICATION_BILL_STATUSES, DEAD_BILL_STATUSES, isPayableStatus,
+  PAYABLE_BILL_STATUSES, AWAITING_VERIFICATION_BILL_STATUSES, DEAD_BILL_STATUSES, isPayableStatus, billSettled,
   summarizePayables as summarizePayablesShared, type PayableBillRow,
 } from "../../services/payables";
 import { LIST_LIMIT, listMeta } from "../listResult";
+import { INVOICE_SITE_RULE, invoiceSiteInfo, invoiceSiteSelect } from "../invoiceSite";
 import { formatInr } from "../formatInr";
 import { OPEN_PO_STATUSES, exclGstPortion, isoDateIST, istDayStart, sumMoney, normalizeLabel, resolveLookupFilter, validValuesList } from "./zanAppReadTools";
 import type { AgentTool, AgentAuthContext } from "./types";
@@ -76,8 +77,9 @@ const PLACED_PO_STATUSES: string[] = [PO_STATUS.ISSUED, PO_STATUS.PARTIALLY_RECE
 
 export const PAYABLES_BASIS =
   "Payables = vendor invoices (bills) in status verified, approved or partially_paid; outstanding = bill total (incl. GST) " +
-  "minus vendor payments recorded against the bill - the same shared rule as the Finance dashboard 'Outstanding payables' " +
-  "and the Payables ageing report (services/payables.ts). Vendor payments carry no TDS field, so no TDS is deducted; debit " +
+  "minus what the vendor payments recorded against the bill settle (cash paid + TDS we withheld; 'paid' = that settled " +
+  "figure) - the same shared rule as the Finance dashboard 'Outstanding payables' and the Payables ageing report " +
+  "(services/payables.ts, services/vendorPaymentTds.ts). Bills themselves carry no TDS, so nothing is deducted twice; debit " +
   "notes are not netted (shown separately). Uploaded (not yet verified) bills are listed separately; rejected, cancelled, " +
   "deleted and paid bills are excluded. Open purchase orders are commitments, not payables, and are listed separately.";
 
@@ -187,7 +189,7 @@ const getPayables: AgentTool = {
         where: { ...bySupplier, status: { notIn: DEAD_BILL_STATUSES } },
         include: {
           supplier: { select: { name: true } },
-          payments: { select: { amount: true } },
+          payments: { select: { amount: true, tdsAmount: true } },
           debitNotes: { select: { amount: true } },
         },
         orderBy: { billDate: "asc" },
@@ -209,7 +211,7 @@ const getPayables: AgentTool = {
     const billRows = liveBills.map((b) => ({
       id: b.id, billNumber: b.billNumber, supplierId: b.supplierId, supplier: b.supplier.name, status: b.status,
       billDate: b.billDate, dueDate: b.dueDate, total: money(b.total),
-      paid: sumMoney(b.payments.map((p) => money(p.amount))),
+      paid: billSettled(b.payments),
       debitNotes: sumMoney(b.debitNotes.map((d) => money(d.amount))),
     }));
     const summary = summarizePayables(billRows, now);
@@ -361,12 +363,14 @@ const searchVendorBills: AgentTool = {
         ...(supplierIds ? { supplierId: { in: supplierIds } } : {}),
         ...(billNumber ? { billNumber: { contains: billNumber, mode: "insensitive" } } : {}),
       },
-      include: { supplier: { select: { name: true } }, payments: { select: { amount: true } } },
+      include: { supplier: { select: { name: true } }, payments: { select: { amount: true, tdsAmount: true } } },
       orderBy: { billDate: "desc" },
     });
     const rows = bills
       .map((b) => {
-        const paid = sumMoney(b.payments.map((p) => money(p.amount)));
+        // Settled = cash + TDS withheld (services/vendorPaymentTds.ts); tdsDeducted shown separately.
+        const paid = billSettled(b.payments);
+        const tdsDeducted = sumMoney(b.payments.map((p) => money(p.tdsAmount)));
         const balance = isPayableStatus(b.status) ? Math.max(sumMoney([money(b.total), -paid]), 0) : 0;
         const unpaid = isPayableStatus(b.status) && balance > 0;
         const a = documentAgeing(b.dueDate, b.billDate, now);
@@ -374,7 +378,7 @@ const searchVendorBills: AgentTool = {
         return {
           id: b.id, billNumber: b.billNumber, supplier: b.supplier.name, status: b.status,
           billDate: isoDateIST(b.billDate), dueDate: b.dueDate ? isoDateIST(b.dueDate) : null,
-          subtotal: money(b.subtotal), taxAmount: money(b.taxAmount), total: money(b.total), paid, balance,
+          subtotal: money(b.subtotal), taxAmount: money(b.taxAmount), total: money(b.total), paid, ...(tdsDeducted > 0 ? { tdsDeducted } : {}), balance,
           // Only unpaid bills carry a due status; no due date => "no_due_date", never overdue.
           dueStatus: unpaid ? a.dueStatus : null, overdue, daysOverdue: overdue ? (a.daysPastDue as number) : 0,
           ...(unpaid && a.dueStatus === "no_due_date" ? { ageDays: a.ageDays, ageingBasis: a.ageingBasis } : {}),
@@ -440,6 +444,11 @@ export interface ReceivableInvoiceRow {
   total: number;
   creditNoteTotal: number;
   settled: number;
+  /** From invoiceSiteInfo - which site the invoice is for (see agent/invoiceSite.ts). */
+  orderNumber?: string | null;
+  site?: { id: string; siteName: string | null; address: string | null } | null;
+  siteFromLineDescription?: string;
+  siteSource?: "order" | "line_description" | null;
 }
 
 export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, listLimit = LIST_LIMIT) {
@@ -486,7 +495,7 @@ export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, li
     byDocType: { tax_invoice: byDocType(INVOICE_DOC_TYPE.TAX_INVOICE), proforma: byDocType(INVOICE_DOC_TYPE.PROFORMA) },
     ageingInclGst: ageing,
     overdueInvoices: overdueList.slice(0, 50).map((r) => ({
-      id: r.id, invoiceNumber: r.invoiceNumber, customer: r.customer,
+      id: r.id, invoiceNumber: r.invoiceNumber, customer: r.customer, ...siteOf(r),
       dueDate: isoDateIST(r.dueDate!), balanceInclGst: r.outstandingInclGst, balanceExclGst: r.outstandingExclGst, daysOverdue: r.daysPastDue,
     })),
     overdueListComplete: overdueList.length <= 50,
@@ -495,13 +504,24 @@ export function summarizeReceivables(rows: ReceivableInvoiceRow[], now: Date, li
       .sort((a, b) => b.outstandingInclGst - a.outstandingInclGst || a.customer.localeCompare(b.customer)),
     complete: listed.length <= listLimit,
     invoices: listed.slice(0, listLimit).map((r) => ({
-      id: r.id, invoiceNumber: r.invoiceNumber, docType: r.docType, customer: r.customer,
+      id: r.id, invoiceNumber: r.invoiceNumber, docType: r.docType, customer: r.customer, ...siteOf(r),
       issueDate: isoDateIST(r.issueDate), dueDate: r.dueDate ? isoDateIST(r.dueDate) : null,
       total: r.total, creditNoteTotal: r.creditNoteTotal, settled: r.settled,
       outstandingInclGst: r.outstandingInclGst, outstandingExclGst: r.outstandingExclGst, dueStatus: r.dueStatus,
       daysPastDue: r.daysPastDue, ageingBasis: r.ageingBasis,
     })),
     overdueRule: OVERDUE_RULE,
+    siteRule: INVOICE_SITE_RULE,
+  };
+}
+
+/** Site fields of one receivable row, passed through to the model unchanged. */
+function siteOf(r: ReceivableInvoiceRow) {
+  return {
+    orderNumber: r.orderNumber ?? null,
+    site: r.site ?? null,
+    ...(r.siteFromLineDescription ? { siteFromLineDescription: r.siteFromLineDescription } : {}),
+    siteSource: r.siteSource ?? null,
   };
 }
 
@@ -512,7 +532,8 @@ const getReceivables: AgentTool = {
     "GST?', 'who owes us most'. Returns an explicit asOf date, basis, and server-computed totals BOTH incl. GST " +
     "and excl. GST (plus the GST portion), overdue figures, byCustomer (incl./excl. GST per customer), byDocType " +
     "(tax invoice vs proforma), ageingInclGst (same buckets as the Finance Receivables ageing report), " +
-    "overdueInvoices (every overdue invoice: number, customer, due date, balance incl./excl. GST, days overdue) " +
+    "overdueInvoices (every overdue invoice: number, customer, site, due date, balance incl./excl. GST, days overdue) " +
+    "and per-invoice site fields (site / siteFromLineDescription / siteSource - copy each row's own site) " +
     "and the largest open invoices. Use it for 'ageing?', 'which are overdue?', 'who owes most?'. Call it again for every receivable follow-up " +
     "question - never reuse a number from an earlier answer.",
   inputSchema: {
@@ -536,6 +557,7 @@ const getReceivables: AgentTool = {
       select: {
         id: true, invoiceNumber: true, docType: true, customerId: true, issueDate: true, dueDate: true, subtotal: true, total: true,
         customer: { select: { name: true } },
+        ...invoiceSiteSelect,
         paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
         creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
       },
@@ -543,6 +565,7 @@ const getReceivables: AgentTool = {
     const summary = summarizeReceivables(
       invoices.map((inv) => ({
         id: inv.id, invoiceNumber: inv.invoiceNumber, docType: inv.docType, customerId: inv.customerId, customer: inv.customer.name,
+        ...invoiceSiteInfo(inv),
         issueDate: inv.issueDate, dueDate: inv.dueDate, subtotal: money(inv.subtotal), total: money(inv.total),
         creditNoteTotal: sumMoney(inv.creditNotes.map((c) => money(c.total))),
         settled: money(settledFromAllocations(inv.paymentAllocations)),

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { apiAssetUrl, printWhenReady } from "@/lib/images";
 import { formatINR, formatDate, numberToIndianWords } from "@/lib/finance";
 
 interface LineItem { id: string; description: string; hsnCode?: string | null; quantity: string; unitPrice: string; discountPct: string; taxRatePct: string; lineTotal: string; }
@@ -13,7 +14,7 @@ interface InvoiceDetail {
   customer: { id: string; name: string; gstin?: string | null; state?: string | null; address?: string | null; contacts?: { name: string; phone: string | null; email: string | null }[] };
   lineItems: LineItem[];
 }
-interface Company { legalName?: string | null; address?: string | null; city?: string | null; pinCode?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; email?: string | null; website?: string | null; phone?: string | null; bankName?: string | null; bankAccountNumber?: string | null; bankIfsc?: string | null; bankBranch?: string | null; invoiceTerms?: string | null; documentFooterNote?: string | null; logoDataUrl?: string | null; signatoryName?: string | null; signatoryDataUrl?: string | null; }
+interface Company { legalName?: string | null; address?: string | null; city?: string | null; pinCode?: string | null; state?: string | null; gstin?: string | null; pan?: string | null; email?: string | null; website?: string | null; phone?: string | null; bankName?: string | null; bankAccountNumber?: string | null; bankIfsc?: string | null; bankBranch?: string | null; invoiceTerms?: string | null; documentFooterNote?: string | null; logoUrl?: string | null; signatoryName?: string | null; signatureUrl?: string | null; }
 
 /** "City, Pin Code" / "City" / "Pin Code" — whichever parts are set. */
 function cityPinLine(company: Company | undefined): string {
@@ -75,7 +76,7 @@ function PrintShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-white p-6 sm:p-10 print:p-0">
       <div className="max-w-3xl mx-auto print:max-w-full">
         <div className="flex justify-end mb-4 print:hidden">
-          <button onClick={() => window.print()} className="btn-primary px-4 py-2 text-sm">Download PDF</button>
+          <button onClick={() => void printWhenReady()} className="btn-primary px-4 py-2 text-sm">Download PDF</button>
         </div>
         {children}
       </div>
@@ -174,7 +175,7 @@ export default function InvoicePrintPage() {
       <div className={`print-doc${isCancelled ? " opacity-50" : ""}`}>
         <div className="print-header">
           <div className="print-co-block">
-            {company?.logoDataUrl ? <img src={company.logoDataUrl} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
+            {company?.logoUrl ? <img src={apiAssetUrl(company.logoUrl)!} alt="logo" className="h-9 object-contain mb-1.5" /> : null}
             <div className="print-co-name">{company?.legalName ?? "Your Company"}</div>
             <address>
               {company?.address}
@@ -270,7 +271,7 @@ export default function InvoicePrintPage() {
             {company?.documentFooterNote && <div className="note">{company.documentFooterNote}</div>}
           </div>
           <div className="print-sig">
-            {company?.signatoryDataUrl && <img src={company.signatoryDataUrl} alt="Signature" className="h-12 object-contain ml-auto mb-1" />}
+            {company?.signatureUrl && <img src={apiAssetUrl(company.signatureUrl)!} alt="Signature" className="h-12 object-contain ml-auto mb-1" />}
             <p className="label">Authorised signatory{company?.signatoryName ? ` — ${company.signatoryName}` : ""}</p>
           </div>
         </div>

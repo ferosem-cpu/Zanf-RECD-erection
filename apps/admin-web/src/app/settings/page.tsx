@@ -16,6 +16,7 @@ import {
 } from "@/lib/settingsStore";
 import { extractDominantColors, colorsToTheme } from "@/lib/colorExtractor";
 import { api } from "@/lib/apiClient";
+import { apiAssetUrl, downscaleImageToDataUrl } from "@/lib/images";
 import AgentProvidersSettings from "@/components/AgentProvidersSettings";
 import AgentVisibilitySettings from "@/components/AgentVisibilitySettings";
 import BackupSettings from "@/components/BackupSettings";
@@ -38,21 +39,25 @@ export default function SettingsPage() {
     setLogoUrl(getSavedLogo());
   }, []);
 
-  const saveSettingsToDB = async (logo: string | null, theme: string, colors: ThemeColors | null) => {
+  // `logo`: undefined = leave the stored logo alone, null = remove it, string = new (downscaled) data URL.
+  const saveSettingsToDB = async (logo: string | null | undefined, theme: string, colors: ThemeColors | null) => {
     try {
-      await api("/settings", {
+      const saved = await api<{ logoUrl: string | null }>("/settings", {
         method: "PUT",
         body: JSON.stringify({
-          logoDataUrl: logo,
+          ...(logo !== undefined ? { logoDataUrl: logo } : {}),
           themeKey: theme,
           customColors: colors,
         }),
       });
       saveThemeKey(theme);
-      if (logo) {
-        saveLogo(logo);
+      const savedLogoUrl = apiAssetUrl(saved.logoUrl);
+      if (savedLogoUrl) {
+        saveLogo(savedLogoUrl);
+        setLogoUrl(savedLogoUrl);
       } else {
         clearLogo();
+        setLogoUrl(null);
       }
       if (colors) {
         saveCustomColors(colors);
@@ -73,21 +78,21 @@ export default function SettingsPage() {
     setActiveTheme(key);
     setCustomColors(null);
     setExtractedPreview(null);
-    await saveSettingsToDB(logoUrl, key, null);
+    await saveSettingsToDB(undefined, key, null);
   }
 
   async function applyCustom(colors: ThemeColors) {
     applyThemeToDOM(colors);
     setActiveTheme("custom");
     setCustomColors(colors);
-    await saveSettingsToDB(logoUrl, "custom", colors);
+    await saveSettingsToDB(undefined, "custom", colors);
   }
 
   // ── Logo upload ──────────────────────────────────────────────────────
 
   const handleLogoFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) return;
-    const dataUrl = await fileToDataUrl(file);
+    const dataUrl = await downscaleImageToDataUrl(file, 600);
     setLogoUrl(dataUrl);
     await saveSettingsToDB(dataUrl, activeTheme, customColors);
   }, [activeTheme, customColors]);
@@ -139,7 +144,10 @@ export default function SettingsPage() {
 
   // ── Authorised signatory (name + picture) ──────────────────────────────
   const [signatoryName, setSignatoryName] = useState("");
-  const [signatoryDataUrl, setSignatoryDataUrl] = useState<string | null>(null);
+  // undefined = unchanged (the server never sends the image back), null = removed, string = new upload.
+  const [signatoryDataUrl, setSignatoryDataUrl] = useState<string | null | undefined>(undefined);
+  const [signatureUrl, setSignatureUrl] = useState<string | null>(null);
+  const signaturePreview = signatoryDataUrl === undefined ? signatureUrl : signatoryDataUrl;
   const [dragOverSignatory, setDragOverSignatory] = useState(false);
   const signatoryInputRef = useRef<HTMLInputElement>(null);
 
@@ -156,7 +164,7 @@ export default function SettingsPage() {
         documentFooterNote: s.documentFooterNote ?? "",
       }));
       setSignatoryName(s.signatoryName ?? "");
-      setSignatoryDataUrl(s.signatoryDataUrl ?? null);
+      setSignatureUrl(apiAssetUrl(s.signatureUrl));
       setCompanyLoaded(true);
     }).catch(() => setCompanyLoaded(true));
   }, []);
@@ -165,10 +173,13 @@ export default function SettingsPage() {
     e.preventDefault();
     setCompanySaving(true);
     try {
-      const payload: Record<string, unknown> = { ...company, signatoryName, signatoryDataUrl };
+      const payload: Record<string, unknown> = { ...company, signatoryName };
+      if (signatoryDataUrl !== undefined) payload.signatoryDataUrl = signatoryDataUrl;
       if (payload.defaultTaxRatePct === "" || payload.defaultTaxRatePct === null) delete payload.defaultTaxRatePct;
       else payload.defaultTaxRatePct = parseFloat(String(payload.defaultTaxRatePct));
-      await api("/settings", { method: "PUT", body: JSON.stringify(payload) });
+      const saved = await api<{ signatureUrl: string | null }>("/settings", { method: "PUT", body: JSON.stringify(payload) });
+      setSignatureUrl(apiAssetUrl(saved.signatureUrl));
+      setSignatoryDataUrl(undefined);
       alert("Company & tax details saved.");
     } catch (err) {
       alert("Failed to save company details: " + (err instanceof Error ? err.message : String(err)));
@@ -179,7 +190,7 @@ export default function SettingsPage() {
 
   const handleSignatoryFile = useCallback(async (file: File) => {
     if (!file.type.startsWith("image/")) return;
-    const dataUrl = await fileToDataUrl(file);
+    const dataUrl = await downscaleImageToDataUrl(file, 400);
     setSignatoryDataUrl(dataUrl);
   }, []);
 
@@ -431,10 +442,10 @@ export default function SettingsPage() {
             <div className="pt-2 border-t border-gray-100">
               <label className="block text-xs font-medium text-gray-500 mb-2">Authorised signatory</label>
               <div className="flex flex-col sm:flex-row sm:items-start gap-4">
-                {signatoryDataUrl ? (
+                {signaturePreview ? (
                   <div className="relative group">
                     <div className="w-24 h-24 rounded-xl border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center p-2">
-                      <img src={signatoryDataUrl} alt="Authorised signatory" className="max-w-full max-h-full object-contain" />
+                      <img src={signaturePreview} alt="Authorised signatory" className="max-w-full max-h-full object-contain" />
                     </div>
                     <button
                       type="button"

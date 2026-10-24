@@ -9,8 +9,9 @@ import { documentAgeing, emptyAgeing } from "./ageing";
  * cancelled and deleted bills never were a liability; paid bills are settled.
  * (Until 2026-10 the dashboard only counted approved + partially_paid, so verified bills -
  * e.g. three unpaid Platino bills - were missing from "Outstanding payables".)
- * Outstanding = bill total (incl. GST) - vendor payments recorded against the bill. Vendor
- * payments carry no TDS field, so nothing else is deducted.
+ * Outstanding = bill total (incl. GST) - what the bill's vendor payments settle, i.e. cash
+ * `amount` + TDS withheld `tdsAmount` (rule in services/vendorPaymentTds.ts). Bills themselves
+ * carry no TDS, so nothing is deducted twice. `paid` on PayableBillRow is that settled figure.
  */
 export const PAYABLE_BILL_STATUSES: string[] = [BILL_STATUS.VERIFIED, BILL_STATUS.APPROVED, BILL_STATUS.PARTIALLY_PAID];
 export const AWAITING_VERIFICATION_BILL_STATUSES: string[] = [BILL_STATUS.UPLOADED];
@@ -25,8 +26,13 @@ export function isPayableStatus(status: string): boolean {
   return PAYABLE_BILL_STATUSES.includes(status);
 }
 
-export function billOutstanding(total: Num, payments: { amount: Num }[]): number {
-  return money([n(total), ...payments.map((p) => -n(p.amount))]);
+/** Cash + TDS settled by a bill's payments (see vendorPaymentTds.ts). */
+export function billSettled(payments: { amount: Num; tdsAmount?: Num }[]): number {
+  return money(payments.flatMap((p) => [n(p.amount), n(p.tdsAmount)]));
+}
+
+export function billOutstanding(total: Num, payments: { amount: Num; tdsAmount?: Num }[]): number {
+  return money([n(total), -billSettled(payments)]);
 }
 
 export interface PayableBillRow {

@@ -56,7 +56,7 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
   // Shared payables rule (services/payables.ts): verified + approved + partially_paid bills.
   const bills = await prisma.bill.findMany({
     where: { status: { in: PAYABLE_BILL_STATUSES } },
-    include: { payments: { select: { amount: true } } },
+    include: { payments: { select: { amount: true, tdsAmount: true } } },
   });
   let outstandingPayables = zero;
   for (const b of bills) {
@@ -112,7 +112,7 @@ financeDashboardRouter.get("/reports/payables", requirePermission(PERMISSION_KEY
   const now = new Date();
   const bills = await prisma.bill.findMany({
     where: { status: { in: PAYABLE_BILL_STATUSES } },
-    include: { payments: { select: { amount: true } }, supplier: { select: { id: true, name: true } } },
+    include: { payments: { select: { amount: true, tdsAmount: true } }, supplier: { select: { id: true, name: true } } },
   });
 
   const bySupplier = new Map<string, any>();
