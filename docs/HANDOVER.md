@@ -46,12 +46,13 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 ## 1a. WhatsApp M2 test status (branch `feat/whatsapp-m2`, 2026-10-24) - deployed to prod 24 Oct
 
 - **DEPLOYED to prod 24 Oct 2026 18:31 IST:** `0bd2927` (prebuilt) -> zan-app-api `dpl_J2JubBX4Scxb1wBmdRSGS6r3H3dU`; Fluid on, `WA_FUNCTION_MAX_DURATION_MS=300000`, api/index.func maxDuration 300; no migrate deploy; smoke OK. Rollback target: `dpl_GsgEcqiaH1mktzs91Ge6Be89dcVD` (zan-app-1rc18sg1t). Prod `WHATSAPP_BRIDGE_KEYS` unset until M5.
+- **Condition 4 DONE 24 Oct 2026 (Ferose OK 18:43 IST):** Neon test DB: deleted 13 outbox (incl. leased), 14 inbound, 39 nonces, 1 WA channel conversation, 1 sender mapping (`watest_map_*`), 2 test LLM providers (`watest_llm_freellm`, `watest_llm_freellm_auto`); 11 `patest-*` inbound + 1 outbox (pg-test leftovers) left. Live Supabase had 0 test rows (4 real providers untouched). Removed 20 `feat/whatsapp-m2` previews of Vercel project `api` (incl. `dpl_8qDxVgvTsDMiGrY3qQUFnnnQ2pCS`) and Preview env `WHATSAPP_BRIDGE_KEYS`, `AGENT_SECRETS_KEY`; 20 older (12 Oct) branch previews and the Neon project left.
 - Branch merged with master (24 Oct): 38 migrations. **No prod deploy / `prisma migrate deploy`** until the
   15 Aug `_prisma_migrations` rows on prod are reconciled.
 - Conditions: 1 lock-contention PASS; 2 real Go signer (M4) PASS incl. claim/ack; 3 DONE on prod (3 WA history
   rows only, now 23; schema backup `D:\Backups\zan-db\20261024-1545`); 5 DONE on Neon (primary
   `gemini-3-flash-preview`, backup row `watest_llm_freellm_auto` model `auto`, priority 1 - no fallback-model column).
-  Open: 4 = clean up `watest*` keys/rows (incl. `watest_llm_freellm_auto`, `watest-*` inbound/outbox) and test previews.
+  (Was open, now DONE - see top) 4 = clean up `watest*` keys/rows (incl. `watest_llm_freellm_auto`, `watest-*` inbound/outbox) and test previews.
 - Pre-M6 fixes DONE: `(createdAt, id)` claim tiebreak; chain next queued turn after `completeJob` (max 3);
   order/invoice/site questions must use lookup tools this turn; 413 falls through to the next provider.
 - Chain guard (runs under `waitUntil`, no `maxDuration` set): chains only if elapsed + 55 s turn budget + 5 s
