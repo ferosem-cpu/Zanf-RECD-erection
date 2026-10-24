@@ -43,8 +43,9 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 - Primary Super Admin `ferosem@gmail.com` is Google-only (`apps/api/src/lib/authPolicy.ts`).
 - Local `.env` has real Zoho SMTP creds: local smoke tests send real mail. Never read/print env files.
 
-## 1a. WhatsApp M2 test status (branch `feat/whatsapp-m2`, 2026-10-24) - TEST ONLY, nothing on prod
+## 1a. WhatsApp M2 test status (branch `feat/whatsapp-m2`, 2026-10-24) - deployed to prod 24 Oct
 
+- **DEPLOYED to prod 24 Oct 2026 18:31 IST:** `0bd2927` (prebuilt) -> zan-app-api `dpl_J2JubBX4Scxb1wBmdRSGS6r3H3dU`; Fluid on, `WA_FUNCTION_MAX_DURATION_MS=300000`, api/index.func maxDuration 300; no migrate deploy; smoke OK. Rollback target: `dpl_GsgEcqiaH1mktzs91Ge6Be89dcVD` (zan-app-1rc18sg1t). Prod `WHATSAPP_BRIDGE_KEYS` unset until M5.
 - Branch merged with master (24 Oct): 38 migrations. **No prod deploy / `prisma migrate deploy`** until the
   15 Aug `_prisma_migrations` rows on prod are reconciled.
 - Conditions: 1 lock-contention PASS; 2 real Go signer (M4) PASS incl. claim/ack; 3 DONE on prod (3 WA history
