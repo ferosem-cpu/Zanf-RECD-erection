@@ -48,6 +48,8 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   accept, exactly 1 outbox reply; tampered body 401; bad signature 401; ts -301/-330 s 401, +310/+330 s 401
   (+301 s arrived ~3 s later, inside the window, accepted - expected); replayed nonce 401; wrong key id
   `watest9` 401 (ingest and outbox). Only accepted nonces stored in `WhatsappBridgeNonce`. Ids `watest-m4-*`.
+- M4 claim/ack (real signer): outbox poll 200, `POST /wa/outbox/:id/claim` 200 (text+sendBy), `POST /wa/ack`
+  200 ok -> row `sent`; ack with wrong key / bad sig 401 (row stayed `sending`). Id `watest-m4ack-*`.
 - Pre-M6 fixes (ChatGPT Coder): `(createdAt,id)` tiebreak at `whatsappBridgeStore.ts:47`; kick next turn
   after `completeJob`; agent must fetch fresh data for order/invoice/site questions (M4 saw a reply reuse
   history: "replay first" answered with the open-orders count).
