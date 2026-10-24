@@ -59,6 +59,7 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   the sender's next queued job runs at once (`nextQueuedJob`, up to `MAX_KICK_CHAIN`=3; poll stays the backstop);
   (3) WhatsApp addendum: order/invoice/site questions must use lookup tools this turn, never chat history;
   (4) 413 falls through to the next provider/backup and that provider is skipped for the rest of the request.
+- Chain time guard: runs under `waitUntil` (`lib/backgroundTask.ts`); no `maxDuration` is set, so it assumes 60 s (`WA_FUNCTION_MAX_DURATION_MS` overrides) and stops chaining after 45 s, leaving the rest to the poll.
 - Still open: condition 4 (clean up `watest*` keys/rows incl. `watest_llm_freellm_auto`, test previews); reconcile the
   15 Aug `_prisma_migrations` rows on prod and merge master into this branch before any prod deploy.
 

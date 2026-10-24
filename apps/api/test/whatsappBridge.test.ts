@@ -13,7 +13,7 @@ import type { RunAgentTurnParams, RunAgentTurnResult } from "../src/agent/llm";
 import { createWhatsappBridgeRouter } from "../src/routes/whatsappBridge";
 import { sha256Hex, signBridgeRequest, type NonceStore } from "../src/services/whatsappBridgeAuth";
 import {
-  createBridgeService, MAX_ATTEMPTS, MAX_CONCURRENT_TURNS, NEUTRAL_FAILURE_REPLY, WHATSAPP_PROMPT_ADDENDUM,
+  CHAIN_BUDGET_MS, createBridgeService, MAX_ATTEMPTS, MAX_CONCURRENT_TURNS, NEUTRAL_FAILURE_REPLY, WHATSAPP_PROMPT_ADDENDUM,
   type InboundRow, type NewOutbox, type OpenTurn, type OutboxRow, type WaBridgeStore,
 } from "../src/services/whatsappBridge";
 
@@ -497,4 +497,20 @@ test("after a turn completes, the sender's next queued turn starts at once (no p
 test("WhatsApp prompt tells the agent to fetch fresh order/invoice/site data, not reuse chat history", () => {
   assert.match(WHATSAPP_PROMPT_ADDENDUM, /orders, invoices or sites, call the lookup tools in THIS turn/);
   assert.match(WHATSAPP_PROMPT_ADDENDUM, /never\s+answer from earlier messages/);
+});
+
+test("chaining stops once the function time budget is used; the poll picks up the rest", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  turnBehaviour = async (p) => {
+    await gate;
+    nowMs += CHAIN_BUDGET_MS + 1; // one slow turn (e.g. a slow fallback to auto) uses up the budget
+    return { reply: "ok", history: [...p.history, { role: "assistant", content: "ok" }] };
+  };
+  await call("POST", "/wa/ingest", msg("b1"));
+  await call("POST", "/wa/ingest", msg("b2"));
+  release();
+  await settle();
+  assert.equal(runs.length, 1, "no chained turn after the budget is spent");
+  assert.deepEqual(fs_.inbound.map((j) => j.status), ["done", "received"]);
 });

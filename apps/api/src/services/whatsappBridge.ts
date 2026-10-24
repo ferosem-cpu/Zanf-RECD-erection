@@ -20,6 +20,12 @@ export const MAX_REPLY_CHARS = 1500;
 /** After a turn completes, up to this many queued turns for the same sender are started straight away
  * in the same background task (the /wa/outbox poll after RESTART_AFTER_MS stays as the backstop). */
 export const MAX_KICK_CHAIN = 3;
+/** The API function sets no maxDuration (vercel.json / api/index.js), so assume the conservative 60 s
+ * platform limit unless WA_FUNCTION_MAX_DURATION_MS says otherwise. Chaining stops once a chain has run
+ * longer than that minus 15 s; leftover jobs are picked up by the /wa/outbox poll. */
+const envMaxDuration = Number(process.env.WA_FUNCTION_MAX_DURATION_MS);
+export const FUNCTION_MAX_DURATION_MS = Number.isFinite(envMaxDuration) && envMaxDuration > 0 ? envMaxDuration : 60_000;
+export const CHAIN_BUDGET_MS = FUNCTION_MAX_DURATION_MS - 15_000;
 export const NEUTRAL_FAILURE_REPLY = "Sorry, I couldn't complete that. Please try again.";
 
 export const WHATSAPP_PROMPT_ADDENDUM = `
@@ -209,11 +215,12 @@ export function createBridgeService(deps: BridgeDeps) {
   }
 
   /** Runs one job; when it reaches a terminal state, starts the sender's next queued job right away. */
-  async function processJob(jobId: string, chain = 0): Promise<void> {
+  async function processJob(jobId: string, chain = 0, startedAt = deps.now().getTime()): Promise<void> {
     const mappingId = await runJob(jobId);
     if (!mappingId || chain >= MAX_KICK_CHAIN) return;
+    if (deps.now().getTime() - startedAt > CHAIN_BUDGET_MS) return; // out of function time: leave it to the poll
     const next = await store.nextQueuedJob(mappingId).catch(() => null);
-    if (next && next !== jobId) await processJob(next, chain + 1);
+    if (next && next !== jobId) await processJob(next, chain + 1, startedAt);
   }
 
   /** Returns the job's mappingId once the job is terminal (done/dropped/failed), else null. */
