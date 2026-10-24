@@ -81,7 +81,8 @@ Never deploy, merge to master or open a PR without Ferose's explicit approval.
    `.vercel/output/functions/`: (a) delete the `"filePathMap"` key from `.vc-config.json` if it
    mentions `@recd/shared` (else deploy fails ENOTDIR); (b) create `node_modules/@recd` and copy
    `packages/shared/dist` + `package.json` into `*.func/node_modules/@recd/shared` and, where it
-   exists, `*.func/apps/api/node_modules/@recd/shared`; (c) create the local preflight junction:
+   exists, `*.func/apps/api/node_modules/@recd/shared` (this can be run with `npm run vercel:patch` from apps/api);
+   (c) create the local preflight junction:
    `New-Item -ItemType Junction -Path node_modules\@recd\shared -Target ..\..\packages\shared`
    (skip on Linux, the link exists).
 7. `npx vercel deploy --prebuilt --prod` - run it ONCE; on failure stop and report, no retries.
