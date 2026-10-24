@@ -90,6 +90,8 @@ export interface OutboxGuard {
 export interface WaBridgeStore {
   /** Unique waMessageId: returns the existing row (created=false) on a duplicate. */
   insertInbound(row: NewInbound): Promise<{ row: InboundRow; created: boolean }>;
+  /** Decision of an already-stored inbound row, or null when none exists (read-only; used for duplicates). */
+  findInboundDecision(waMessageId: string): Promise<"accept" | "ignore" | null>;
   /** Atomic: received, or processing with an expired lease; attempts < max; no earlier non-terminal job for the same mapping. */
   claimJob(id: string, token: string, now: Date, leaseMs: number, maxAttempts: number): Promise<InboundRow | null>;
   /** Fenced on leaseToken + status processing. Inserts the outbox row and saves the conversation in the same step. Returns false for a zombie. */
@@ -171,6 +173,12 @@ export function createBridgeService(deps: BridgeDeps) {
         mappingId = open.decision.mapping.id;
       }
     }
+    if (!accept) {
+      // Not accepted (unmapped, disabled, paused or not allowed): store NOTHING, no sender ids, no text, no
+      // hashed debug row. A duplicate of an earlier accepted message still reports its original decision.
+      const prior = await store.findInboundDecision(input.messageId);
+      return { decision: prior ?? "ignore", jobId: null };
+    }
     const { row, created } = await store.insertInbound({
       waMessageId: input.messageId,
       keyId,
@@ -179,10 +187,10 @@ export function createBridgeService(deps: BridgeDeps) {
       resolvedPhone: input.resolvedPhone ?? null,
       chatJid: input.chatJid,
       messageAt: new Date(input.timestamp * 1000),
-      decision: accept ? "accept" : "ignore",
+      decision: "accept",
       mappingId,
-      text: accept ? text : null,
-      status: accept ? "received" : "dropped",
+      text,
+      status: "received",
     });
     // A duplicate returns the original decision and never schedules a second job.
     return { decision: row.decision, jobId: created && row.decision === "accept" ? row.id : null };

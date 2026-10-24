@@ -31,6 +31,11 @@ export function createPrismaBridgeStore(prisma: PrismaClient): WaBridgeStore {
     }
   },
 
+  async findInboundDecision(waMessageId) {
+    const r = await prisma.whatsappInbound.findUnique({ where: { waMessageId }, select: { decision: true } });
+    return r ? (r.decision as "accept" | "ignore") : null;
+  },
+
   async claimJob(id, token, now, leaseMs, maxAttempts) {
     // A transaction-scoped advisory lock serialises claims, so the per-sender ordering check and the
     // global cap are evaluated and applied atomically across serverless instances. A crashed worker's

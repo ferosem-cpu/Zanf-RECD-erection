@@ -35,6 +35,9 @@ function fakeStore() {
       inbound.push(r);
       return { row: r, created: true };
     },
+    async findInboundDecision(waMessageId) {
+      return inbound.find((r) => r.waMessageId === waMessageId)?.decision ?? null;
+    },
     async claimJob(id, token, now, leaseMs, max) {
       const j = inbound.find((r) => r.id === id);
       if (!j || !j.mappingId || j.attempts >= max) return null;
@@ -256,7 +259,22 @@ test("unknown / disabled / paused / customer senders get the same 202 shape as a
   await settle();
   assert.equal(runs.length, 0);
   assert.equal(fs_.outbox.length, 0);
-  assert.ok(fs_.inbound.every((r) => r.text === null), "ignored messages keep no text");
+  assert.equal(fs_.inbound.length, 0, "ignored messages store no row at all");
+});
+
+test("unmapped sender: no inbound row, no sender id, no text; a later retry is still ignored and stored nowhere", async () => {
+  mapping.phoneE164 = "+910000000000";
+  const before = fs_.inbound.length;
+  for (const id of ["m-x", "m-x"]) {
+    const r = await call("POST", "/wa/ingest", msg(id));
+    assert.equal(r.status, 202);
+    assert.deepEqual(await r.json(), { decision: "ignore" });
+  }
+  await settle();
+  assert.equal(fs_.inbound.length, before, "no row for an unmapped sender");
+  assert.ok(!JSON.stringify(fs_.inbound).includes("m-x"), "message id not persisted");
+  assert.equal(runs.length, 0);
+  assert.equal(fs_.outbox.length, 0);
 });
 
 test("duplicate message id: original decision, one job, no second reply", async () => {
