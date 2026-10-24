@@ -13,7 +13,7 @@ import type { RunAgentTurnParams, RunAgentTurnResult } from "../src/agent/llm";
 import { createWhatsappBridgeRouter } from "../src/routes/whatsappBridge";
 import { sha256Hex, signBridgeRequest, type NonceStore } from "../src/services/whatsappBridgeAuth";
 import {
-  CHAIN_BUDGET_MS, createBridgeService, MAX_ATTEMPTS, MAX_CONCURRENT_TURNS, NEUTRAL_FAILURE_REPLY, WHATSAPP_PROMPT_ADDENDUM,
+  canChainAnotherTurn, createBridgeService, MAX_ATTEMPTS, MAX_CONCURRENT_TURNS, NEUTRAL_FAILURE_REPLY, WHATSAPP_PROMPT_ADDENDUM,
   type InboundRow, type NewOutbox, type OpenTurn, type OutboxRow, type WaBridgeStore,
 } from "../src/services/whatsappBridge";
 
@@ -473,7 +473,7 @@ test("claim: equal createdAt is ordered by id (stable per-sender order)", async 
   assert.ok(await fs_.store.claimJob(a.id, "ta", clock(), 90_000, 3));
 });
 
-test("after a turn completes, the sender's next queued turn starts at once (no poll needed)", async () => {
+test("after a turn completes, the sender's next queued turn starts at once when a full turn still fits the time limit", async () => {
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   let first = true;
@@ -483,8 +483,7 @@ test("after a turn completes, the sender's next queued turn starts at once (no p
     return { reply: text, history: [...p.history, { role: "assistant", content: text }] };
   };
   await call("POST", "/wa/ingest", msg("q1", { text: "one" }));
-  nowMs += 5;
-  await call("POST", "/wa/ingest", msg("q2", { text: "two" }));
+  await call("POST", "/wa/ingest", msg("q2", { text: "two" })); // fake clock stays put, so the next turn still fits
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(fs_.inbound[1].status, "received", "second turn is blocked while the first runs");
   release();
@@ -499,18 +498,30 @@ test("WhatsApp prompt tells the agent to fetch fresh order/invoice/site data, no
   assert.match(WHATSAPP_PROMPT_ADDENDUM, /never\s+answer from earlier messages/);
 });
 
-test("chaining stops once the function time budget is used; the poll picks up the rest", async () => {
+test("chain guard: a next turn starts only if elapsed + 55 s turn budget + margin fits the limit", () => {
+  assert.equal(canChainAnotherTurn(0, 60_000), true);
+  assert.equal(canChainAnotherTurn(1, 60_000), false, "default 60 s: only the first turn runs inline");
+  assert.equal(canChainAnotherTurn(60_000, 120_000), true);
+  assert.equal(canChainAnotherTurn(60_001, 120_000), false);
+  assert.equal(canChainAnotherTurn(200_000, 300_000), true);
+});
+
+test("with the default 60 s limit the queued turn is left to the poll after the first turn", async () => {
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   turnBehaviour = async (p) => {
     await gate;
-    nowMs += CHAIN_BUDGET_MS + 1; // one slow turn (e.g. a slow fallback to auto) uses up the budget
+    nowMs += 3_000; // a normal ~3 s turn
     return { reply: "ok", history: [...p.history, { role: "assistant", content: "ok" }] };
   };
   await call("POST", "/wa/ingest", msg("b1"));
   await call("POST", "/wa/ingest", msg("b2"));
   release();
   await settle();
-  assert.equal(runs.length, 1, "no chained turn after the budget is spent");
+  assert.equal(runs.length, 1, "no inline chained turn");
   assert.deepEqual(fs_.inbound.map((j) => j.status), ["done", "received"]);
+  nowMs += 25_000;
+  await call("GET", "/wa/outbox");
+  await settle();
+  assert.deepEqual(fs_.inbound.map((j) => j.status), ["done", "done"], "poll picks it up");
 });

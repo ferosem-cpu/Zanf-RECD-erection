@@ -5,6 +5,7 @@ import type { RunAgentTurnParams, RunAgentTurnResult } from "../agent/llm";
 import type { UnifiedMessage } from "../agent/providers/types";
 import { checkUserAccess, type SenderDecision, type SenderStore, type WaGroup } from "../agent/whatsapp/policy";
 import type { WhatsappTurn } from "../agent/whatsapp/resolver";
+import { AGENT_REQUEST_BUDGET_MS } from "../agent/timeouts";
 
 export const JOB_LEASE_MS = 90_000;
 export const OUTBOX_LEASE_MS = 30_000;
@@ -20,12 +21,16 @@ export const MAX_REPLY_CHARS = 1500;
 /** After a turn completes, up to this many queued turns for the same sender are started straight away
  * in the same background task (the /wa/outbox poll after RESTART_AFTER_MS stays as the backstop). */
 export const MAX_KICK_CHAIN = 3;
-/** The API function sets no maxDuration (vercel.json / api/index.js), so assume the conservative 60 s
- * platform limit unless WA_FUNCTION_MAX_DURATION_MS says otherwise. Chaining stops once a chain has run
- * longer than that minus 15 s; leftover jobs are picked up by the /wa/outbox poll. */
+/** The API function sets no maxDuration (vercel.json / api/index.js), so assume the 60 s platform limit unless
+ * WA_FUNCTION_MAX_DURATION_MS says otherwise. A chained turn starts only if elapsed + one full turn budget
+ * (AGENT_REQUEST_BUDGET_MS, 55 s) + CHAIN_MARGIN_MS still fits; otherwise the /wa/outbox poll runs it. With the
+ * 60 s default only the first turn runs inline. */
 const envMaxDuration = Number(process.env.WA_FUNCTION_MAX_DURATION_MS);
 export const FUNCTION_MAX_DURATION_MS = Number.isFinite(envMaxDuration) && envMaxDuration > 0 ? envMaxDuration : 60_000;
-export const CHAIN_BUDGET_MS = FUNCTION_MAX_DURATION_MS - 15_000;
+export const CHAIN_MARGIN_MS = 5_000;
+export function canChainAnotherTurn(elapsedMs: number, maxDurationMs = FUNCTION_MAX_DURATION_MS): boolean {
+  return elapsedMs + AGENT_REQUEST_BUDGET_MS + CHAIN_MARGIN_MS <= maxDurationMs;
+}
 export const NEUTRAL_FAILURE_REPLY = "Sorry, I couldn't complete that. Please try again.";
 
 export const WHATSAPP_PROMPT_ADDENDUM = `
@@ -218,7 +223,7 @@ export function createBridgeService(deps: BridgeDeps) {
   async function processJob(jobId: string, chain = 0, startedAt = deps.now().getTime()): Promise<void> {
     const mappingId = await runJob(jobId);
     if (!mappingId || chain >= MAX_KICK_CHAIN) return;
-    if (deps.now().getTime() - startedAt > CHAIN_BUDGET_MS) return; // out of function time: leave it to the poll
+    if (!canChainAnotherTurn(deps.now().getTime() - startedAt)) return; // a full turn would not fit: leave it to the poll
     const next = await store.nextQueuedJob(mappingId).catch(() => null);
     if (next && next !== jobId) await processJob(next, chain + 1, startedAt);
   }
