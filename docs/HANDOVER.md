@@ -39,12 +39,19 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   reply each, no stuck leases. Notes: a blocked turn waits for the next `/wa/outbox` poll after 20 s
   (`RESTART_AFTER_MS`, no self-kick on completion); ingests with identical `createdAt` can run out of
   arrival order (`whatsappBridgeStore.ts:47` uses `lt` only, no tiebreak).
-- ChatGPT Coder verdict: PASS with conditions: (1) lock-contention test (done, above); (2) real Go bridge signer in M4;
+- ChatGPT Coder verdict: PASS with conditions: (1) lock-contention test (done, above); (2) real Go bridge signer in M4 (done, below);
   (3) 15-object reconcile precheck on the live DB right before WA migrations (`docs/whatsapp/MIGRATION-RECONCILE.md`);
   (4) clean up watest keys/rows (`watest_map_919500245599`, `watest_llm_freellm`, `watest-*` inbound/outbox) and
   test previews; (5) on 413, fall back to the next provider.
-- Next options: fix conditions 1/5, then M3/M4 bridge test against the preview; or prod reconcile + WA
-  migrations (needs Ferose's approval and a backup, per the reconcile doc).
+- M4 real-signer test (2026-10-24): PASS. Go harness calling `zan-wa-bridge` `internal/zan.SignRequest`
+  (commit 5b9c93a, copy on box, bridge repo untouched, no WA pairing), sent via `vercel curl`. Valid -> 202
+  accept, exactly 1 outbox reply; tampered body 401; bad signature 401; ts -301/-330 s 401, +310/+330 s 401
+  (+301 s arrived ~3 s later, inside the window, accepted - expected); replayed nonce 401; wrong key id
+  `watest9` 401 (ingest and outbox). Only accepted nonces stored in `WhatsappBridgeNonce`. Ids `watest-m4-*`.
+- Pre-M6 fixes (ChatGPT Coder): `(createdAt,id)` tiebreak at `whatsappBridgeStore.ts:47`; kick next turn
+  after `completeJob`; agent must fetch fresh data for order/invoice/site questions (M4 saw a reply reuse
+  history: "replay first" answered with the open-orders count).
+- Still open: conditions 3, 4, 5. Prod reconcile + WA migrations need Ferose's approval and a backup.
 
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
