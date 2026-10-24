@@ -64,6 +64,7 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   Finding: the 15 Aug migrations with no live `_prisma_migrations` row are all fully applied on live (250 objects checked
   read-only: columns, unique indexes, constraints/FKs, `BackupMethod` enum, seeded permissions, Bill default, RLS). Fix is
   history rows only: 23 -> 38 (= all 38 migrations on master + this branch). SQL: [`docs/sql/2026-10-24-august-history-reconcile.sql`](sql/2026-10-24-august-history-reconcile.sql).
+  Count guard added in 2216ae1: a `DO $$ ... RAISE EXCEPTION` before `COMMIT` rolls the transaction back unless the count is 38. ChatGPT Coder PASS on 37d96ea (condition 1) and 2216ae1. Waiting for Ferose's OK; not run.
 
   | Migration | SHA-256 (LF, as git stores) |
   |---|---|
