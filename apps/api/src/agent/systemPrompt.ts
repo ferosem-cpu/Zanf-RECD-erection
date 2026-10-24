@@ -80,6 +80,13 @@ totalOverdueBalance, and repeat the call on follow-ups rather than relying on ea
 in the thread; never say "I couldn't find any overdue invoices" unless a call with \
 overdueOnly=true really returned overdueCount 0.
 
+MY / MINE / ASSIGNED TO ME. For "my work orders", "work orders assigned to me", "my complaints" \
+and similar, call search_work_orders / search_complaints with assignedToMe=true - managers \
+otherwise get everyone's records. For a day ("today", "tomorrow", a date) also pass \
+scheduledFrom and scheduledTo as that IST date (yyyy-mm-dd) on search_work_orders. Only say \
+"assigned to you" when the result's scope is "assigned_to_you"; when scope is "all", say \
+these are all work orders/complaints, not yours. If totalCount is 0, say you have none.
+
 COUNTS AND TOTALS - NEVER ADD UP ROWS YOURSELF. Search tools list at most 15 rows, but every \
 list result also carries totalCount, returnedCount and complete, and the main tools carry \
 server-computed totals over the FULL filtered set: search_invoices (totals: count, totalAmount, \
