@@ -60,6 +60,36 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   per-deployment `-e` overrides only (no project env changes); test LLM FreeLLMAPI router. Packaging:
   `npm run vercel:patch` between `vercel build` and `vercel deploy --prebuilt`. Test secrets only on the box.
 - `whatsappBridgeStore.pg.test.ts` needs `WA_PG_TEST_URL` and TCP 5432 (box blocks 5432; run from the PC).
+- **August migration history reconcile (PLAN, NOT RUN) - 24 Oct 2026.** Nothing has been run yet.
+  Finding: the 15 Aug migrations with no live `_prisma_migrations` row are all fully applied on live (250 objects checked
+  read-only: columns, unique indexes, constraints/FKs, `BackupMethod` enum, seeded permissions, Bill default, RLS). Fix is
+  history rows only: 23 -> 38 (= all 38 migrations on master + this branch). SQL: [`docs/sql/2026-10-24-august-history-reconcile.sql`](sql/2026-10-24-august-history-reconcile.sql).
+
+  | Migration | SHA-256 (LF, as git stores) |
+  |---|---|
+  | `20260813122825_add_product_shape_dimensions_weight` | `85af69e0dae7582cf8aafe8f1e5ed4205879379657c1bd6dafcf9cfd505e7e60` |
+  | `20260817000000_add_vendor_archive` | `94d6fe1fad2600ebde6cd2c07b75c6a09ac91f437ce27395be0a7f2ff0a92db9` |
+  | `20260817120000_add_order_line_items` | `696f3194401ea455d082b94392a3eb46266840690bdc2507d7f98d1885ec04ed` |
+  | `20260822155035_add_agent_custom_instructions_and_saved_line_items` | `3a6e387ad23b2c5ceb0a16a9d08eb0f00d409a2d0becc849d7491f4ccf636d63` |
+  | `20260823065413_add_customer_product_and_saved_item_pricing` | `ab38d6cdfbb47cb47b387d0fbdc1abcec1cf232e0e2fa477ba542e627a924efb` |
+  | `20260823134430_add_product_silencer_type` | `aa6aef2a9651069c200c762155e3e1a24154f2d1a1f2bb860ef2debc5b3656ba` |
+  | `20260824062957_add_work_order_products` | `fca21511919867779465da18e37d07439a8d25d3a84d903fc72ac3a894c75b60` |
+  | `20260827034238_add_vendor_invoice_workflow` | `973818a01c00cb1b29ca89ff9bea6847716a106cdd92e4ea0d8432ae97c4b3a5` |
+  | `20260827094832_add_supplier_pan` | `f5999c5d4e256aea4361b23f8e1a573ae748095d59c5fc1c27b9ec36323ae49f` |
+  | `20260827144444_add_customer_purchase_orders` | `9e8b352d5e85096902440d8ffda1458eb33b6e140c81d8b214420b945a0de4fb` |
+  | `20260828111339_add_ledger_opening_balances` | `f517f85eec539d49f82b2a26fcac48362c46d40d76116dde4bba938ef4364d14` |
+  | `20260828120209_add_credit_debit_notes` | `7a948b59796bff5442ad8b444cca157af7c00ee02fb5c2b60421be86af0ea7c4` |
+  | `20260828160000_add_payment_allocations` | `7356bdbf9323894508ca617ffec65bc80a181c4aa8c3fa81c16cf9e3ff4a95ce` |
+  | `20260828170000_add_payment_order_tag` | `f3228934b90494fcb9df4817298bf7e918096f2b7780a27dc69a4a410d64a1f1` |
+  | `20260829054500_add_backup_settings_and_log` | `44ac8c2b138fe2c88527bae09b6cf31e9b6e769c8ad867b5808ebcdff427e590` |
+
+  Bad checksums on 6 existing live rows (left alone; `migrate deploy` ignores checksums; optional fix needs its own OK from Ferose):
+  `init`, `add_auth_and_settings`, `add_vendors` = hash of CRLF copy; `add_header_footer_contact_fields` = empty;
+  `add_invoice_edit_log`, `add_notification_read_and_customer_order_fields` = correct hash truncated to 63 chars.
+  Step order: (1) Ferose OK -> (2) re-run read-only checks -> (3) guarded insert in one transaction, count must be 38 else
+  ROLLBACK -> (4) merge master after pre-M6 fixes (done 24 Oct, `141f8cb`) -> (5) `prisma migrate status` / `prisma migrate diff` against the LIVE
+  schema (scratch DB restored from the `D:\Backups\zan-db\20261024-1545` DDL backup, or read-only against live; NOT the
+  drifted Neon test copy) - diff must be empty -> (6) only then prod `prisma migrate deploy`, with Ferose's OK.
 
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
