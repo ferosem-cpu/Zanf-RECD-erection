@@ -99,6 +99,7 @@ async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnRes
   const timedOut = new Set<string>();
   let nudged = false;
   let pendingNudge = false;
+  let toolsRanThisTurn = false; // only nudge before any tool ran (a refusal after a forbidden tool result is genuine)
 
   for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
     if (deadline.expired()) {
@@ -129,7 +130,7 @@ async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnRes
 
     // One retry when the model claims it has no tools although tools were offered: the refusal
     // is dropped (not stored, not sent) and the next round carries a one-off nudge.
-    if (response.toolCalls.length === 0 && !nudged && unifiedTools.length > 0 && turn + 1 < MAX_TOOL_TURNS &&
+    if (response.toolCalls.length === 0 && !nudged && !toolsRanThisTurn && unifiedTools.length > 0 && turn + 1 < MAX_TOOL_TURNS &&
         !deadline.expired() && isNoToolsRefusal(response.text)) {
       nudged = true;
       pendingNudge = true;
@@ -155,6 +156,7 @@ async function runAgentLoop(params: RunAgentTurnParams): Promise<RunAgentTurnRes
       onTiming: timer.tools,
     });
     history = [...history, ...results];
+    if (results.length > 0) toolsRanThisTurn = true;
     if (params.shouldAbort?.()) {
       timer.log("aborted");
       return { reply: "", history };

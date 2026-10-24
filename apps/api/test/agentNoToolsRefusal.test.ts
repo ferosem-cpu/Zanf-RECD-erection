@@ -67,3 +67,17 @@ test("no retry when no tools were offered", async () => {
   assert.equal(seen.length, 1);
   assert.equal(out.reply, LIVE);
 });
+
+test("no retry when a tool already ran this turn (e.g. a forbidden result, then 'you don't have access')", async () => {
+  const seen: unknown[][] = [];
+  const denied = "You don't have access to invoices, so I can't show that.";
+  const send = scripted([
+    { text: "", toolCalls: [{ id: "c1", name: "search_work_orders", input: {} }] },
+    { text: denied },
+  ], seen);
+  const out = await runAgentTurn(base(send) as never);
+  assert.equal(isNoToolsRefusal(denied), true); // would have matched without the guard
+  assert.equal(seen.length, 2);
+  assert.equal(out.reply, denied);
+  assert.ok(!JSON.stringify(seen).includes("System note"));
+});
