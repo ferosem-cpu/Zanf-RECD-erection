@@ -1,5 +1,5 @@
 /** Super-Admin managed WhatsApp sender mappings. Store-injected so tests run without a DB. */
-import { groupForRole } from "../agent/whatsapp/policy";
+import { groupForUser } from "../agent/whatsapp/policy";
 import { normalizeLid, normalizePhoneE164 } from "./whatsappPhone";
 
 export class MappingError extends Error {
@@ -81,7 +81,7 @@ export async function createMapping(
   const user = await store.findUser(userId);
   if (!user) throw new MappingError(400, "User not found");
   if (!user.isActive) throw new MappingError(400, "User is inactive");
-  if (user.customerId || !groupForRole(user.roleKey)) throw new MappingError(400, "This user's role has no WhatsApp access");
+  if (!groupForUser(user)) throw new MappingError(400, "This user's role has no WhatsApp access");
 
   if (await store.findByPhone(phoneE164)) throw new MappingError(409, "That phone number is already mapped");
   if (lid && (await store.findByLid(lid))) throw new MappingError(409, "That LID is already mapped");
@@ -103,7 +103,7 @@ export async function setEnabled(store: MappingStore, actorId: string, id: strin
   if (enabled) {
     const user = await store.findUser(row.userId);
     if (!user || !user.isActive) throw new MappingError(400, "User is missing or inactive");
-    if (user.customerId || !groupForRole(user.roleKey)) throw new MappingError(400, "This user's role has no WhatsApp access");
+    if (!groupForUser(user)) throw new MappingError(400, "This user's role has no WhatsApp access");
     if (!row.verifiedAt) throw new MappingError(400, "Mapping is not verified");
     const others = (await store.findEnabledByUser(row.userId)).filter((m) => m.id !== id);
     if (others.length > 0) throw new MappingError(409, "This user already has an enabled WhatsApp mapping");

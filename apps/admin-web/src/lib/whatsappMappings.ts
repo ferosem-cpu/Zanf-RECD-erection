@@ -1,10 +1,9 @@
 /** Pure helpers for the WhatsApp sender-mapping admin screen (Settings). No I/O. */
 
-/** Mirrors ROLE_GROUP in apps/api/src/agent/whatsapp/policy.ts: roles that may use the WhatsApp agent. */
-export const WHATSAPP_ROLE_KEYS: ReadonlySet<string> = new Set([
-  "super_admin", "owner_admin", "management", "finance", "sales",
-  "operations_pm", "erection_engineer", "commissioning_engineer", "service_team",
-]);
+import { WHATSAPP_ROLE_GROUP } from "@recd/shared";
+
+/** Roles that may use the WhatsApp agent: the same shared map the API policy uses (no copy to drift). */
+export const WHATSAPP_ROLE_KEYS: ReadonlySet<string> = new Set(Object.keys(WHATSAPP_ROLE_GROUP));
 
 export interface MappingUserRef { name: string; roleKey: string; isActive: boolean }
 
@@ -31,10 +30,12 @@ export interface UserOption {
   role?: { key: string; name?: string } | null;
 }
 
-/** Users the API will accept for a mapping: active staff (no customer/vendor link) with a WhatsApp role. */
+/** Users the API will accept for a mapping (mirrors groupForUser): active, WhatsApp role; a customer-linked user only
+ * with the customer role and the customer role only with a customer link. Vendor-linked staff are allowed (the API
+ * still refuses a blocked vendor at message time). */
 export function eligibleUsers(users: UserOption[]): UserOption[] {
   return users
-    .filter((u) => u.isActive && !u.customerId && !u.vendorId && !!u.role && WHATSAPP_ROLE_KEYS.has(u.role.key))
+    .filter((u) => u.isActive && !!u.role && WHATSAPP_ROLE_KEYS.has(u.role.key) && (u.customerId ? u.role.key === "customer" : u.role.key !== "customer"))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

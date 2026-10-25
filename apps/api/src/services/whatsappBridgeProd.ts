@@ -7,7 +7,8 @@ import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { isoDateIST } from "../agent/istDates";
 import { sanitizeAssistantText, sanitizeHistory } from "../agent/assistantText";
 import { openWhatsappTurn } from "../agent/whatsapp/turn";
-import { prismaSenderStore } from "./whatsappMappingStore";
+import { loadWaUserContext, prismaSenderStore } from "./whatsappMappingStore";
+import { buildAllowlist } from "./whatsappAllowlist";
 import { prismaBridgeStore } from "./whatsappBridgeStore";
 import { prismaNonceStore } from "./whatsappBridgeNonceStore";
 import { createBridgeService, WHATSAPP_PROMPT_ADDENDUM } from "./whatsappBridge";
@@ -16,10 +17,10 @@ import { runInBackground } from "../lib/backgroundTask";
 
 /** WhatsApp turn prompt: the in-app prompt (already dated) + WhatsApp addendum + an explicit
  * IST date line at the end, so "today" questions on WhatsApp never fall back to a guessed date. */
-export async function buildWhatsappSystemPrompt(now: Date = new Date()): Promise<string> {
+export async function buildWhatsappSystemPrompt(now: Date = new Date(), isCustomer = false): Promise<string> {
   const company = await prisma.companySettings.findUnique({ where: { id: "singleton" } });
   const today = isoDateIST(now);
-  return buildAgentSystemPrompt(false, company?.agentCustomInstructions) + WHATSAPP_PROMPT_ADDENDUM +
+  return buildAgentSystemPrompt(isCustomer, company?.agentCustomInstructions) + WHATSAPP_PROMPT_ADDENDUM +
     `\n\nToday's date (IST, Asia/Kolkata) is ${today}. For "today"/"tomorrow" questions use this date.`;
 }
 
@@ -28,7 +29,7 @@ export const whatsappBridgeService = createBridgeService({
   senders: prismaSenderStore,
   openTurn: openWhatsappTurn,
   runTurn: runAgentTurn,
-  buildSystemPrompt: () => buildWhatsappSystemPrompt(),
+  buildSystemPrompt: ({ group }) => buildWhatsappSystemPrompt(new Date(), group === "customer"),
   sanitizeReply: (t) => sanitizeAssistantText(t),
   sanitizeHistory: (m) => sanitizeHistory(m),
   newDeadline: () => new AgentDeadline(),
@@ -40,4 +41,9 @@ export const whatsappBridgeRouter = createWhatsappBridgeRouter({
   nonces: prismaNonceStore,
   service: whatsappBridgeService,
   background: runInBackground,
+  allowlist: async () => {
+    const rows = await prisma.whatsappSenderMapping.findMany({ where: { enabled: true, aiPaused: false }, select: { phoneE164: true, lid: true, userId: true } });
+    const candidates = await Promise.all(rows.map(async (r) => ({ phoneE164: r.phoneE164, lid: r.lid, enabled: true, aiPaused: false, user: await loadWaUserContext(r.userId) })));
+    return buildAllowlist(candidates);
+  },
 });

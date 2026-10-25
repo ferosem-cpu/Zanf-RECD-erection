@@ -13,6 +13,7 @@ const USERS: Record<string, MappingUser> = {
   eng2: { id: "eng2", name: "Eng2", roleKey: "service_team", isActive: true, customerId: null },
   off: { id: "off", name: "Off", roleKey: "sales", isActive: false, customerId: null },
   cust: { id: "cust", name: "Cust", roleKey: "customer", isActive: true, customerId: "c1" },
+  mixed: { id: "mixed", name: "Mixed", roleKey: "management", isActive: true, customerId: "c1" },
 };
 
 function memoryStore(): MappingStore & { rows: MappingRecord[] } {
@@ -104,7 +105,10 @@ test("collisions and invalid input are rejected", async () => {
   assert.equal((await call("POST", "", "super_admin", { userId: "eng2", phone: "12345" })).status, 400);
   assert.equal((await call("POST", "", "super_admin", { userId: "nobody", phone: "9123456789" })).status, 400);
   assert.equal((await call("POST", "", "super_admin", { userId: "off", phone: "9123456780" })).status, 400);
-  assert.equal((await call("POST", "", "super_admin", { userId: "cust", phone: "9123456781" })).status, 400);
+  assert.equal((await call("POST", "", "super_admin", { userId: "mixed", phone: "9123456781" })).status, 400, "customer-linked user without the customer role");
+  const custRes = await call("POST", "", "super_admin", { userId: "cust", phone: "9123456782" });
+  assert.equal(custRes.status, 200, "customer role + customer link may be mapped");
+  assert.equal((await call("DELETE", `/${((await custRes.json()) as { mapping: { id: string } }).mapping.id}`, "super_admin")).status, 200);
   assert.equal((await call("POST", "", "super_admin", { userId: "eng2", phone: "9123456789", lid: "x" })).status, 400);
 });
 

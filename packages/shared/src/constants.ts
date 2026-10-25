@@ -60,6 +60,22 @@ export const ROLE_KEY = {
 } as const;
 export type RoleKey = (typeof ROLE_KEY)[keyof typeof ROLE_KEY];
 
+/** WhatsApp agent group per role: the ONE source for the API policy and the admin Settings screen.
+ * A role not listed here has no WhatsApp access. "customer" also requires a customerId on the user. */
+export const WHATSAPP_ROLE_GROUP = {
+  super_admin: "admin",
+  owner_admin: "admin",
+  management: "admin",
+  finance: "finance",
+  sales: "sales",
+  operations_pm: "ops",
+  erection_engineer: "engineer",
+  commissioning_engineer: "engineer",
+  service_team: "engineer",
+  customer: "customer",
+} as const satisfies Record<string, string>;
+export type WhatsappGroup = (typeof WHATSAPP_ROLE_GROUP)[keyof typeof WHATSAPP_ROLE_GROUP];
+
 export const NOTIFICATION_CHANNEL = {
   IN_APP: "in_app",
   EMAIL: "email",

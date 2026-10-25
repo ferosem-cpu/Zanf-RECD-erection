@@ -8,7 +8,7 @@ const row = (o: Partial<MappingRow> = {}): MappingRow => ({
   user: { name: "A", roleKey: "management", isActive: true }, ...o,
 });
 
-test("eligibleUsers keeps active staff with a WhatsApp role only, sorted", () => {
+test("eligibleUsers keeps active users whose role has WhatsApp access (customers only with a customer link), sorted", () => {
   const out = eligibleUsers([
     { id: "1", name: "Zed", isActive: true, role: { key: "sales" } },
     { id: "2", name: "Amy", isActive: true, role: { key: "management" } },
@@ -17,8 +17,9 @@ test("eligibleUsers keeps active staff with a WhatsApp role only, sorted", () =>
     { id: "5", name: "Vend", isActive: true, vendorId: "v", role: { key: "finance" } },
     { id: "6", name: "Client", isActive: true, role: { key: "customer" } },
     { id: "7", name: "NoRole", isActive: true, role: null },
+    { id: "8", name: "Buyer", isActive: true, customerId: "c1", role: { key: "customer" } },
   ]);
-  assert.deepEqual(out.map((u) => u.id), ["2", "1"]);
+  assert.deepEqual(out.map((u) => u.id), ["2", "8", "5", "1"]);
 });
 
 test("looksLikePhone accepts common spellings and rejects junk", () => {
@@ -30,7 +31,7 @@ test("enableBlocker mirrors the API's setEnabled guards", () => {
   assert.equal(enableBlocker(row(), [row()]), null);
   assert.equal(enableBlocker(row({ enabled: true }), []), null);
   assert.match(enableBlocker(row({ user: { name: "A", roleKey: "management", isActive: false } }), [])!, /inactive/);
-  assert.match(enableBlocker(row({ user: { name: "A", roleKey: "customer", isActive: true } }), [])!, /no WhatsApp access/);
+  assert.match(enableBlocker(row({ user: { name: "A", roleKey: "guest", isActive: true } }), [])!, /no WhatsApp access/);
   assert.match(enableBlocker(row({ verifiedAt: null }), [])!, /not verified/);
   const other = row({ id: "m2", enabled: true });
   assert.match(enableBlocker(row(), [row(), other])!, /already has an enabled/);

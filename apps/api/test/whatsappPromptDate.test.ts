@@ -18,3 +18,17 @@ test("WhatsApp turn prompt carries today's IST date (late-evening UTC rolls to n
     if (d) Object.defineProperty(prisma, "companySettings", d); else Reflect.deleteProperty(prisma, "companySettings");
   }
 });
+
+test("WhatsApp prompt audience follows the sender: customers get the customer prompt, staff the staff prompt", async () => {
+  const d = Object.getOwnPropertyDescriptor(prisma, "companySettings");
+  Object.defineProperty(prisma, "companySettings", { configurable: true, value: { findUnique: async () => null } });
+  try {
+    const cust = await buildWhatsappSystemPrompt(new Date(), true);
+    const staff = await buildWhatsappSystemPrompt(new Date(), false);
+    assert.match(cust, /logged-in CUSTOMER/);
+    assert.doesNotMatch(staff, /logged-in CUSTOMER/);
+    assert.match(cust, /1-3 short sentences/);
+  } finally {
+    if (d) Object.defineProperty(prisma, "companySettings", d); else Reflect.deleteProperty(prisma, "companySettings");
+  }
+});

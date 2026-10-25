@@ -124,7 +124,8 @@ export interface BridgeDeps {
   senders: SenderStore;
   openTurn: OpenTurn;
   runTurn: (params: RunAgentTurnParams) => Promise<RunAgentTurnResult>;
-  buildSystemPrompt: () => Promise<string>;
+  /** Prompt for this sender's group (customers get the customer audience, like the in-app assistant). */
+  buildSystemPrompt: (ctx: { group: WaGroup }) => Promise<string>;
   sanitizeReply: (text: string) => string;
   sanitizeHistory: (messages: unknown) => UnifiedMessage[];
   newDeadline: () => RunAgentTurnParams["deadline"];
@@ -255,7 +256,7 @@ export function createBridgeService(deps: BridgeDeps) {
       const conv = await store.getConversation(decision.mapping.userId);
       const history: UnifiedMessage[] = [...trimHistory(deps.sanitizeHistory(conv.messages)), { role: "user", content: job.text }];
       const result = await deps.runTurn({
-        systemPrompt: await deps.buildSystemPrompt(),
+        systemPrompt: await deps.buildSystemPrompt({ group: decision.group }),
         history,
         tools: turn.tools,
         getTool: turn.getTool,

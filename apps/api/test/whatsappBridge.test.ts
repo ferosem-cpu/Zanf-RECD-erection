@@ -125,6 +125,7 @@ let fs_: ReturnType<typeof fakeStore>;
 let bg: Promise<unknown>[];
 let seenNonces: Set<string>;
 let runs: RunAgentTurnParams[];
+const promptGroups: string[] = [];
 let turnBehaviour: (p: RunAgentTurnParams) => Promise<RunAgentTurnResult>;
 let server: Server;
 let base = "";
@@ -152,7 +153,7 @@ before(async () => {
     openTurn,
     // Same wrapper as the real runAgentTurn: finalCheck is applied around the (fake provider) loop.
     runTurn: (p) => { runs.push(p); return withFinalCheck(() => turnBehaviour(p), p.finalCheck); },
-    buildSystemPrompt: async () => "BASE" + WHATSAPP_PROMPT_ADDENDUM,
+    buildSystemPrompt: async ({ group }) => { promptGroups.push(group); return "BASE" + WHATSAPP_PROMPT_ADDENDUM; },
     sanitizeReply: (t) => t,
     sanitizeHistory: (m) => (Array.isArray(m) ? (m as never) : []),
     newDeadline: () => undefined,
@@ -216,6 +217,7 @@ test("end to end: signed ingest -> turn -> outbox -> poll (no text) -> claim (te
   assert.equal(runs.length, 1);
   assert.equal(typeof runs[0].finalCheck, "function", "route must pass finalCheck: turn.recheck");
   assert.ok(runs[0].systemPrompt.includes("1-3 short sentences"));
+  assert.equal(promptGroups.at(-1), "sales", "prompt is built for the sender's group");
   assert.equal(runs[0].auth.waGroup, "sales");
   assert.equal(runs[0].history.at(-1)?.content, "status of ZE-1?");
   assert.equal(fs_.conversations.get("conv-u1")?.id, "conv-u1");
@@ -244,7 +246,7 @@ test("end to end: signed ingest -> turn -> outbox -> poll (no text) -> claim (te
   assert.equal(fs_.outbox[0].status, "delivered", "never backwards");
 });
 
-test("unknown / disabled / paused / customer senders get the same 202 shape as a mapped one, with no job or reply", async () => {
+test("unknown / disabled / paused / customer-linked staff senders get the same 202 shape as a mapped one, with no job or reply", async () => {
   mapping.phoneE164 = "+910000000000";
   const unknown = await call("POST", "/wa/ingest", msg("m-u"));
   assert.equal(unknown.status, 202);
@@ -254,7 +256,7 @@ test("unknown / disabled / paused / customer senders get the same 202 shape as a
   assert.deepEqual(await (await call("POST", "/wa/ingest", msg("m-d"))).json(), { decision: "ignore" });
   mapping.enabled = true; mapping.aiPaused = true;
   assert.deepEqual(await (await call("POST", "/wa/ingest", msg("m-p"))).json(), { decision: "ignore" });
-  mapping.aiPaused = false; user = baseUser({ customerId: "c1", roleKey: "customer" });
+  mapping.aiPaused = false; user = baseUser({ customerId: "c1", roleKey: "management" });
   assert.deepEqual(await (await call("POST", "/wa/ingest", msg("m-c"))).json(), { decision: "ignore" });
   await settle();
   assert.equal(runs.length, 0);

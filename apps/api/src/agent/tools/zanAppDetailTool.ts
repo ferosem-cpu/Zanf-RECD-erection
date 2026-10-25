@@ -168,6 +168,15 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
       if (!auth.permissions.has(PERMISSION_KEY.MANAGE_ORDERS)) return forbidden("products");
       return prisma.product.findUnique({ where: { id } });
     case "complaint":
+      if (auth.customerId) {
+        // Customer: own company's tickets only (customerId from the session).
+        if (!auth.permissions.has(PERMISSION_KEY.RAISE_COMPLAINT)) return forbidden("complaints");
+        const own = await prisma.complaint.findUnique({
+          where: { id },
+          include: { customer: { select: { name: true } }, site: { select: { address: true } }, assignedTo: { select: { name: true } } },
+        });
+        return own && own.customerId === auth.customerId ? own : forbidden("complaints");
+      }
       if (
         !auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) &&
         !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW) &&

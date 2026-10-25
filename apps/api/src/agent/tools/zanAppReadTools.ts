@@ -1187,7 +1187,12 @@ const searchComplaints: AgentTool = {
     },
   },
   handler: async (input, auth) => {
-    if (
+    // A customer (customerId from the session, never from input) sees only their own company's tickets,
+    // the same rule as GET /complaints (lib/complaintScope.ts).
+    const customer = auth.customerId ?? null;
+    if (customer) {
+      if (!auth.permissions.has(PERMISSION_KEY.RAISE_COMPLAINT)) return forbidden("complaints");
+    } else if (
       !hasAny(auth, [
         PERMISSION_KEY.MANAGE_COMPLAINTS,
         PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW,
@@ -1197,9 +1202,9 @@ const searchComplaints: AgentTool = {
       return forbidden("complaints");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const mine = input.assignedToMe === true ||
-      (!auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW));
-    const where: Prisma.ComplaintWhereInput = mine ? { assignedToId: auth.userId } : {};
+    const mine = !customer && (input.assignedToMe === true ||
+      (!auth.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && !auth.permissions.has(PERMISSION_KEY.VIEW_COMPLAINTS_OVERVIEW)));
+    const where: Prisma.ComplaintWhereInput = customer ? { customerId: customer } : mine ? { assignedToId: auth.userId } : {};
     // WhatsApp only: engineers see complaints on their assigned sites, on top of the rule above.
     if (waIsScoped(auth)) where.site = { is: waSiteWhere(auth)! };
     if (status) where.status = status;
@@ -1215,7 +1220,7 @@ const searchComplaints: AgentTool = {
     ]);
     const summary = statusBreakdown(groups);
     return {
-      scope: mine ? "assigned_to_you" : "all",
+      scope: customer ? "your_company" : mine ? "assigned_to_you" : "all",
       ...listMeta(complaints.length, summary.totalCount),
       byStatus: summary.byStatus,
       results: complaints.map((c) => ({

@@ -74,11 +74,11 @@ test("forbidden get_document_detail doc types are denied per group", () => {
   assert.equal(isDetailDocAllowed("sales", "customer"), false);
 });
 
-test("roles map to groups; customers and unknown roles have none", () => {
+test("roles map to groups (customer role -> customer group); unknown roles have none", () => {
   const map: Record<string, WaGroup | null> = {
     super_admin: "admin", owner_admin: "admin", management: "admin", finance: "finance", sales: "sales",
     operations_pm: "ops", erection_engineer: "engineer", commissioning_engineer: "engineer", service_team: "engineer",
-    customer: null, "": null, constructor: null, __proto__: null, toString: null, made_up_role: null,
+    customer: "customer", "": null, constructor: null, __proto__: null, toString: null, made_up_role: null,
   };
   for (const [role, g] of Object.entries(map)) assert.equal(groupForRole(role), g, role);
   assert.equal(groupForRole(undefined), null);

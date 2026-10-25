@@ -3,6 +3,7 @@ import express, { Router } from "express";
 import { z } from "zod";
 import { createBridgeAuth, type NonceStore } from "../services/whatsappBridgeAuth";
 import type { BridgeService } from "../services/whatsappBridge";
+import type { AllowlistResponse } from "../services/whatsappAllowlist";
 
 const ingestSchema = z.object({
   messageId: z.string().min(1).max(200),
@@ -29,6 +30,8 @@ export interface WhatsappBridgeRouterDeps {
   service: BridgeService;
   background: (work: Promise<unknown>) => void;
   keys?: () => Map<string, string>;
+  /** Settings-driven sender allowlist (hashes only). Absent => GET /allowlist is 404. */
+  allowlist?: () => Promise<AllowlistResponse>;
   now?: () => number;
 }
 
@@ -58,6 +61,17 @@ export function createWhatsappBridgeRouter(deps: WhatsappBridgeRouterDeps): Rout
     const { decision, jobId } = await deps.service.ingest(keyId(res), parsed.data);
     res.status(202).json({ decision });
     if (jobId) deps.background(deps.service.processJob(jobId));
+  });
+
+  router.get("/allowlist", async (_req, res) => {
+    if (!deps.allowlist) return void res.status(404).json({ error: "Not found" });
+    try {
+      const out = await deps.allowlist();
+      res.set("Cache-Control", "no-store").json(out);
+    } catch {
+      // Fail closed: the bridge keeps its last good set until its TTL, then forwards nothing.
+      res.status(503).json({ error: "Unavailable" });
+    }
   });
 
   router.get("/outbox", async (req, res) => {

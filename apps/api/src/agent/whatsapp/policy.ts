@@ -2,23 +2,23 @@
  * Deny by default: a tool or document type not listed for the sender's group is refused.
  * The group always comes from the user's CURRENT role, never from message text. */
 
-export type WaGroup = "admin" | "finance" | "sales" | "ops" | "engineer";
+import { WHATSAPP_ROLE_GROUP, type WhatsappGroup } from "@recd/shared";
 
-const ROLE_GROUP: Record<string, WaGroup> = {
-  super_admin: "admin",
-  owner_admin: "admin",
-  management: "admin",
-  finance: "finance",
-  sales: "sales",
-  operations_pm: "ops",
-  erection_engineer: "engineer",
-  commissioning_engineer: "engineer",
-  service_team: "engineer",
-};
+export type WaGroup = WhatsappGroup;
 
-/** null = no WhatsApp access (customers, unknown or future roles): silence. */
+const ROLE_GROUP: Readonly<Record<string, WaGroup>> = WHATSAPP_ROLE_GROUP;
+
+/** null = no WhatsApp access (unknown or future roles): silence. Customers: see groupForUser. */
 export function groupForRole(roleKey: string | null | undefined): WaGroup | null {
   return (roleKey && Object.prototype.hasOwnProperty.call(ROLE_GROUP, roleKey) ? ROLE_GROUP[roleKey] : null);
+}
+
+/** Group for a user: a customerId-linked user gets "customer" only with the customer role (and the customer
+ * role only with a customerId); everything else follows the role. null = no WhatsApp access. */
+export function groupForUser(user: { roleKey: string | null | undefined; customerId?: string | null }): WaGroup | null {
+  const group = groupForRole(user.roleKey);
+  if (user.customerId) return group === "customer" ? "customer" : null;
+  return group === "customer" ? null : group;
 }
 
 export const FINANCE_GROUPS: ReadonlySet<WaGroup> = new Set<WaGroup>(["admin", "finance"]);
@@ -28,6 +28,7 @@ export function isFinanceGroup(g: WaGroup): boolean {
 
 const SITE_TOOLS = ["search_orders_and_sites", "search_site_status_updates"];
 const WORK_TOOLS = ["search_work_orders", "search_complaints"];
+const CUSTOMER_TOOLS = [...SITE_TOOLS, "search_complaints", "get_document_detail"];
 const FINANCE_TOOLS = [
   "search_quotations", "search_invoices", "search_purchase_orders", "search_expenses",
   "get_customer_ledger", "search_credit_notes", "get_customer_advances", "search_payments",
@@ -42,6 +43,7 @@ export const TOOL_ALLOWLIST: Record<WaGroup, ReadonlySet<string>> = {
   sales: new Set([...SITE_TOOLS, "search_customers", "get_document_detail"]),
   ops: new Set([...SITE_TOOLS, ...WORK_TOOLS, "get_document_detail"]),
   engineer: new Set([...SITE_TOOLS, ...WORK_TOOLS, "get_document_detail"]),
+  customer: new Set(CUSTOMER_TOOLS),
 };
 
 const ALL_DOC_TYPES = ["customer", "vendor", "quotation", "invoice", "purchase_order", "expense", "order", "work_order", "complaint", "product"];
@@ -53,6 +55,7 @@ export const DETAIL_DOC_TYPES: Record<WaGroup, ReadonlySet<string>> = {
   sales: new Set(["order"]),
   ops: new Set(["work_order", "order"]),
   engineer: new Set(["work_order", "complaint"]),
+  customer: new Set(["order", "complaint"]),
 };
 
 export function isToolAllowed(group: WaGroup, toolName: string): boolean {
@@ -263,8 +266,7 @@ export async function resolveSender(
 export function checkUserAccess(user: WaUserContext): { ok: true; group: WaGroup } | { ok: false; reason: DenyReason } {
   if (!user.isActive) return { ok: false, reason: "inactive_user" };
   if (user.vendorBlocked) return { ok: false, reason: "vendor_blocked" };
-  if (user.customerId) return { ok: false, reason: "no_group" };
-  const group = groupForRole(user.roleKey);
+  const group = groupForUser(user);
   if (!group) return { ok: false, reason: "no_group" };
   return { ok: true, group };
 }
