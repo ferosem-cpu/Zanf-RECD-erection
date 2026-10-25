@@ -29,7 +29,7 @@ async function openFor(u: WaUserContext, sites: Record<string, { assignedEnginee
 }
 
 /** Records every Prisma call; findUnique answers come from `rows[model]`. */
-function recordPrisma(rows: Record<string, unknown> = {}) {
+function recordPrisma(rows: Record<string, unknown> = {}, lists: Record<string, unknown[]> = {}) {
   const calls: Array<{ model: string; op: string; args: any }> = [];
   const models = ["order", "site", "workOrder", "complaint", "stageDefinition", "statusOption", "siteStageEvent", "invoice",
     "quotation", "purchaseOrder", "expense", "customer", "vendor", "payment", "companySettings"];
@@ -40,6 +40,7 @@ function recordPrisma(rows: Record<string, unknown> = {}) {
       get: (_t, op: string) => async (args: any) => {
         calls.push({ model: m, op, args });
         if (op === "findUnique" || op === "findFirst") return rows[m] ?? null;
+        if (op === "findMany" && lists[m]) return lists[m];
         if (op === "count") return 0;
         if (op === "aggregate") return { _sum: {}, _count: { _all: 0 } };
         return [];
@@ -50,8 +51,8 @@ function recordPrisma(rows: Record<string, unknown> = {}) {
   const restore = () => { for (const [m, d] of saved) d ? Object.defineProperty(prisma, m, d) : Reflect.deleteProperty(prisma, m); };
   return { calls, restore };
 }
-async function run(turn: NonNullable<Awaited<ReturnType<typeof openFor>>["turn"]>, name: string, input: Record<string, unknown>, rows: Record<string, unknown> = {}) {
-  const rec = recordPrisma(rows);
+async function run(turn: NonNullable<Awaited<ReturnType<typeof openFor>>["turn"]>, name: string, input: Record<string, unknown>, rows: Record<string, unknown> = {}, lists: Record<string, unknown[]> = {}) {
+  const rec = recordPrisma(rows, lists);
   try {
     const t = turn.getTool(name);
     const out = t ? await t.handler(input, {} as never) : "NO_TOOL";
@@ -159,5 +160,94 @@ test("finance results are stripped of money for non-finance groups (engineer, cu
     const own = await run(turn!, "get_document_detail", { docType: u.customerId ? "order" : "work_order", id: "o1" },
       { order: { id: "o1", customerId: "c1", orderNumber: "SO-1", value: 12345 }, workOrder: { id: "o1", siteId: "s1", title: "t", cost: 12345 } });
     assert.doesNotMatch(json(own.out), /12345/);
+  }
+});
+
+// ---------- customer output allowlist ----------
+
+/** Every internal value seeded below; none of them may reach a customer. */
+const SECRET = ["SALES_ENG_NAME", "VENDOR_CO_NAME", "ENGINEER_NAME", "INTERNAL_NOTE", "ROOT_CAUSE_TEXT", "RESOLUTION_TEXT",
+  "ASSIGNEE_NAME", "POSTED_BY_NAME", "GSTIN_X", "DRIVE_URL_X", "77777", "88888", "OTHER_CUSTOMER_CO"];
+const INTERNAL_KEYS = ["salesEngineer", "vendor", "assignedEngineer", "customerNotes", "rootCause", "resolutionNotes",
+  "assignedTo", "postedBy", "value", "totalValue", "openValue", "gstin", "plannedExhaustHookupType", "requestedByCustomer",
+  "photosDriveFolderUrl", "gpsLat", "openingBalance"];
+function assertClean(out: unknown, label: string) {
+  const s = json(out);
+  for (const v of SECRET) assert.ok(!s.includes(v), `${label}: leaked ${v}`);
+  for (const k of INTERNAL_KEYS) assert.ok(!s.includes(`"${k}"`), `${label}: leaked key ${k}`);
+}
+const PERSON = (n: string) => ({ name: n });
+const richSite = {
+  id: "s1", address: "Plot 1", companyName: "BPCL Depot", gpsLat: 12.3, photosDriveFolderUrl: "DRIVE_URL_X",
+  currentStage: { label: "Installing", sequenceOrder: 3 }, assignedEngineer: PERSON("ENGINEER_NAME"), vendor: PERSON("VENDOR_CO_NAME"),
+  assignedEngineerId: "u9", vendorId: "v9",
+};
+const richOrder = {
+  id: "o1", orderNumber: "SO-1", customerId: "c1", quantity: 1, value: 77777, orderDate: null, promisedDeliveryDate: null,
+  actualDispatchDate: null, customerNotes: "INTERNAL_NOTE", salesEngineer: PERSON("SALES_ENG_NAME"), plannedExhaustHookupType: "x",
+  requestedByCustomer: false, customerPoNumber: "PO-9",
+  customer: { name: "Acme", gstin: "GSTIN_X", openingBalance: 88888 }, product: { name: "RECD", model: "R-500" },
+  lineItems: [{ quantity: 1, product: { name: "RECD", model: "R-380" } }], site: richSite,
+};
+const richComplaint = {
+  id: "k1", ticketNumber: "T-1", customerId: "c1", siteId: "s1", category: "delivery_delay", description: "late", severity: "high",
+  status: "open", rootCause: "ROOT_CAUSE_TEXT", resolutionNotes: "RESOLUTION_TEXT", assignedTo: PERSON("ASSIGNEE_NAME"),
+  customer: { name: "Acme" }, site: { address: "Plot 1" }, createdAt: new Date(0), closedAt: null,
+};
+
+test("customer: order/site search output is allowlisted (no value, engineer, vendor, notes)", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1" }));
+  const r = await run(turn!, "search_orders_and_sites", {}, {}, { order: [richOrder] });
+  assert.equal(r.out.orders[0].orderNumber, "SO-1");
+  assert.equal(r.out.orders[0].site.siteName, "BPCL Depot");
+  assert.equal(r.out.orders[0].site.currentStage, "Installing");
+  assertClean(r.out, "search_orders_and_sites");
+});
+
+test("customer: site status updates hide who posted them", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1" }));
+  const site = { ...richSite, order: { orderNumber: "SO-1", customerId: "c1" } };
+  const ev = { id: "e1", comment: "Base done", createdAt: new Date(0), stageDefinition: { label: "Installing" },
+    statusOption: { key: "done", label: "Done" }, createdBy: PERSON("POSTED_BY_NAME") };
+  const r = await run(turn!, "search_site_status_updates", { siteId: "s1" }, { site }, { siteStageEvent: [ev], order: [richOrder] });
+  assert.equal(r.out.error, undefined, JSON.stringify(r.out));
+  assert.equal(r.out.updates[0].comment, "Base done");
+  assertClean(r.out, "search_site_status_updates");
+});
+
+test("customer: complaint search and complaint detail hide assignee, root cause, resolution notes", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1" }));
+  const list = await run(turn!, "search_complaints", {}, {}, { complaint: [richComplaint] });
+  assert.equal(list.out.results[0].ticketNumber, "T-1");
+  assertClean(list.out, "search_complaints");
+  const det = await run(turn!, "get_document_detail", { docType: "complaint", id: "k1" }, { complaint: richComplaint });
+  assert.equal(det.out.ticketNumber, "T-1");
+  assert.equal(det.out.description, "late");
+  assertClean(det.out, "complaint detail");
+});
+
+test("customer: order detail is allowlisted (no salesEngineer, vendor, engineer, customerNotes, value, gstin)", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1" }));
+  const det = await run(turn!, "get_document_detail", { docType: "order", id: "o1" }, { order: richOrder });
+  assert.equal(det.out.orderNumber, "SO-1");
+  assert.equal(det.out.site.currentStage.label, "Installing");
+  assertClean(det.out, "order detail");
+});
+
+test("staff projection is unchanged: management still sees salesEngineer and complaint rootCause", async () => {
+  const { turn } = await openFor(user("management"));
+  const det = await run(turn!, "get_document_detail", { docType: "order", id: "o1" }, { order: richOrder });
+  assert.match(json(det.out), /SALES_ENG_NAME/);
+  const c = await run(turn!, "get_document_detail", { docType: "complaint", id: "k1" }, { complaint: richComplaint });
+  assert.match(json(c.out), /ROOT_CAUSE_TEXT/);
+});
+
+test("no WhatsApp group: customer role without customerId, or customerId with a non-customer role", async () => {
+  for (const u of [user("customer", { customerId: null }), user("management", { customerId: "c1" }), user("erection_engineer", { customerId: "c1" })]) {
+    assert.equal(groupForUser(u), null, u.roleKey);
+    const { decision, turn } = await openFor(u);
+    assert.equal(decision.ok, false, u.roleKey);
+    assert.equal(!decision.ok && decision.reason, "no_group", u.roleKey);
+    assert.equal(turn, null);
   }
 });

@@ -13,6 +13,7 @@ import {
   type SenderDecision, type SenderStore, type WaGroup,
 } from "./policy";
 import { waSiteVisible } from "./siteScope";
+import { projectForCustomer } from "./customerProjection";
 
 export type SiteLookup = (siteId: string) => Promise<{ assignedEngineerId: string | null; vendorId: string | null } | null>;
 
@@ -113,8 +114,10 @@ export function createWhatsappTurn(sender: Extract<SenderDecision, { ok: true }>
             const site = siteId ? await deps.siteLookup(siteId) : null;
             if (!waSiteVisible(auth, site)) return NOT_FOUND(docType, docId);
           }
-          result = projectDetail(docType, result, isFinanceGroup(group));
+          if (group !== "customer") result = projectDetail(docType, result, isFinanceGroup(group));
         }
+        // Customers: strict per-tool field allowlist (never the staff projection), then the money strip as well.
+        if (group === "customer") return sanitizeNonFinance(projectForCustomer(inner.name, docType, result));
         return isFinanceGroup(group) ? result : sanitizeNonFinance(result);
       },
     };

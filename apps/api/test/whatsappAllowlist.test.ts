@@ -110,3 +110,39 @@ test("allowlistHash matches the bridge's Go test vector (zanallow.TestHashMatche
     "35789f36876fd1cf7dfd07e4b51122f233f768af08a638441c057d4c5a6d38e4",
   );
 });
+
+test("allowlist candidates: one joined query, same eligibility as loading each user separately", async () => {
+  const { prisma } = await import("../src/lib/prisma");
+  const { loadAllowlistCandidates, loadWaUserContext } = await import("../src/services/whatsappMappingStore");
+  const role = (key: string, perms: string[] = ["view_site_status"]) => ({ key, permissions: perms.map((k) => ({ permission: { key: k } })) });
+  const users: Record<string, any> = {
+    u1: { id: "u1", isActive: true, customerId: null, vendorId: null, vendor: null, role: role("management") },
+    u2: { id: "u2", isActive: false, customerId: null, vendorId: null, vendor: null, role: role("management") },
+    u3: { id: "u3", isActive: true, customerId: "c1", vendorId: null, vendor: null, role: role("customer") },
+    u4: { id: "u4", isActive: true, customerId: null, vendorId: null, vendor: null, role: role("customer") },
+    u5: { id: "u5", isActive: true, customerId: "c1", vendorId: null, vendor: null, role: role("management") },
+    u6: { id: "u6", isActive: true, customerId: null, vendorId: "v1", vendor: { status: "blocked" }, role: role("erection_engineer") },
+    u7: { id: "u7", isActive: true, customerId: null, vendorId: null, vendor: null, role: role("guest") },
+  };
+  const maps = Object.keys(users).map((id, i) => ({ phoneE164: `+91980000000${i + 1}`, lid: i === 0 ? "123456789" : null, enabled: true, aiPaused: false, userId: id }));
+  const calls: string[] = [];
+  const saved = [Object.getOwnPropertyDescriptor(prisma, "whatsappSenderMapping"), Object.getOwnPropertyDescriptor(prisma, "user")] as const;
+  Object.defineProperty(prisma, "whatsappSenderMapping", { configurable: true, value: { findMany: async (args: any) => {
+    calls.push("mapping.findMany");
+    assert.deepEqual(args.where, { enabled: true, aiPaused: false });
+    return maps.map((m) => ({ ...m, user: users[m.userId] }));
+  } } });
+  Object.defineProperty(prisma, "user", { configurable: true, value: { findUnique: async (args: any) => { calls.push("user.findUnique"); return users[args.where.id] ?? null; } } });
+  try {
+    const joined = await loadAllowlistCandidates();
+    assert.deepEqual(calls, ["mapping.findMany"], "exactly one query, no per-user lookups");
+    const perUser = await Promise.all(maps.map(async (m) => ({ phoneE164: m.phoneE164, lid: m.lid, enabled: true, aiPaused: false, user: await loadWaUserContext(m.userId) })));
+    assert.deepEqual(buildAllowlist(joined, "fixed"), buildAllowlist(perUser, "fixed"));
+    const res = buildAllowlist(joined, "fixed");
+    assert.deepEqual(res.phones, [allowlistHash("fixed", "p", "919800000001"), allowlistHash("fixed", "p", "919800000003")].sort());
+    assert.deepEqual(res.lids, [allowlistHash("fixed", "l", "123456789")]);
+  } finally {
+    saved[0] ? Object.defineProperty(prisma, "whatsappSenderMapping", saved[0]) : Reflect.deleteProperty(prisma, "whatsappSenderMapping");
+    saved[1] ? Object.defineProperty(prisma, "user", saved[1]) : Reflect.deleteProperty(prisma, "user");
+  }
+});

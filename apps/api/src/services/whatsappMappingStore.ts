@@ -4,17 +4,16 @@ import { prisma } from "../lib/prisma";
 import { isVendorAccessBlocked } from "../lib/authPolicy";
 import { MappingError, type MappingStore } from "./whatsappMapping";
 import type { SenderStore, WaUserContext } from "../agent/whatsapp/policy";
+import type { AllowlistCandidate } from "./whatsappAllowlist";
 
 /** Same loading rules as middleware/auth.ts authenticate: current role + permissions, active flag, vendor block. */
-export async function loadWaUserContext(userId: string): Promise<WaUserContext | null> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: {
-      role: { include: { permissions: { include: { permission: true } } } },
-      vendor: { select: { status: true } },
-    },
-  });
-  if (!user) return null;
+const WA_USER_INCLUDE = {
+  role: { include: { permissions: { include: { permission: true } } } },
+  vendor: { select: { status: true } },
+} satisfies Prisma.UserInclude;
+type WaUserRow = Prisma.UserGetPayload<{ include: typeof WA_USER_INCLUDE }>;
+
+function toWaUserContext(user: WaUserRow): WaUserContext {
   return {
     userId: user.id,
     roleKey: user.role.key,
@@ -24,6 +23,21 @@ export async function loadWaUserContext(userId: string): Promise<WaUserContext |
     vendorBlocked: isVendorAccessBlocked(user),
     permissions: new Set(user.role.permissions.map((rp) => rp.permission.key)),
   };
+}
+
+export async function loadWaUserContext(userId: string): Promise<WaUserContext | null> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, include: WA_USER_INCLUDE });
+  return user ? toWaUserContext(user) : null;
+}
+
+/** GET /wa/allowlist: every enabled, unpaused mapping with its user (same loading rules as loadWaUserContext)
+ * in ONE joined query instead of one user query per mapping. Eligibility is decided by buildAllowlist. */
+export async function loadAllowlistCandidates(): Promise<AllowlistCandidate[]> {
+  const rows = await prisma.whatsappSenderMapping.findMany({
+    where: { enabled: true, aiPaused: false },
+    select: { phoneE164: true, lid: true, enabled: true, aiPaused: true, user: { include: WA_USER_INCLUDE } },
+  });
+  return rows.map((r) => ({ phoneE164: r.phoneE164, lid: r.lid, enabled: r.enabled, aiPaused: r.aiPaused, user: r.user ? toWaUserContext(r.user) : null }));
 }
 
 export const prismaSenderStore: SenderStore = {

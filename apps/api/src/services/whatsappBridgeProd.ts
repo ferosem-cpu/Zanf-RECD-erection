@@ -7,7 +7,7 @@ import { buildAgentSystemPrompt } from "../agent/systemPrompt";
 import { isoDateIST } from "../agent/istDates";
 import { sanitizeAssistantText, sanitizeHistory } from "../agent/assistantText";
 import { openWhatsappTurn } from "../agent/whatsapp/turn";
-import { loadWaUserContext, prismaSenderStore } from "./whatsappMappingStore";
+import { loadAllowlistCandidates, prismaSenderStore } from "./whatsappMappingStore";
 import { buildAllowlist } from "./whatsappAllowlist";
 import { prismaBridgeStore } from "./whatsappBridgeStore";
 import { prismaNonceStore } from "./whatsappBridgeNonceStore";
@@ -41,9 +41,5 @@ export const whatsappBridgeRouter = createWhatsappBridgeRouter({
   nonces: prismaNonceStore,
   service: whatsappBridgeService,
   background: runInBackground,
-  allowlist: async () => {
-    const rows = await prisma.whatsappSenderMapping.findMany({ where: { enabled: true, aiPaused: false }, select: { phoneE164: true, lid: true, userId: true } });
-    const candidates = await Promise.all(rows.map(async (r) => ({ phoneE164: r.phoneE164, lid: r.lid, enabled: true, aiPaused: false, user: await loadWaUserContext(r.userId) })));
-    return buildAllowlist(candidates);
-  },
+  allowlist: async () => buildAllowlist(await loadAllowlistCandidates()),
 });
