@@ -1136,16 +1136,23 @@ const searchWorkOrders: AgentTool = {
     },
   },
   handler: async (input, auth) => {
-    if (!hasAny(auth, [PERMISSION_KEY.MANAGE_WORK_ORDERS, PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS])) return forbidden("work orders");
+    // WhatsApp customer group only: read-only view of work orders on their OWN company's sites (the in-app
+    // customer portal is unchanged). customerId comes from the session, never from input.
+    const customer = auth.waGroup === "customer" && auth.customerId ? auth.customerId : null;
+    if (customer) {
+      if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("work orders");
+    } else if (!hasAny(auth, [PERMISSION_KEY.MANAGE_WORK_ORDERS, PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS])) return forbidden("work orders");
     const query = input.query ? String(input.query) : undefined;
     const status = input.status ? String(input.status) : undefined;
-    const mine = input.assignedToMe === true || !auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS);
-    const where: Prisma.WorkOrderWhereInput = mine ? { assignedToId: auth.userId } : {};
+    const mine = !customer && (input.assignedToMe === true || !auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS));
+    const where: Prisma.WorkOrderWhereInput = customer
+      ? { site: { is: { order: { customerId: customer } } } }
+      : mine ? { assignedToId: auth.userId } : {};
     const scheduled = istDayRange(input.scheduledFrom, input.scheduledTo);
     if ("error" in scheduled) return { error: scheduled.error };
     if (scheduled.range) where.scheduledDate = scheduled.range;
     // WhatsApp only: engineers see work orders on their assigned sites, on top of the rule above.
-    if (waIsScoped(auth)) where.site = { is: waSiteWhere(auth)! };
+    if (!customer && waIsScoped(auth)) where.site = { is: waSiteWhere(auth)! };
     if (status) where.status = status;
     if (query) where.OR = [{ title: { contains: query, mode: "insensitive" } }, { workOrderNumber: { contains: query, mode: "insensitive" } }];
     const [workOrders, groups] = await Promise.all([
@@ -1159,7 +1166,7 @@ const searchWorkOrders: AgentTool = {
     ]);
     const summary = statusBreakdown(groups);
     return {
-      scope: mine ? "assigned_to_you" : "all",
+      scope: customer ? "your_company" : mine ? "assigned_to_you" : "all",
       ...listMeta(workOrders.length, summary.totalCount),
       byStatus: summary.byStatus,
       results: workOrders.map((w) => ({

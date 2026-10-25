@@ -28,7 +28,7 @@ export function isFinanceGroup(g: WaGroup): boolean {
 
 const SITE_TOOLS = ["search_orders_and_sites", "search_site_status_updates"];
 const WORK_TOOLS = ["search_work_orders", "search_complaints"];
-const CUSTOMER_TOOLS = [...SITE_TOOLS, "search_complaints", "get_document_detail"];
+const CUSTOMER_TOOLS = [...SITE_TOOLS, "search_complaints", "search_work_orders", "get_document_detail"];
 const FINANCE_TOOLS = [
   "search_quotations", "search_invoices", "search_purchase_orders", "search_expenses",
   "get_customer_ledger", "search_credit_notes", "get_customer_advances", "search_payments",
@@ -55,7 +55,7 @@ export const DETAIL_DOC_TYPES: Record<WaGroup, ReadonlySet<string>> = {
   sales: new Set(["order"]),
   ops: new Set(["work_order", "order"]),
   engineer: new Set(["work_order", "complaint"]),
-  customer: new Set(["order", "complaint"]),
+  customer: new Set(["order", "complaint", "work_order"]),
 };
 
 export function isToolAllowed(group: WaGroup, toolName: string): boolean {

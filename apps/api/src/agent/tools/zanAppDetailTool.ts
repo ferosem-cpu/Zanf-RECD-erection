@@ -152,6 +152,15 @@ async function loadDetail(docType: DocType, id: string, auth: AgentAuthContext) 
       return order;
     }
     case "work_order":
+      if (auth.waGroup === "customer" && auth.customerId) {
+        // WhatsApp customer: own company's work orders only (customerId from the session).
+        if (!auth.permissions.has(PERMISSION_KEY.VIEW_SITE_STATUS)) return forbidden("work orders");
+        const own = await prisma.workOrder.findUnique({
+          where: { id },
+          include: { site: { select: { address: true, companyName: true, order: { select: { orderNumber: true, customerId: true } } } } },
+        });
+        return own && own.site?.order?.customerId === auth.customerId ? own : forbidden("work orders");
+      }
       if (
         !auth.permissions.has(PERMISSION_KEY.MANAGE_WORK_ORDERS) &&
         !auth.permissions.has(PERMISSION_KEY.ACT_ASSIGNED_WORK_ORDERS)

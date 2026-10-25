@@ -118,13 +118,13 @@ test("erection engineer: orders/sites search is limited to assigned sites; invoi
   assert.match(json(wo.out), /No work_order found/, "work order on someone else's site is hidden");
 });
 
-test("customer: only site/complaint/detail tools; no finance, no work orders", async () => {
+test("customer: only site/complaint/work-order/detail tools; no finance", async () => {
   const { decision, turn } = await openFor(user("customer", { customerId: "c1" }));
   assert.ok(decision.ok && decision.group === "customer");
   const names = turn!.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ["get_document_detail", "search_complaints", "search_orders_and_sites", "search_site_status_updates"]);
-  for (const f of [...FINANCE, "search_work_orders", "search_customers", "search_vendors"]) assert.equal(turn!.getTool(f), undefined, f);
-  for (const d of ["invoice", "quotation", "purchase_order", "expense", "customer", "vendor", "work_order"]) {
+  assert.deepEqual(names, ["get_document_detail", "search_complaints", "search_orders_and_sites", "search_site_status_updates", "search_work_orders"]);
+  for (const f of [...FINANCE, "search_customers", "search_vendors"]) assert.equal(turn!.getTool(f), undefined, f);
+  for (const d of ["invoice", "quotation", "purchase_order", "expense", "customer", "vendor"]) {
     assert.match(json((await run(turn!, "get_document_detail", { docType: d, id: "x" })).out), /isn't available to you over WhatsApp/, d);
   }
 });
@@ -250,4 +250,54 @@ test("no WhatsApp group: customer role without customerId, or customerId with a 
     assert.equal(!decision.ok && decision.reason, "no_group", u.roleKey);
     assert.equal(turn, null);
   }
+});
+
+// ---------- customer work orders (own sites only) ----------
+
+const richWorkOrder = {
+  id: "w1", workOrderNumber: "WO-1", siteId: "s1", taskType: "installation", title: "Install RECD", status: "scheduled",
+  scheduledDate: new Date(0), startedAt: null, completedAt: null, createdAt: new Date(0), instructions: "INTERNAL_NOTE",
+  completionNotes: "RESOLUTION_TEXT", assignedTo: PERSON("ASSIGNEE_NAME"), createdBy: PERSON("POSTED_BY_NAME"), cost: 77777,
+  site: { ...richSite, order: { orderNumber: "SO-1", customerId: "c1", value: 88888, customer: { name: "Acme", gstin: "GSTIN_X" } } },
+};
+
+test("customer: work-order search is scoped to their own customerId and ignores assignedToMe", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1" }));
+  const r = await run(turn!, "search_work_orders", { assignedToMe: true, query: "x", customerId: "c2" });
+  const ws = r.calls.filter((c) => c.model === "workOrder" && (c.op === "findMany" || c.op === "count" || c.op === "groupBy"));
+  assert.ok(ws.length > 0);
+  for (const c of ws) {
+    assert.equal(c.args.where.site.is.order.customerId, "c1");
+    assert.equal(c.args.where.assignedToId, undefined);
+  }
+  assert.equal(r.out.scope, "your_company");
+});
+
+test("customer: work-order search output is allowlisted (no assignee, notes, instructions, money)", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1" }));
+  const r = await run(turn!, "search_work_orders", {}, {}, { workOrder: [richWorkOrder] });
+  assert.equal(r.out.error, undefined, JSON.stringify(r.out));
+  assert.equal(r.out.results[0].workOrderNumber, "WO-1");
+  assert.equal(r.out.results[0].status, "scheduled");
+  assertClean(r.out, "search_work_orders");
+  for (const k of ["instructions", "completionNotes", "createdBy", "cost"]) assert.ok(!json(r.out).includes(`"${k}"`), k);
+});
+
+test("customer: own work-order detail is clean; another customer's is refused", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1" }));
+  const own = await run(turn!, "get_document_detail", { docType: "work_order", id: "w1" }, { workOrder: richWorkOrder });
+  assert.match(json(own.out), /WO-1/);
+  assertClean(own.out, "work_order detail");
+  for (const k of ["instructions", "completionNotes", "createdBy", "cost"]) assert.ok(!json(own.out).includes(`"${k}"`), k);
+  const other = await run(turn!, "get_document_detail", { docType: "work_order", id: "w2" },
+    { workOrder: { ...richWorkOrder, id: "w2", workOrderNumber: "WO-2", site: { ...richWorkOrder.site, order: { orderNumber: "SO-2", customerId: "c2" } } } });
+  assert.doesNotMatch(json(other.out), /WO-2|SO-2/);
+});
+
+test("customer: without view_site_status, work orders are refused", async () => {
+  const { turn } = await openFor(user("customer", { customerId: "c1", permissions: new Set(["raise_complaint"]) }));
+  const r = await run(turn!, "search_work_orders", {}, {}, { workOrder: [richWorkOrder] });
+  assert.doesNotMatch(json(r.out), /WO-1/);
+  const d = await run(turn!, "get_document_detail", { docType: "work_order", id: "w1" }, { workOrder: richWorkOrder });
+  assert.doesNotMatch(json(d.out), /WO-1/);
 });
