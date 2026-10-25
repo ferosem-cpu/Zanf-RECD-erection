@@ -3,6 +3,10 @@
 export interface TurnTimer {
   llm(ms: number): void;
   tools(timings: { tool: string; ms: number; error: boolean }[]): void;
+  /** Which provider label/model answered a round (names only, never keys). */
+  provider(label: string): void;
+  /** Free-form marker, e.g. "no_tools_refusal_retry". */
+  note(n: string): void;
   summary(outcome: string): Record<string, unknown>;
   log(outcome: string): void;
 }
@@ -11,6 +15,8 @@ export function createTurnTimer(now: () => number = Date.now, sink: (line: strin
   const start = now();
   const llmMs: number[] = [];
   const toolMs: { tool: string; ms: number; error: boolean }[] = [];
+  const providers: string[] = [];
+  const notes: string[] = [];
   const summary = (outcome: string) => ({
     rounds: llmMs.length,
     llmMs,
@@ -20,10 +26,14 @@ export function createTurnTimer(now: () => number = Date.now, sink: (line: strin
     toolTotalMs: toolMs.reduce((a, b) => a + b.ms, 0),
     totalMs: now() - start,
     outcome,
+    ...(providers.length ? { providers } : {}),
+    ...(notes.length ? { notes } : {}),
   });
   return {
     llm: (ms) => void llmMs.push(Math.round(ms)),
     tools: (t) => void toolMs.push(...t.map((x) => ({ ...x, ms: Math.round(x.ms) }))),
+    provider: (l) => void providers.push(l),
+    note: (n) => void notes.push(n),
     summary,
     log: (outcome) => sink(`agent_turn_timing ${JSON.stringify(summary(outcome))}`),
   };

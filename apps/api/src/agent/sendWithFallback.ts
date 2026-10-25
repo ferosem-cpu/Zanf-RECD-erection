@@ -25,6 +25,8 @@ export async function sendWithFallback(
   deadline: AgentDeadline,
   /** Providers that timed out (or returned 413) earlier in this same request; later rounds go straight past them. */
   timedOut: Set<string> = new Set(),
+  /** Called with the provider row that produced the returned answer. */
+  onProvider?: (row: AgentLlmProvider) => void,
 ): Promise<SendMessageResult> {
   const failures: ProviderFailure[] = [];
   const primaryId = providers[0]?.id;
@@ -52,7 +54,9 @@ export async function sendWithFallback(
       // An empty / special-token-only reply (e.g. literal "<EOS_TOKEN>") is retried once on the
       // same provider, then treated as that provider failing so the next one is tried.
       const send = () => adapter!.sendMessage({ ...params, timeoutMs: deadline.attemptTimeoutMs(hasFallback) });
-      return await sendCleaned(send, () => !deadline.expired());
+      const result = await sendCleaned(send, () => !deadline.expired());
+      onProvider?.(providerRow);
+      return result;
     } catch (err) {
       if (isTimeoutError(err) || isPayloadTooLarge(err)) timedOut.add(providerRow.id);
       failures.push(recordProviderFailure(providerRow, err, "chat", { primary }));
