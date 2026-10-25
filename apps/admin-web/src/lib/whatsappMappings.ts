@@ -60,3 +60,11 @@ export function mappingStatus(row: MappingRow): "On" | "Paused" | "Off" {
   if (!row.enabled) return "Off";
   return row.aiPaused ? "Paused" : "On";
 }
+
+/** Per-number tick box: what ticking (true) / unticking (false) should call, or why it can't. */
+export function toggleRequest(row: MappingRow, rows: MappingRow[], checked: boolean): { path: string } | { blocked: string } | null {
+  if (checked === row.enabled) return null;
+  if (!checked) return { path: `/whatsapp/mappings/${row.id}/disable` };
+  const blocker = enableBlocker(row, rows);
+  return blocker ? { blocked: blocker } : { path: `/whatsapp/mappings/${row.id}/enable` };
+}

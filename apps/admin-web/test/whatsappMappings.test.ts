@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { eligibleUsers, looksLikePhone, enableBlocker, mappingStatus, type MappingRow } from "../src/lib/whatsappMappings";
+import { eligibleUsers, looksLikePhone, enableBlocker, mappingStatus, toggleRequest, type MappingRow } from "../src/lib/whatsappMappings";
 
 const row = (o: Partial<MappingRow> = {}): MappingRow => ({
   id: "m1", userId: "u1", phoneE164: "+910000000000", lid: null, enabled: false, aiPaused: false, note: null,
@@ -40,4 +40,15 @@ test("mappingStatus", () => {
   assert.equal(mappingStatus(row()), "Off");
   assert.equal(mappingStatus(row({ enabled: true })), "On");
   assert.equal(mappingStatus(row({ enabled: true, aiPaused: true })), "Paused");
+});
+
+test("toggleRequest: tick enables, untick disables, blocked tick explains, no-op returns null", () => {
+  const off = row();
+  assert.deepEqual(toggleRequest(off, [off], true), { path: "/whatsapp/mappings/m1/enable" });
+  const on = row({ enabled: true });
+  assert.deepEqual(toggleRequest(on, [on], false), { path: "/whatsapp/mappings/m1/disable" });
+  assert.equal(toggleRequest(on, [on], true), null);
+  assert.equal(toggleRequest(off, [off], false), null);
+  const unverified = row({ verifiedAt: null });
+  assert.deepEqual(toggleRequest(unverified, [unverified], true), { blocked: "Mapping is not verified" });
 });
