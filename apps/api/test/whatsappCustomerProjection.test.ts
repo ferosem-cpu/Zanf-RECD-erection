@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import { projectForCustomer, CUSTOMER_PROJECTED_TOOLS, CUSTOMER_PROJECTED_DOCS } from "../src/agent/whatsapp/customerProjection";
 
 test("customer projection: unknown tools/doc types fail closed; unknown fields are dropped", () => {
-  assert.deepEqual(CUSTOMER_PROJECTED_TOOLS.sort(), ["search_complaints", "search_orders_and_sites", "search_site_status_updates"]);
-  assert.deepEqual(CUSTOMER_PROJECTED_DOCS.sort(), ["complaint", "order"]);
+  assert.deepEqual(CUSTOMER_PROJECTED_TOOLS.sort(), ["search_complaints", "search_orders_and_sites", "search_site_status_updates", "search_work_orders"]);
+  assert.deepEqual(CUSTOMER_PROJECTED_DOCS.sort(), ["complaint", "order", "work_order"]);
   assert.match(JSON.stringify(projectForCustomer("search_invoices", "", { results: [{ total: 5 }] })), /isn't available/);
   assert.match(JSON.stringify(projectForCustomer("get_document_detail", "invoice", { id: "i" })), /isn't available/);
   const out = projectForCustomer("get_document_detail", "complaint", { id: "k", ticketNumber: "T", newInternalField: "x", rootCause: "y" });

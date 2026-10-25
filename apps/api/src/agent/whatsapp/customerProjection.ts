@@ -74,6 +74,12 @@ const LIST_SPECS: Record<string, Spec> = {
     // comment is the site update text that is also emailed to the customer contact; postedBy (staff name) is not shown.
     updates: { id: true, stage: true, status: true, comment: true, postedAt: true },
   },
+  // Work orders on the customer's own sites: what, when and status only. No assignee/creator, no instructions or
+  // completion notes (internal crew text), no task cost fields.
+  search_work_orders: {
+    scope: true, ...LIST_META, byStatus: STATUS_COUNTS,
+    results: { id: true, workOrderNumber: true, title: true, taskType: true, status: true, scheduledDate: true },
+  },
   search_complaints: {
     scope: true, ...LIST_META, byStatus: STATUS_COUNTS,
     results: { id: true, ticketNumber: true, customer: true, category: true, severity: true, status: true },
@@ -87,6 +93,11 @@ const DETAIL_SPECS: Record<string, Spec> = {
     customer: { name: true }, product: PRODUCT,
     lineItems: { quantity: true, product: PRODUCT },
     site: { id: true, address: true, companyName: true, currentStage: { label: true } },
+  },
+  work_order: {
+    id: true, workOrderNumber: true, siteId: true, taskType: true, title: true, status: true,
+    scheduledDate: true, startedAt: true, completedAt: true, createdAt: true,
+    site: { address: true, companyName: true, order: { orderNumber: true } },
   },
   complaint: {
     id: true, ticketNumber: true, siteId: true, category: true, description: true, severity: true, status: true,

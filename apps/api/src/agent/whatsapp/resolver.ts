@@ -106,7 +106,8 @@ export function createWhatsappTurn(sender: Extract<SenderDecision, { ok: true }>
           if (!isFinanceGroup(group) && looksLikeFinanceDoc(result)) return DENIED;
           if (group === "customer") {
             // Defence in depth on top of the tool's own check: a customer only ever sees rows of their own customer.
-            const owner = (result as { customerId?: string | null }).customerId ?? null;
+            const r = result as { customerId?: string | null; site?: { order?: { customerId?: string | null } | null } | null };
+            const owner = r.customerId ?? r.site?.order?.customerId ?? null;
             if (!auth.customerId || owner !== auth.customerId) return NOT_FOUND(docType, docId);
           }
           if (group === "engineer") {

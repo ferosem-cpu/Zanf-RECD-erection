@@ -132,6 +132,8 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
   schema (scratch DB restored from the `D:\Backups\zan-db\20261024-1545` DDL backup, or read-only against live; NOT the
   drifted Neon test copy) - diff must be empty -> (6) only then prod `prisma migrate deploy`, with Ferose's OK.
 
+- **Customer step 25 Oct (branch `feat/wa-customer-workorders`, not deployed):** read-only sample on real prod rows passed (own-only, no internal fields, other customer refused, finance denied). Branch adds customer `search_work_orders` + work_order detail scoped to `site.order.customerId = session customerId`, gated on view_site_status, through `customerProjection.ts` allowlists (id, number, title, taskType, status, dates, site address/name, order number only). Resolver ownership check also reads `site.order.customerId`. Tests: whatsappRoleScope (scope, allowlist, other-customer refusal, no-permission refusal). api 364/370 (6 pg skipped), tsc clean.
+
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
   agent/), `apps/admin-web` (Next 15 App Router, Tailwind), `apps/mobile` (Expo, never runtime-tested,
