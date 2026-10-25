@@ -134,6 +134,8 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
 - **Customer step 25 Oct (branch `feat/wa-customer-workorders`, not deployed):** read-only sample on real prod rows passed (own-only, no internal fields, other customer refused, finance denied). Branch adds customer `search_work_orders` + work_order detail scoped to `site.order.customerId = session customerId`, gated on view_site_status, through `customerProjection.ts` allowlists (id, number, title, taskType, status, dates, site address/name, order number only). Resolver ownership check also reads `site.order.customerId`. Tests: whatsappRoleScope (scope, allowlist, other-customer refusal, no-permission refusal). api 364/370 (6 pg skipped), tsc clean.
 
+- **Customer work-order deploy 25 Oct ~08:45 IST: BLOCKED by Vercel free-plan limit (100 deploys/day).** master = 7b8e699 (ahead of prod), feat/whatsapp-m2 = 7d54312. Prod API still dpl_EwrKATMSAC7BsH8KBCWxHh8fiNou (f9a9918). Retry `vercel deploy --prebuilt --prod` from apps/api after the reset; rollback target then = dpl_EwrKATMSAC7BsH8KBCWxHh8fiNou. No migration.
+
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
   agent/), `apps/admin-web` (Next 15 App Router, Tailwind), `apps/mobile` (Expo, never runtime-tested,
