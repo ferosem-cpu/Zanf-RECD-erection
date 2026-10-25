@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import {
-  eligibleUsers, enableBlocker, looksLikePhone, mappingStatus,
+  eligibleUsers, enableBlocker, looksLikePhone, mappingStatus, toggleRequest,
   type MappingRow, type UserOption,
 } from "@/lib/whatsappMappings";
 
@@ -110,6 +110,7 @@ export default function WhatsappMappingsSettings() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-medium text-gray-500 border-b border-gray-100">
+                <th className="py-2 pr-3">WhatsApp on</th>
                 <th className="py-2 pr-3">Phone</th>
                 <th className="py-2 pr-3">User</th>
                 <th className="py-2 pr-3">Role</th>
@@ -124,6 +125,19 @@ export default function WhatsappMappingsSettings() {
                 const status = mappingStatus(r);
                 return (
                   <tr key={r.id} className="border-b border-gray-50">
+                    <td className="py-2 pr-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`WhatsApp on for ${r.user?.name ?? "this number"}`}
+                        checked={r.enabled}
+                        disabled={busy === r.id || (!r.enabled && !!blocker)}
+                        title={!r.enabled && blocker ? blocker : undefined}
+                        onChange={(e) => {
+                          const req = toggleRequest(r, rows, e.target.checked);
+                          if (req && "path" in req) run(r.id, () => api(req.path, { method: "POST" }));
+                        }}
+                      />
+                    </td>
                     <td className="py-2 pr-3 font-medium whitespace-nowrap">{r.phoneE164}</td>
                     <td className="py-2 pr-3">
                       {r.user?.name ?? "Unknown user"}
@@ -135,31 +149,13 @@ export default function WhatsappMappingsSettings() {
                     </td>
                     <td className="py-2 pr-3 text-gray-500">{r.note ?? ""}</td>
                     <td className="py-2 pr-3 text-right space-x-2 whitespace-nowrap">
-                      {r.enabled ? (
-                        <>
-                          <button
-                            className="text-xs text-gray-500 hover:text-gray-700"
-                            disabled={busy === r.id}
-                            onClick={() => run(r.id, () => api(`/whatsapp/mappings/${r.id}/${r.aiPaused ? "unpause" : "pause"}`, { method: "POST" }))}
-                          >
-                            {r.aiPaused ? "Resume AI" : "Pause AI"}
-                          </button>
-                          <button
-                            className="text-xs text-gray-500 hover:text-gray-700"
-                            disabled={busy === r.id}
-                            onClick={() => run(r.id, () => api(`/whatsapp/mappings/${r.id}/disable`, { method: "POST" }))}
-                          >
-                            Disable
-                          </button>
-                        </>
-                      ) : (
+                      {r.enabled && (
                         <button
-                          className="text-xs text-emerald-600 hover:text-emerald-700 disabled:text-gray-300"
-                          disabled={busy === r.id || !!blocker}
-                          title={blocker ?? undefined}
-                          onClick={() => run(r.id, () => api(`/whatsapp/mappings/${r.id}/enable`, { method: "POST" }))}
+                          className="text-xs text-gray-500 hover:text-gray-700"
+                          disabled={busy === r.id}
+                          onClick={() => run(r.id, () => api(`/whatsapp/mappings/${r.id}/${r.aiPaused ? "unpause" : "pause"}`, { method: "POST" }))}
                         >
-                          Enable
+                          {r.aiPaused ? "Resume AI" : "Pause AI"}
                         </button>
                       )}
                       <button className="text-xs text-red-500 hover:text-red-700" disabled={busy === r.id} onClick={() => remove(r)}>
