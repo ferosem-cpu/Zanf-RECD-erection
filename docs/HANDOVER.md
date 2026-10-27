@@ -136,6 +136,15 @@ Agent QA: `docs/agent-test-checklist.md`. History: `git log`.
 
 - **Customer work-order DEPLOYED 26 Oct ~09:20 IST (Ferose OK 25 Oct):** master = 7b8e699 (no newer commits), no migration. zan-app-api `dpl_2kkKmAWSEh48Mr7iGgTsPJdGZuKV` (prebuilt + vercel:patch, aliased zan-app-api.vercel.app); rollback `dpl_EwrKATMSAC7BsH8KBCWxHh8fiNou`. Smoke: /health 200, unsigned /wa/allowlist 401. PENDING: VM-A bridge allowlist refresh check (PC offline at deploy time), HERMES handover copies. No customer number enabled; live test customer still needed first.
 
+### Waffle / second WhatsApp number (not started, 27 Oct)
+- **Request:** Ferose wants the MausBot agent "Waffle - The whatsapp guy" connected to a WhatsMeow bridge, but on a different WhatsApp number.
+- **Existing setup 1, WhatsMeow on Ferose's PC** (folder D:\Apps\WhatsMeow): linked to his main business number, live, used by the WhatsApp Handler agent to send PDFs. Must NOT be changed, re-paired, restarted, or have its session folder touched. Language/port/config unknown (nobody has read it).
+- **Existing setup 2, Zan bridge:** Go, whatsmeow-based, private repo ferosem-cpu/zan-wa-bridge, systemd service on the Oracle Cloud free-tier VM-A, own session store, signs requests to the Zan API, only forwards numbers enabled in Zan Settings. NOT for Waffle.
+- **Needs:** new number on its own phone, linked by Ferose scanning a QR; a separate bridge instance with its own session folder, port and keys; sender allowlist starting empty; no message text or phone numbers in logs.
+- **Unknown:** what MausBot is, where it runs, how it talks to a bridge; which new number (shared only in a private chat).
+- **Rules:** nobody touches D:\Apps\WhatsMeow; no numbers/secrets in chats or files; nothing paired or deployed without Ferose's OK; ChatGPT Coder reviews before live.
+- **Pending:** Ferose may ask Laptop Grok to inspect the WhatsMeow folder read-only and write a setup note, only with his OK.
+
 ## 2. Architecture
 - Turborepo/npm workspaces: `apps/api` (Express 5, Prisma 5, JWT 7-day bearer, routes/ services/ lib/
   agent/), `apps/admin-web` (Next 15 App Router, Tailwind), `apps/mobile` (Expo, never runtime-tested,
