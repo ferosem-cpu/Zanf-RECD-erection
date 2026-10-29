@@ -217,7 +217,9 @@ export default function SiteDetailPage() {
     api<Lookup[]>("/meta/stages").then(setStages).catch(() => {});
     api<Lookup[]>("/meta/status-options").then((opts) => {
       setStatusOptions(opts);
-      if (opts.length) setStatusId((prev) => prev || opts[0].id);
+      // Do not default to Pending: the user must explicitly choose a status for a new update.
+      // This prevents accidentally reopening a completed stage when posting an update.
+      if (!opts.length) setStatusId("");
     }).catch(() => {});
     api<Lookup[]>("/meta/photo-checkpoints").then(setCheckpoints).catch(() => {});
     api<{ id: string; key: string; label: string }[]>("/meta/document-requirement-types").then(setRequirementTypes).catch(() => {});
