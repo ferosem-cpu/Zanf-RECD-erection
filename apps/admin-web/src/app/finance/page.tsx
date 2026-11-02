@@ -51,7 +51,7 @@ export default function FinanceDashboardPage() {
   const chartData = {
     labels: monthly.map((m) => m.month),
     datasets: [
-      { label: "Revenue", data: monthly.map((m) => parseFloat(m.revenue)), backgroundColor: "rgba(16,185,129,0.7)" },
+      { label: "Cash received", data: monthly.map((m) => parseFloat(m.revenue)), backgroundColor: "rgba(16,185,129,0.7)" },
       { label: "Expenses", data: monthly.map((m) => parseFloat(m.expenses)), backgroundColor: "rgba(239,68,68,0.6)" },
     ],
   };
@@ -73,7 +73,8 @@ export default function FinanceDashboardPage() {
       </div>
 
       <div className="card p-4">
-        <h2 className="text-sm font-semibold mb-3">Revenue vs expenses (last 12 months)</h2>
+        <h2 className="text-sm font-semibold mb-3">Cash received vs expenses (last 12 months)</h2>
+        <p className="text-xs text-gray-500 mb-3">Cash received includes customer advances and is not earned revenue.</p>
         <div className="h-64">
           <Bar data={chartData} options={{ responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } } }} />
         </div>

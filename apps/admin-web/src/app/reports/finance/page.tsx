@@ -148,15 +148,15 @@ export default function FinanceSummaryReportPage() {
       </div>
 
       <Section
-        title="Revenue vs. expenses (last 12 months)"
-        onExport={() => downloadCsv("monthly-revenue", ["Month", "Revenue", "Expenses"], monthly.map((r) => [r.month, r.revenue, r.expenses]))}
+        title="Cash received vs. expenses (last 12 months)"
+        onExport={() => downloadCsv("monthly-cash-received", ["Month", "Cash received (includes advances)", "Expenses"], monthly.map((r) => [r.month, r.revenue, r.expenses]))}
         exportDisabled={monthly.length === 0}
       >
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="bg-gray-50 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 print:bg-transparent">
               <th className="px-4 py-3">Month</th>
-              <th className="px-4 py-3 text-right">Revenue</th>
+              <th className="px-4 py-3 text-right">Cash received (includes advances)</th>
               <th className="px-4 py-3 text-right">Expenses</th>
             </tr>
           </thead>

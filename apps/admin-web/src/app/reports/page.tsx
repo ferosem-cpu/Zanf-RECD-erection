@@ -20,7 +20,7 @@ const REPORT_CARDS: ReportCard[] = [
   {
     href: "/reports/finance",
     title: "Finance summary",
-    description: "Receivables & payables aging, GST summary and revenue vs. expenses in one printable report.",
+    description: "Receivables & payables aging, GST summary and cash received vs. expenses in one printable report.",
     permissions: ["view_finance_dashboard"],
   },
   {
