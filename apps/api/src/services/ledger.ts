@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
+import { INVOICE_STATUS, INVOICE_DOC_TYPE, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { isLegacyTdsPayment, splitPayment } from "./paymentSplit";
 import { PAYABLE_BILL_STATUSES } from "./payables";
@@ -168,7 +168,7 @@ export async function buildCustomerLedger(customerId: string, from?: Date, to?: 
   });
 
   const invoices = await prisma.invoice.findMany({
-    where: { customerId, status: { in: INVOICE_LEDGER_STATUSES } },
+    where: { customerId, docType: INVOICE_DOC_TYPE.TAX_INVOICE, status: { in: INVOICE_LEDGER_STATUSES } },
     select: { id: true, invoiceNumber: true, issueDate: true, total: true },
   });
   // Direct customerId query - invoiceId/invoice is now optional (payment may be an unallocated

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { Prisma } from "@prisma/client";
-import { PERMISSION_KEY, INVOICE_STATUS, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
+import { PERMISSION_KEY, INVOICE_STATUS, INVOICE_DOC_TYPE, BILL_STATUS, CREDIT_NOTE_STATUS } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission } from "../middleware/auth";
 import { asString, asOptionalString } from "../lib/params";
@@ -28,7 +28,7 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
 
   // Receivables: issued + partially_paid invoices, net of any ISSUED credit notes against them.
   const invoices = await prisma.invoice.findMany({
-    where: { status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
+    where: { docType: INVOICE_DOC_TYPE.TAX_INVOICE, status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
     include: {
       paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
       creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
@@ -79,7 +79,7 @@ financeDashboardRouter.get("/summary", requirePermission(PERMISSION_KEY.VIEW_FIN
 financeDashboardRouter.get("/reports/receivables", requirePermission(PERMISSION_KEY.VIEW_FINANCE_DASHBOARD), async (_req, res) => {
   const now = new Date();
   const invoices = await prisma.invoice.findMany({
-    where: { status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
+    where: { docType: INVOICE_DOC_TYPE.TAX_INVOICE, status: { in: [INVOICE_STATUS.ISSUED, INVOICE_STATUS.PARTIALLY_PAID] } },
     include: {
       paymentAllocations: { select: { amount: true, payment: { select: { amount: true, tdsAmount: true } } } },
       creditNotes: { where: { status: CREDIT_NOTE_STATUS.ISSUED }, select: { total: true } },
