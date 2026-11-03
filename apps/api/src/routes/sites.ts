@@ -144,6 +144,25 @@ sitesRouter.post(
     if (!site) return res.status(404).json({ error: "Site not found" });
     if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
 
+    // Completed stages are terminal. A stale form, delayed request, or background
+    // process must never silently reopen one by appending a Pending event.
+    const [latestStageEvent, requestedStatus] = await Promise.all([
+      prisma.siteStageEvent.findFirst({
+        where: { siteId: site.id, stageDefinitionId: parsed.data.stageDefinitionId },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        include: { statusOption: true },
+      }),
+      prisma.statusOption.findUnique({ where: { id: parsed.data.statusOptionId } }),
+    ]);
+    if (!requestedStatus || requestedStatus.domain !== "site_stage") {
+      return res.status(400).json({ error: "Invalid site stage status" });
+    }
+    if (latestStageEvent?.statusOption.key === "done" && requestedStatus.key !== "done") {
+      return res.status(409).json({
+        error: "This stage is already Done and cannot be changed back to Pending. Its completion is preserved.",
+      });
+    }
+
     const [event] = await prisma.$transaction([
       prisma.siteStageEvent.create({
         data: {

@@ -331,3 +331,10 @@ Fallback: `npx vercel deploy --prod` from the repo root (remote build).
     turns (create invoice) need a fast model. Re-test a proforma with an "Extra work" line in a NEW thread.
 12. `apps/api/.vercel` links the wrong project (`api`, only holds previews): relink to `zan-app-api` (section 5).
     Delete the BLOCKED deployment `dpl_Hmizg2WR1Jbu6rMdrPhLZnzyzYVY` when convenient (it never took traffic).
+
+## 2026-10-29 — Site Stage Update Done → Pending investigation (not deployed)
+- Confirmed three historical Done-to-Pending transitions in production Supabase zan-app SiteStageEvent. Existing rows left unchanged.
+- Root contributing UX defect: site detail Stage Update form defaulted to the first status option (Pending) rather than requiring an explicit choice. Fix branch removes implicit default.
+- API stage-events endpoint previously appended arbitrary new status even when latest stage event was Done. Fix branch rejects a non-Done status for a stage whose latest event is Done (HTTP 409).
+- Branch: fix/stage-done-persistence-20261029. **Not yet verified or deployed.** Need regression tests, build validation, deployment target verification, and post-deploy checks. Review concurrency/race safety before production rollout.
+- Existing historical reversals require separate review before any corrective data updates. No production data edits made.
