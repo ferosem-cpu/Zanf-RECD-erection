@@ -45,6 +45,12 @@ portalRouter.post("/auth/lookup", h(async (req, res) => {
   res.json({ found: true, userId: eligible[0].id, email: eligible[0].email });
 }));
 
+// ---------- maintenance (signed, anonymous): purge draft uploads never linked to an order ----------
+portalRouter.post("/maintenance/purge", h(async (_req, res) => {
+  const r = await prisma.portalAttachment.deleteMany({ where: { draftId: { not: null }, orderId: null, siteId: null, complaintId: null, createdAt: { lt: new Date(Date.now() - 7 * 86400_000) } } });
+  res.json({ purged: r.count });
+}));
+
 // ---------- profile / reference data ----------
 portalRouter.get("/me", h(async (req, res) => {
   const c = await prisma.customer.findUnique({ where: { id: req.portal!.customerId }, select: { name: true } });

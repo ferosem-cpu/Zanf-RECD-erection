@@ -73,8 +73,11 @@ sitesRouter.get("/:id/portal-attachments", requirePermission(PERMISSION_KEY.VIEW
   const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, orderId: true, vendorId: true } });
   if (!site) return res.status(404).json({ error: "Site not found" });
   if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  // Files linked to this site/order, plus documents shared by reference from another row of the same submission.
+  const reqs = await prisma.siteDocumentRequirement.findMany({ where: { siteId: site.id, documentUrl: { startsWith: "portal-attachment:" } }, select: { documentUrl: true } });
+  const sharedIds = reqs.map((r) => (r.documentUrl ?? "").slice("portal-attachment:".length));
   const items = await prisma.portalAttachment.findMany({
-    where: { OR: [{ siteId: site.id }, { orderId: site.orderId, siteId: null }] },
+    where: { OR: [{ siteId: site.id }, { orderId: site.orderId, siteId: null }, ...(sharedIds.length ? [{ id: { in: sharedIds } }] : [])] },
     select: { id: true, kind: true, documentTypeKey: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true },
     orderBy: { createdAt: "asc" },
   });

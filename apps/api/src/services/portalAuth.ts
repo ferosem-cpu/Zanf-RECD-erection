@@ -99,7 +99,7 @@ declare module "express-serve-static-core" {
 export function createPortalAuth(deps: PortalAuthDeps = {}): RequestHandler {
   const prisma = deps.prisma ?? defaultPrisma;
   const nonces = deps.nonces ?? createPrismaPortalNonceStore(prisma);
-  const anonymous = new Set(deps.anonymousPaths ?? ["/auth/lookup"]);
+  const anonymous = new Set(deps.anonymousPaths ?? ["/auth/lookup", "/maintenance/purge"]);
   return async (req: Request, res: Response, next: NextFunction) => {
     if (!portalEnabled()) return void res.status(503).json({ error: "Portal is switched off" });
     try {

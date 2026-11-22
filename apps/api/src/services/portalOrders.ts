@@ -158,7 +158,7 @@ export async function createPortalSubmission(
 
             // Link uploaded files to the first DG set of a row (documents are shared by reference for the rest).
             if (n === 1) {
-              const link = (ids: string[]) => ids.length ? tx.portalAttachment.updateMany({ where: { id: { in: ids }, customerId: who.customerId }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null } }) : null;
+              const link = (ids: string[]) => ids.length ? tx.portalAttachment.updateMany({ where: { id: { in: ids }, customerId: who.customerId, orderId: null }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null } }) : null;
               await link([...s.photoIds, ...Object.values(s.documentIds), ...(s.priorityDocumentId ? [s.priorityDocumentId] : [])]);
             }
           }
