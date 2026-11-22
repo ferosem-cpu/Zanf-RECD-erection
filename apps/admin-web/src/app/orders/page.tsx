@@ -20,6 +20,12 @@ interface OrderRow {
   site: { companyName: string | null; currentStage: { label: string }; installPriority?: string | null } | null;
 }
 
+/** Portal orders marked Critical (then High) surface first; everything else keeps its existing order (stable sort). */
+function portalFirst(rows: OrderRow[]): OrderRow[] {
+  const rank = (o: OrderRow) => (o.requestedByCustomer && o.site?.installPriority === "critical" ? 0 : o.requestedByCustomer && o.site?.installPriority === "high" ? 1 : 2);
+  return [...rows].sort((a, b) => rank(a) - rank(b));
+}
+
 const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, normal: 2, low: 3 };
 const PRIORITY_CLASS: Record<string, string> = {
   critical: "status-pill status-pill-error",
@@ -255,7 +261,7 @@ function OrdersPageInner() {
       <DataTable
         storageKey="orders"
         title="Orders"
-        rows={orders}
+        rows={portalFirst(orders)}
         rowKey={(o) => o.id}
         emptyMessage="No orders yet."
         columns={[

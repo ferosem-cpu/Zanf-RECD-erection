@@ -329,6 +329,10 @@ async function storeUpload(req: import("express").Request, res: import("express"
     const n = await prisma.portalAttachment.count({ where: { customerId, draftId: q.data.draftId } });
     if (n >= 60) return void res.status(429).json({ error: "Too many files for this draft" });
   }
+  // The files live in the shared 500 MB tracker database: refuse new uploads past a hard total cap (env PORTAL_MAX_TOTAL_MB, default 120).
+  const capBytes = (Number(process.env.PORTAL_MAX_TOTAL_MB) || 120) * 1024 * 1024;
+  const used = await prisma.portalAttachment.aggregate({ _sum: { sizeBytes: true } });
+  if ((used._sum.sizeBytes ?? 0) + body.length > capBytes) return void res.status(507).json({ error: "Upload space is full. Please contact Zan-F." });
   const a = await prisma.portalAttachment.create({
     data: { customerId, kind: q.data.kind, documentTypeKey: q.data.typeKey, draftId: siteId || complaintId ? null : q.data.draftId, siteId, complaintId, orderId, fileName: q.data.fileName?.replace(/[^\w.\- ]/g, "_"), mimeType: t.mime, sizeBytes: body.length, sha256: crypto.createHash("sha256").update(body).digest("hex"), data: body, uploadedByUserId: req.portal!.userId },
     select: { id: true, mimeType: true, sizeBytes: true, fileName: true },

@@ -184,6 +184,7 @@ complaintsRouter.patch(
 
 /** Customer Portal thread, staff side. Replies are hidden from the customer unless "visibleToCustomer" is ticked. */
 complaintsRouter.get("/:id/comments", requirePermission(...COMPLAINT_LIST_PERMISSIONS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
   const where = { id: asString(req.params.id), ...complaintListWhere(req.auth!) };
   const complaint = await prisma.complaint.findFirst({ where, select: { id: true } });
   if (!complaint) return res.status(404).json({ error: "Complaint not found" });
@@ -195,6 +196,7 @@ complaintsRouter.get("/:id/comments", requirePermission(...COMPLAINT_LIST_PERMIS
 });
 
 complaintsRouter.get("/attachments/:attachmentId", requirePermission(...COMPLAINT_LIST_PERMISSIONS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
   const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attachmentId) }, select: { data: true, mimeType: true, complaintId: true } });
   if (!a?.complaintId) return res.status(404).json({ error: "Not found" });
   const ok = await prisma.complaint.findFirst({ where: { id: a.complaintId, ...complaintListWhere(req.auth!) }, select: { id: true } });

@@ -47,7 +47,11 @@ export async function buildBackup(method: BackupMethod, sinceDate: Date | null):
       // else: no timestamp field on this model - fall through and include every row.
     }
 
-    const rows = await delegate.findMany(where ? { where } : undefined);
+    // PortalAttachment holds uploaded file bytes: back up its metadata only (never the bytea) so a JSON backup stays small.
+    const select = model.name === "PortalAttachment"
+      ? Object.fromEntries(model.fields.filter((f) => f.kind === "scalar" && f.name !== "data").map((f) => [f.name, true]))
+      : undefined;
+    const rows = await delegate.findMany({ ...(where ? { where } : {}), ...(select ? { select } : {}) });
     tables[model.name] = rows;
     rowCount += rows.length;
   }

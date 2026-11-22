@@ -57,6 +57,7 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
 
 /** Customer Portal files (PO, site photos, formality documents, priority documents) for staff. Literal route, before /:id. */
 sitesRouter.get("/portal-attachments/:attId/content", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
   const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attId) }, select: { data: true, mimeType: true, siteId: true, orderId: true, fileName: true } });
   if (!a) return res.status(404).json({ error: "Not found" });
   if (req.auth!.vendorId) {
@@ -70,6 +71,7 @@ sitesRouter.get("/portal-attachments/:attId/content", requirePermission(PERMISSI
 });
 
 sitesRouter.get("/:id/portal-attachments", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
   const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, orderId: true, vendorId: true } });
   if (!site) return res.status(404).json({ error: "Site not found" });
   if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
@@ -86,6 +88,7 @@ sitesRouter.get("/:id/portal-attachments", requirePermission(PERMISSION_KEY.VIEW
 
 /** Staff edit of installation priority (any role that can change site status or manage orders). */
 sitesRouter.patch("/:id/priority", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
   const body = req.body as { installPriority?: unknown; priorityReason?: unknown };
   const allowed = ["critical", "high", "normal", "low"];
   if (typeof body.installPriority !== "string" || !allowed.includes(body.installPriority)) return res.status(400).json({ error: "Invalid priority" });
