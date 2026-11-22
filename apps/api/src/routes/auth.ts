@@ -8,7 +8,7 @@ import { verifyGoogleIdToken } from "../lib/googleAuth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { authenticate, AuthenticatedRequest } from "../middleware/auth";
 import { rateLimit } from "../middleware/rateLimit";
-import { isGoogleOnlyStaffEmail, isVendorAccessBlocked } from "../lib/authPolicy";
+import { isGoogleOnlyStaffEmail, isVendorAccessBlocked, isCustomerWebBlocked, CUSTOMER_WEB_BLOCK_MESSAGE } from "../lib/authPolicy";
 
 export const authRouter = Router();
 
@@ -80,6 +80,7 @@ authRouter.post("/login", authLimiter, async (req, res) => {
     return res.status(401).json({ error: "Invalid email or password" });
   }
 
+  if (isCustomerWebBlocked(user)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({ token, user: { id: user.id, name: user.name, role: user.role.key } });
 });
@@ -116,6 +117,7 @@ authRouter.post("/google", authLimiter, async (req, res) => {
     return res.status(401).json({ error: "No staff account is linked to this Google account" });
   }
 
+  if (isCustomerWebBlocked(user)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({ token, user: { id: user.id, name: user.name, role: user.role.key } });
 });
@@ -146,6 +148,7 @@ authRouter.post("/customer/register", authLimiter, async (req, res) => {
   if (!contact.isActive) {
     return res.status(401).json({ error: "Account is inactive" });
   }
+  if (isCustomerWebBlocked(contact)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
 
   const code = generateOtpCode();
   await prisma.otpCode.create({
@@ -228,6 +231,7 @@ authRouter.post("/customer/verify", authLimiter, async (req, res) => {
     await prisma.user.update({ where: { id: contact.id }, data: { mustChangePassword: false } });
   }
 
+  if (isCustomerWebBlocked(userWithRole)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
   const token = signToken({
     userId: contact.id,
     roleKey: userWithRole.role.key,
@@ -260,6 +264,7 @@ authRouter.post("/otp/request", authLimiter, async (req, res) => {
     include: { vendor: { select: { status: true } } },
   });
   if (!user) return res.status(404).json({ error: "No account found for that phone number" });
+  if (isCustomerWebBlocked(user)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
   // Don't mint/send an OTP for an inactive user or a blocked vendor's engineer - /otp/verify
   // would refuse it anyway. Respond exactly as if it had been sent.
   if (!user.isActive || isVendorAccessBlocked(user)) {
@@ -310,6 +315,7 @@ authRouter.post("/otp/verify", authLimiter, async (req, res) => {
     await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: false } });
   }
 
+  if (isCustomerWebBlocked(user)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({ token, user: { id: user.id, name: user.name, role: user.role.key } });
 });
@@ -354,6 +360,7 @@ authRouter.post("/email-otp/request", authLimiter, async (req, res) => {
   if (!user) {
     return res.json({ ok: true, message: "If that email is registered, an OTP has been sent to it." });
   }
+  if (isCustomerWebBlocked(user)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
 
   const code = generateOtpCode();
   await prisma.otpCode.create({
@@ -396,6 +403,7 @@ authRouter.post("/email-otp/verify", authLimiter, async (req, res) => {
     await prisma.user.update({ where: { id: user.id }, data: { mustChangePassword: false } });
   }
 
+  if (isCustomerWebBlocked(user)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
   const token = signToken({ userId: user.id, roleKey: user.role.key, customerId: user.customerId });
   res.json({
     token,

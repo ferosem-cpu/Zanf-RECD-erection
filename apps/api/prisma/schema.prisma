@@ -280,6 +280,13 @@ model Order {
   customerNotes            String?
   createdAt                DateTime  @default(now())
 
+  /// Set when created by a Customer Portal submission (one submission = N Order+Site pairs).
+  portalSubmissionId       String?
+  portalSubmission         PortalSubmission? @relation(fields: [portalSubmissionId], references: [id])
+  portalAttachments        PortalAttachment[]
+
+  @@index([portalSubmissionId])
+
   site Site?
   invoices Invoice[]
   purchaseOrders PurchaseOrder[]
@@ -352,8 +359,22 @@ model Site {
   structureDiagramUrl  String?
   structureDiagramStatus String? // null | "pending" | "ready" - stays "pending" until Phase 2 engine exists
 
+  /// Customer Portal fields (additive). All nullable; null for staff-created sites.
+  requestedStartDate      DateTime?
+  requestedCompletionDate DateTime?
+  addressParts            Json?
+  dgLocation              String?
+  accessNotes             String?
+  /// "portal" when created through portal.zanf.org, else null.
+  source                  String?
+  /// critical | high | normal | low; null = not set (staff-created).
+  installPriority         String?
+  priorityReason          String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  portalAttachments PortalAttachment[]
 
   stageEvents     SiteStageEvent[]
   photos          SitePhoto[]
@@ -601,6 +622,88 @@ model Complaint {
   resolutionNotes String?
   createdAt      DateTime  @default(now())
   closedAt       DateTime?
+
+  comments           ComplaintComment[]
+  portalAttachments  PortalAttachment[]
+}
+
+/// Customer Portal: groups the Order+Site rows created by one portal submission. submissionKey is the
+/// portal draft id and is UNIQUE, so a retried/double-tapped submit can never create a second set.
+model PortalSubmission {
+  id                String   @id @default(cuid())
+  reference         String   @unique
+  customerId        String
+  submittedByUserId String
+  submissionKey     String   @unique
+  customerPoNumber  String?
+  customerPoDate    DateTime?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  orders      Order[]
+  attachments PortalAttachment[]
+
+  @@index([customerId, createdAt])
+}
+
+/// Customer Portal: complaint thread. Staff replies are shown to the customer only when visibleToCustomer.
+model ComplaintComment {
+  id                String   @id @default(cuid())
+  complaintId       String
+  complaint         Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  authorUserId      String
+  authorIsCustomer  Boolean  @default(false)
+  body              String
+  visibleToCustomer Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  attachments PortalAttachment[]
+
+  @@index([complaintId, createdAt])
+}
+
+/// Customer Portal: uploaded file (PO, site photo, document, complaint photo). Bytes live in `data`
+/// (private; never exposed except through an owner-checked, short-lived API response).
+model PortalAttachment {
+  id               String   @id @default(cuid())
+  customerId       String
+  submissionId     String?
+  submission       PortalSubmission? @relation(fields: [submissionId], references: [id])
+  orderId          String?
+  order            Order?   @relation(fields: [orderId], references: [id])
+  siteId           String?
+  site             Site?    @relation(fields: [siteId], references: [id])
+  complaintId      String?
+  complaint        Complaint? @relation(fields: [complaintId], references: [id])
+  commentId        String?
+  comment          ComplaintComment? @relation(fields: [commentId], references: [id])
+  /// po | site_photo | document | complaint_photo | priority_document
+  kind             String
+  documentTypeKey  String?
+  /// Draft staging id until linked on submit.
+  draftId          String?
+  fileName         String?
+  mimeType         String
+  sizeBytes        Int
+  sha256           String
+  data             Bytes
+  uploadedByUserId String
+  createdAt        DateTime @default(now())
+
+  @@index([customerId, draftId])
+  @@index([siteId])
+  @@index([complaintId])
+  @@index([orderId])
+}
+
+/// Customer Portal: replay protection for signed server-to-server calls.
+model PortalNonce {
+  keyId     String
+  nonce     String
+  expiresAt DateTime
+
+  @@id([keyId, nonce])
+  @@index([expiresAt])
 }
 
 // ---------------------------------------------------------------------------

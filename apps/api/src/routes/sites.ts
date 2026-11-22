@@ -17,6 +17,7 @@ import {
   STAGE_KEY,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
+import { notifyPortalCustomers } from "../services/portalNotify";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString, asOptionalString } from "../lib/params";
@@ -180,6 +181,16 @@ sitesRouter.post(
           recdUnits,
         },
       });
+    }
+
+    // Customer Portal: tell the customer's portal users when a site is commissioned (best effort).
+    if (event.stageDefinition.key === STAGE_KEY.COMMISSIONED) {
+      void notifyPortalCustomers(site.order.customerId, {
+        templateKey: "portal_site_commissioned",
+        subject: "Site commissioned: " + (site.companyName ?? site.order.orderNumber),
+        lines: ["Good news: your site " + (site.companyName ?? site.order.orderNumber) + " (order " + site.order.orderNumber + ") has been commissioned."],
+        path: "/sites/" + site.id,
+      }).catch(() => undefined);
     }
 
     res.status(201).json(event);

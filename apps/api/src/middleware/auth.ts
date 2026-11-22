@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken } from "../lib/jwt";
 import { prisma } from "../lib/prisma";
-import { isVendorAccessBlocked } from "../lib/authPolicy";
+import { isVendorAccessBlocked, isCustomerWebBlocked, CUSTOMER_WEB_BLOCK_MESSAGE } from "../lib/authPolicy";
 
 export interface AuthenticatedRequest extends Request {
   auth?: {
@@ -36,6 +36,9 @@ export async function authenticate(req: AuthenticatedRequest, res: Response, nex
     // (rejected, archived, back to pending) - JWTs are 7-day bearer tokens with no revocation
     // list, so this per-request check is what actually ends them.
     if (isVendorAccessBlocked(user)) return res.status(401).json({ error: "Invalid or expired token" });
+
+    // Customer Portal cut-over: customers have no web/API session on the staff app (see authPolicy.ts).
+    if (isCustomerWebBlocked(user)) return res.status(403).json({ error: CUSTOMER_WEB_BLOCK_MESSAGE, portalUrl: "https://portal.zanf.org" });
 
     req.auth = {
       userId: user.id,

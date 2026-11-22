@@ -34,3 +34,13 @@ const VENDOR_MEMBER_ROLE_KEYS = new Set(["erection_engineer"]);
 export function roleAllowsVendor(roleKey: string): boolean {
   return VENDOR_MEMBER_ROLE_KEYS.has(roleKey);
 }
+
+/** Customer Portal cut-over: once PORTAL_ENABLED=true, customer users (role customer / any user with a customerId)
+ * can no longer hold a web session on app.zanf.org - they use portal.zanf.org. Enforced at every login door AND in the
+ * authenticate middleware, so tokens issued earlier stop working too (JWTs have no revocation list). The WhatsApp
+ * routes (/wa/*) authenticate by HMAC and never call this. Gated on the flag so nothing changes before go-live. */
+export const CUSTOMER_WEB_BLOCK_MESSAGE = "Customers now sign in at https://portal.zanf.org";
+export function isCustomerWebBlocked(user: { customerId?: string | null; role?: { key: string } | null }, env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.PORTAL_ENABLED ?? "").trim().toLowerCase() !== "true") return false;
+  return !!user.customerId || user.role?.key === "customer";
+}
