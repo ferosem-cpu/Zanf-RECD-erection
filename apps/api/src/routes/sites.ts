@@ -55,6 +55,45 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
   res.json(payload);
 });
 
+/** Customer Portal files (PO, site photos, formality documents, priority documents) for staff. Literal route, before /:id. */
+sitesRouter.get("/portal-attachments/:attId/content", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attId) }, select: { data: true, mimeType: true, siteId: true, orderId: true, fileName: true } });
+  if (!a) return res.status(404).json({ error: "Not found" });
+  if (req.auth!.vendorId) {
+    const site = a.siteId ? await prisma.site.findUnique({ where: { id: a.siteId }, select: { vendorId: true } }) : null;
+    if (!site || site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  }
+  res.setHeader("Content-Type", a.mimeType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Disposition", 'inline; filename="' + (a.fileName ?? "file") + '"');
+  res.send(Buffer.from(a.data));
+});
+
+sitesRouter.get("/:id/portal-attachments", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, orderId: true, vendorId: true } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  const items = await prisma.portalAttachment.findMany({
+    where: { OR: [{ siteId: site.id }, { orderId: site.orderId, siteId: null }] },
+    select: { id: true, kind: true, documentTypeKey: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+  res.json({ items });
+});
+
+/** Staff edit of installation priority (any role that can change site status or manage orders). */
+sitesRouter.patch("/:id/priority", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  const body = req.body as { installPriority?: unknown; priorityReason?: unknown };
+  const allowed = ["critical", "high", "normal", "low"];
+  if (typeof body.installPriority !== "string" || !allowed.includes(body.installPriority)) return res.status(400).json({ error: "Invalid priority" });
+  const reason = typeof body.priorityReason === "string" ? body.priorityReason.trim().slice(0, 400) : null;
+  const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, vendorId: true } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  const updated = await prisma.site.update({ where: { id: site.id }, data: { installPriority: body.installPriority, priorityReason: reason || null }, select: { id: true, installPriority: true, priorityReason: true } });
+  res.json(updated);
+});
+
 sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
   const siteId = asString(req.params.id);
 

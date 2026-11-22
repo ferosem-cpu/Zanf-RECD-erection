@@ -15,8 +15,18 @@ interface OrderRow {
   customer: { name: string };
   product: { name: string; model: string };
   lineItems: { product: { name: string; model: string } }[];
-  site: { companyName: string | null; currentStage: { label: string } } | null;
+  requestedByCustomer?: boolean;
+  portalSubmissionId?: string | null;
+  site: { companyName: string | null; currentStage: { label: string }; installPriority?: string | null } | null;
 }
+
+const PRIORITY_ORDER: Record<string, number> = { critical: 0, high: 1, normal: 2, low: 3 };
+const PRIORITY_CLASS: Record<string, string> = {
+  critical: "status-pill status-pill-error",
+  high: "status-pill status-pill-warning",
+  normal: "status-pill",
+  low: "status-pill",
+};
 
 /** All RECDs on this order - the base product plus any extra units added as line items
  * (the "add another RECD unit -> same order" path) - see the identical Sites-page fix. */
@@ -290,6 +300,24 @@ function OrdersPageInner() {
               ]
             : []),
           { key: "stage", label: "Current stage", accessor: (o) => o.site?.currentStage.label ?? "" },
+          // Customer Portal: filter by "Portal" to see portal submissions; Priority column sorts Critical first.
+          {
+            key: "source",
+            label: "Source",
+            accessor: (o) => (o.requestedByCustomer ? "Portal" : "Staff"),
+            render: (o) => (o.requestedByCustomer ? <span className="status-pill status-pill-warning">Portal</span> : <span className="text-gray-500">Staff</span>),
+          },
+          {
+            key: "priority",
+            label: "Priority",
+            accessor: (o) => (o.site?.installPriority ? `${PRIORITY_ORDER[o.site.installPriority] ?? 9} ${o.site.installPriority}` : ""),
+            render: (o) =>
+              o.site?.installPriority ? (
+                <span className={PRIORITY_CLASS[o.site.installPriority] ?? "status-pill"}>{o.site.installPriority.charAt(0).toUpperCase() + o.site.installPriority.slice(1)}</span>
+              ) : (
+                <span className="text-gray-400">—</span>
+              ),
+          },
         ]}
       >
         {(filteredOrders) => (

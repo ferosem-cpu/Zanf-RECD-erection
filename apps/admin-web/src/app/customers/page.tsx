@@ -160,6 +160,9 @@ function CustomersPageInner() {
         <div>
           <h1 className="text-xl sm:text-2xl font-semibold tracking-tight" style={{ color: "var(--text-heading)" }}>Customers</h1>
           <p className="mt-1 text-sm text-gray-500">Companies we're contracted with. Each can have multiple orders and sites.</p>
+          <p className="mt-1 text-sm text-gray-500" data-testid="portal-signin-note">
+            Customer users sign in at portal.zanf.org with their e-mail address or mobile number; a one-time code is sent to their e-mail. An e-mail address is required for portal sign-in.
+          </p>
         </div>
         {canManage && (
           <button

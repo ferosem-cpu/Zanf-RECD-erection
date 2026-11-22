@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
+import { PortalSiteInfo, type PortalSiteFields } from "@/components/PortalSiteInfo";
 import { useAuth } from "@/components/AuthContext";
 import { SiteCostsSection } from "@/components/SiteCostsSection";
 
@@ -598,6 +599,8 @@ export default function SiteDetailPage() {
           <p className="text-sm text-gray-500">{site.companyName ?? "No end-client name on file"}</p>
         )}
       </section>
+
+      <PortalSiteInfo site={site as unknown as PortalSiteFields} canEdit={canEdit} />
 
       <section className="card p-5 space-y-3">
         <h2 className="text-sm font-semibold">Site contacts</h2>
