@@ -21,4 +21,4 @@ Unknown id / cross-company record => 404. Responses pass a forbidden-key guard (
 
 ## Data model (additive migration 20261122120000_customer_portal)
 Order<->Site is 1:1, so a portal submission creates one Order+Site per DG set, grouped by `PortalSubmission` (unique `submissionKey` = portal draft id = idempotency).
-New: Site portal fields, PortalSubmission, ComplaintComment, PortalAttachment (file bytes in Postgres, private), PortalNonce, Order.portalSubmissionId, place_order grant.
+New: Site portal fields, PortalSubmission, ComplaintComment, PortalAttachment (files in the private Supabase Storage bucket portal-uploads, path in storagePath), PortalNonce, Order.portalSubmissionId, place_order grant.

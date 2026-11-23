@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { getFile } from "../lib/portalStorage";
 import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COMPLAINT_STATUS, ROLE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
@@ -197,13 +198,13 @@ complaintsRouter.get("/:id/comments", requirePermission(...COMPLAINT_LIST_PERMIS
 
 complaintsRouter.get("/attachments/:attachmentId", requirePermission(...COMPLAINT_LIST_PERMISSIONS), async (req: AuthenticatedRequest, res) => {
   if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
-  const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attachmentId) }, select: { data: true, mimeType: true, complaintId: true } });
+  const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attachmentId) }, select: { storagePath: true, mimeType: true, complaintId: true } });
   if (!a?.complaintId) return res.status(404).json({ error: "Not found" });
   const ok = await prisma.complaint.findFirst({ where: { id: a.complaintId, ...complaintListWhere(req.auth!) }, select: { id: true } });
   if (!ok) return res.status(404).json({ error: "Not found" });
   res.setHeader("Content-Type", a.mimeType);
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.send(Buffer.from(a.data));
+  res.send(await getFile(a.storagePath));
 });
 
 complaintsRouter.post(

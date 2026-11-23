@@ -22,7 +22,9 @@ test("staff-side portal routes refuse callers that have a customerId", () => {
     }
   }
 });
-test("JSON backup never includes uploaded file bytes", () => {
-  const text = fs.readFileSync(path.join(__dirname, "..", "src", "services", "backup.ts"), "utf8");
-  assert.match(text, /PortalAttachment[\s\S]{0,200}f\.name !== "data"/);
+test("PortalAttachment keeps files in Supabase Storage, never as bytes in the database", () => {
+  const text = fs.readFileSync(path.join(__dirname, "..", "prisma", "schema.prisma"), "utf8");
+  const model = /model PortalAttachment \{[\s\S]*?\n\}/.exec(text)![0];
+  assert.doesNotMatch(model, /\bBytes\b/);
+  assert.match(model, /storagePath\s+String/);
 });

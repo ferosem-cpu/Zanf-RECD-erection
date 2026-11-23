@@ -662,8 +662,8 @@ model ComplaintComment {
   @@index([complaintId, createdAt])
 }
 
-/// Customer Portal: uploaded file (PO, site photo, document, complaint photo). Bytes live in `data`
-/// (private; never exposed except through an owner-checked, short-lived API response).
+/// Customer Portal: uploaded file (PO, site photo, document, complaint photo). Bytes live in the private Supabase Storage bucket
+/// portal-uploads at `storagePath` (never exposed except through an owner-checked API response).
 model PortalAttachment {
   id               String   @id @default(cuid())
   customerId       String
@@ -686,7 +686,8 @@ model PortalAttachment {
   mimeType         String
   sizeBytes        Int
   sha256           String
-  data             Bytes
+  /// Object path inside the private Supabase Storage bucket portal-uploads.
+  storagePath      String
   uploadedByUserId String
   createdAt        DateTime @default(now())
 

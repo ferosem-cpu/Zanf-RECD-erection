@@ -1,5 +1,6 @@
 /** Customer Portal API (/portal/*). Signed server-to-server only (see services/portalAuth.ts); mounted before express.json. */
 import { Router } from "express";
+import { putFile, getFile, deleteFiles, StorageUnavailableError } from "../../lib/portalStorage";
 import crypto from "node:crypto";
 import { COMPLAINT_STATUS, STAGE_KEY } from "@recd/shared";
 import { createPortalAuth, createPortalUserLimiter } from "../../services/portalAuth";
@@ -47,7 +48,10 @@ portalRouter.post("/auth/lookup", h(async (req, res) => {
 
 // ---------- maintenance (signed, anonymous): purge draft uploads never linked to an order ----------
 portalRouter.post("/maintenance/purge", h(async (_req, res) => {
-  const r = await prisma.portalAttachment.deleteMany({ where: { draftId: { not: null }, orderId: null, siteId: null, complaintId: null, createdAt: { lt: new Date(Date.now() - 7 * 86400_000) } } });
+  const where = { draftId: { not: null }, orderId: null, siteId: null, complaintId: null, createdAt: { lt: new Date(Date.now() - 7 * 86400_000) } };
+  const old = await prisma.portalAttachment.findMany({ where, select: { id: true, storagePath: true }, take: 500 });
+  await deleteFiles(old.map((o) => o.storagePath));
+  const r = await prisma.portalAttachment.deleteMany({ where: { id: { in: old.map((o) => o.id) } } });
   res.json({ purged: r.count });
 }));
 
@@ -329,14 +333,20 @@ async function storeUpload(req: import("express").Request, res: import("express"
     const n = await prisma.portalAttachment.count({ where: { customerId, draftId: q.data.draftId } });
     if (n >= 60) return void res.status(429).json({ error: "Too many files for this draft" });
   }
-  // The files live in the shared 500 MB tracker database: refuse new uploads past a hard total cap (env PORTAL_MAX_TOTAL_MB, default 120).
-  const capBytes = (Number(process.env.PORTAL_MAX_TOTAL_MB) || 120) * 1024 * 1024;
-  const used = await prisma.portalAttachment.aggregate({ _sum: { sizeBytes: true } });
-  if ((used._sum.sizeBytes ?? 0) + body.length > capBytes) return void res.status(507).json({ error: "Upload space is full. Please contact Zan-F." });
-  const a = await prisma.portalAttachment.create({
-    data: { customerId, kind: q.data.kind, documentTypeKey: q.data.typeKey, draftId: siteId || complaintId ? null : q.data.draftId, siteId, complaintId, orderId, fileName: q.data.fileName?.replace(/[^\w.\- ]/g, "_"), mimeType: t.mime, sizeBytes: body.length, sha256: crypto.createHash("sha256").update(body).digest("hex"), data: body, uploadedByUserId: req.portal!.userId },
-    select: { id: true, mimeType: true, sizeBytes: true, fileName: true },
-  });
+  const id = crypto.randomUUID();
+  const storagePath = customerId + "/" + id + "." + t.ext;
+  try { await putFile(storagePath, body, t.mime); }
+  catch (e) {
+    if (e instanceof StorageUnavailableError) return void res.status(503).json({ error: "File upload is temporarily unavailable. Please try again later or contact Zan-F." });
+    throw e;
+  }
+  let a;
+  try {
+    a = await prisma.portalAttachment.create({
+      data: { id, customerId, kind: q.data.kind, documentTypeKey: q.data.typeKey, draftId: siteId || complaintId ? null : q.data.draftId, siteId, complaintId, orderId, fileName: q.data.fileName?.replace(/[^\w.\- ]/g, "_"), mimeType: t.mime, sizeBytes: body.length, sha256: crypto.createHash("sha256").update(body).digest("hex"), storagePath, uploadedByUserId: req.portal!.userId },
+      select: { id: true, mimeType: true, sizeBytes: true, fileName: true },
+    });
+  } catch (e) { await deleteFiles([storagePath]); throw e; }
   return a;
 }
 
@@ -346,12 +356,12 @@ portalRouter.post("/uploads", h(async (req, res) => {
 }));
 
 portalRouter.get("/uploads/:id/content", h(async (req, res) => {
-  const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId }, select: { data: true, mimeType: true, fileName: true } });
+  const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId }, select: { storagePath: true, mimeType: true, fileName: true } });
   if (!a) return void notFound(res);
   res.setHeader("Content-Type", a.mimeType);
   res.setHeader("Content-Disposition", 'inline; filename="' + (a.fileName ?? "file") + '"');
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.send(Buffer.from(a.data));
+  res.send(await getFile(a.storagePath));
 }));
 
 portalRouter.post("/sites/:id/documents/:typeKey", h(async (req, res) => {
@@ -377,12 +387,12 @@ portalRouter.get("/sites/:id/documents/:typeKey/content", h(async (req, res) => 
   if (!site) return void notFound(res);
   const r = site.documentRequirements.find((x) => x.requirementType.key === param(req.params.typeKey));
   const id = r?.documentUrl?.startsWith("portal-attachment:") ? r.documentUrl.slice(18) : null;
-  const a = id ? await prisma.portalAttachment.findFirst({ where: { id, customerId: req.portal!.customerId }, select: { data: true, mimeType: true, fileName: true } }) : null;
+  const a = id ? await prisma.portalAttachment.findFirst({ where: { id, customerId: req.portal!.customerId }, select: { storagePath: true, mimeType: true, fileName: true } }) : null;
   if (!a) return void notFound(res);
   res.setHeader("Content-Type", a.mimeType);
   res.setHeader("Content-Disposition", 'inline; filename="' + (a.fileName ?? "file") + '"');
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.send(Buffer.from(a.data));
+  res.send(await getFile(a.storagePath));
 }));
 
 void STAGE_KEY;

@@ -58,7 +58,7 @@ CREATE TABLE "PortalAttachment" (
     "mimeType" TEXT NOT NULL,
     "sizeBytes" INTEGER NOT NULL,
     "sha256" TEXT NOT NULL,
-    "data" BYTEA NOT NULL,
+    "storagePath" TEXT NOT NULL,
     "uploadedByUserId" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "PortalAttachment_pkey" PRIMARY KEY ("id")

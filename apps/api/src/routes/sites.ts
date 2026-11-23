@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { getFile } from "../lib/portalStorage";
 import {
   createStageEventSchema,
   confirmExhaustHookupSchema,
@@ -58,7 +59,7 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
 /** Customer Portal files (PO, site photos, formality documents, priority documents) for staff. Literal route, before /:id. */
 sitesRouter.get("/portal-attachments/:attId/content", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
   if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
-  const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attId) }, select: { data: true, mimeType: true, siteId: true, orderId: true, fileName: true } });
+  const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attId) }, select: { storagePath: true, mimeType: true, siteId: true, orderId: true, fileName: true } });
   if (!a) return res.status(404).json({ error: "Not found" });
   if (req.auth!.vendorId) {
     const site = a.siteId ? await prisma.site.findUnique({ where: { id: a.siteId }, select: { vendorId: true } }) : null;
@@ -67,7 +68,7 @@ sitesRouter.get("/portal-attachments/:attId/content", requirePermission(PERMISSI
   res.setHeader("Content-Type", a.mimeType);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Content-Disposition", 'inline; filename="' + (a.fileName ?? "file") + '"');
-  res.send(Buffer.from(a.data));
+  res.send(await getFile(a.storagePath));
 });
 
 sitesRouter.get("/:id/portal-attachments", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
