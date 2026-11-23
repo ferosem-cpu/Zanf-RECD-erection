@@ -24,4 +24,9 @@ Order<->Site is 1:1, so a portal submission creates one Order+Site per DG set, g
 New: Site portal fields, PortalSubmission, ComplaintComment, PortalAttachment (files in the private Supabase Storage bucket portal-uploads, path in storagePath), PortalNonce, Order.portalSubmissionId, place_order grant.
 
 ## Deploying the API without a local build (Windows EPERM workaround)
-From the repo root, linked to zan-app-api: `npx vercel deploy --prod --skip-domain --yes --local-config docs/remote-deploy.vercel.json --scope ferose-salahudeen-s-projects`, check the new URL with `npx vercel curl <url>/health`, then `npx vercel promote <url>`. Needs the `vercel-build` script in apps/api/package.json. Built and promoted on 23 Nov 2026 as dpl_FWpB4uipjCk2tQRvw6Qh6mHCGV2w (previous production dpl_MwxfoHWJpicNH4GKyYacCGiBD718 is the rollback target).
+Remote build from the repo root, linked to zan-app-api (`npx vercel link --yes --project zan-app-api`). Crons only register from a physical vercel.json, so, temporarily and never committed:
+1. copy docs/remote-deploy.vercel.json to ./vercel.json; create ./api/index.js containing `module.exports = require("../apps/api/dist/index.js").default;` and ./public/index.html (placeholder);
+2. `npx vercel deploy --prod --skip-domain --yes --scope ferose-salahudeen-s-projects`;
+3. check `npx vercel curl <url>/health` (and /portal/me = 401), and that GET /v13/deployments/<id> lists both crons and regions bom1;
+4. `npx vercel promote <url>`; delete the temporary files.
+Live since 23 Nov 2026: dpl_BpiYjMFuaYz5unv1XCYCAvZ8x9FZ (built from feat/customer-portal). Rollback target: dpl_MwxfoHWJpicNH4GKyYacCGiBD718 (no portal routes). Do not deploy from master until feat/customer-portal is merged, or the portal routes disappear.

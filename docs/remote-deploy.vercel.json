@@ -1,26 +1,31 @@
 {
-  "version": 2,
   "framework": null,
-  "builds": [
+  "installCommand": "npm install",
+  "buildCommand": "npm run build --workspace=packages/shared && npm run build --workspace=apps/api",
+  "outputDirectory": "public",
+  "rewrites": [
     {
-      "src": "apps/api/api/index.js",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": [
-          "apps/api/dist/**",
-          "packages/shared/dist/**",
-          "packages/shared/package.json",
-          "apps/api/prisma/**",
-          "node_modules/.prisma/**",
-          "node_modules/@prisma/**"
-        ]
-      }
+      "source": "/(.*)",
+      "destination": "/api/index"
     }
   ],
-  "routes": [
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300,
+      "includeFiles": "{apps/api/dist/**,packages/shared/dist/**,packages/shared/package.json,apps/api/prisma/**,node_modules/.prisma/**,node_modules/@prisma/**}"
+    }
+  },
+  "regions": [
+    "bom1"
+  ],
+  "crons": [
     {
-      "src": "/(.*)",
-      "dest": "/apps/api/api/index.js"
+      "path": "/agent/cron/cleanup-conversations",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/backup/internal/run-scheduled",
+      "schedule": "30 19 * * *"
     }
   ]
 }
