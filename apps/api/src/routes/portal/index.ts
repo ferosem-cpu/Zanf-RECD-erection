@@ -355,6 +355,15 @@ portalRouter.post("/uploads", h(async (req, res) => {
   if (a) ok(res, { upload: a }, 201);
 }));
 
+/** A customer may remove a file they uploaded to a draft before it is linked to an order. */
+portalRouter.delete("/uploads/:id", h(async (req, res) => {
+  const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId, draftId: { not: null }, orderId: null, siteId: null, complaintId: null }, select: { id: true, storagePath: true } });
+  if (!a) return void notFound(res);
+  await deleteFiles([a.storagePath]);
+  await prisma.portalAttachment.delete({ where: { id: a.id } });
+  ok(res, { ok: true });
+}));
+
 portalRouter.get("/uploads/:id/content", h(async (req, res) => {
   const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId }, select: { storagePath: true, mimeType: true, fileName: true } });
   if (!a) return void notFound(res);

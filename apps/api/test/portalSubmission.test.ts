@@ -91,3 +91,19 @@ test("a single-DG site keeps its plain name", async () => {
   const r = await createPortalSubmission(db, who, submissionSchema.parse({ submissionKey: "key-singledg", sites: [site()] }));
   assert.deepEqual(r.orders.map((o) => o.siteName), ["Plant"]);
 });
+
+test("each DG's photos are linked to that DG's own Order+Site", async () => {
+  const { db, orders, links } = fakeDb();
+  db.portalAttachment.findMany = async ({ where }: any) => where.id.in.map((id: string) => ({ id }));
+  const input = submissionSchema.parse({ submissionKey: "key-dgphotos", sites: [siteInputSchema.parse({ name: "Mill", line: "1 St", city: "Chennai", state: "Tamil Nadu", pincode: "600001", contacts: [{ name: "Raj", phone: "9876543210" }],
+    dgs: [{ ratingKva: 250, photoIds: ["a1", "a2"] }, { ratingKva: 125, photoIds: ["b1"] }] })] });
+  await createPortalSubmission(db, who, input);
+  const byOrder = links.filter((l: any) => l.data.orderId).map((l: any) => [l.data.orderId, l.where.id.in]);
+  assert.deepEqual(byOrder, [[orders[0].id, ["a1", "a2"]], [orders[1].id, ["b1"]]]);
+});
+test("a photo that is not the customer's (or already used) is refused", async () => {
+  const { db } = fakeDb();
+  db.portalAttachment.findMany = async () => [];
+  const input = submissionSchema.parse({ submissionKey: "key-badphoto", sites: [siteInputSchema.parse({ name: "Mill", line: "1 St", city: "Chennai", state: "Tamil Nadu", pincode: "600001", contacts: [{ name: "Raj", phone: "9876543210" }], dgs: [{ ratingKva: 250, photoIds: ["x"] }] })] });
+  await assert.rejects(createPortalSubmission(db, who, input), /could not be found/);
+});

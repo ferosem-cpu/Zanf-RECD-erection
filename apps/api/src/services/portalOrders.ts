@@ -75,6 +75,7 @@ export async function createPortalSubmission(
   const refIds = new Set<string>();
   if (input.poAttachmentId) refIds.add(input.poAttachmentId);
   for (const s of input.sites) {
+    s.dgs.forEach((d) => d.photoIds.forEach((i) => refIds.add(i)));
     s.photoIds.forEach((i) => refIds.add(i));
     Object.values(s.documentIds).forEach((i) => refIds.add(i));
     if (s.priorityDocumentId) refIds.add(s.priorityDocumentId);
@@ -162,6 +163,8 @@ export async function createPortalSubmission(
               const link = (ids: string[]) => ids.length ? tx.portalAttachment.updateMany({ where: { id: { in: ids }, customerId: who.customerId, orderId: null }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null } }) : null;
               await link([...s.photoIds, ...Object.values(s.documentIds), ...(s.priorityDocumentId ? [s.priorityDocumentId] : [])]);
             }
+            // Each DG's own photos belong to that DG's Order+Site.
+            if (dg.photoIds.length) await tx.portalAttachment.updateMany({ where: { id: { in: dg.photoIds }, customerId: who.customerId, orderId: null }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null } });
           }
         }
         if (input.poAttachmentId && created[0]) {

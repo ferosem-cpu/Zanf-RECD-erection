@@ -56,6 +56,8 @@ export const dgInputSchema = z.object({
   ratingUnsure: z.boolean().optional(),
   dgModel: optText(160),
   dgLocation: z.enum(DG_LOCATIONS).optional(),
+  /** PortalAttachment ids of this DG's photos (uploaded during the draft). */
+  photoIds: z.array(z.string().max(40)).max(5).default([]),
 });
 export type DgInput = z.infer<typeof dgInputSchema>;
 export const MAX_DGS_PER_SITE = 50;
