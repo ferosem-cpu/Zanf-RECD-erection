@@ -47,7 +47,7 @@ export async function buildBackup(method: BackupMethod, sinceDate: Date | null):
       // else: no timestamp field on this model - fall through and include every row.
     }
 
-    const rows = await delegate.findMany(where ? { where } : undefined);
+    const rows = await delegate.findMany({ ...(where ? { where } : {}) });
     tables[model.name] = rows;
     rowCount += rows.length;
   }

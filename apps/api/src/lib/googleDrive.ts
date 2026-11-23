@@ -99,3 +99,44 @@ export async function uploadDriveFile(
   }
   return { id: res.data.id, webViewLink: res.data.webViewLink };
 }
+
+// ---- helpers used by the customer portal (lib/portalDrive.ts). Only create/list/get/update/delete on files this app made:
+// never permissions or sharing, so nothing here can make a file public. ----
+const q = (s: string) => s.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+export async function findDriveFolder(name: string, parentFolderId: string): Promise<{ id: string; webViewLink: string } | null> {
+  const drive = getDriveClient();
+  const res = await drive.files.list({
+    q: `name = '${q(name)}' and '${q(parentFolderId)}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: "files(id, webViewLink)", pageSize: 5, orderBy: "createdTime",
+  });
+  const f = res.data.files?.[0];
+  return f?.id && f.webViewLink ? { id: f.id, webViewLink: f.webViewLink } : null;
+}
+
+/** Moves a file to another folder (and optionally renames it). Same account, same app: no sharing change. */
+export async function moveDriveFile(fileId: string, toParentId: string, newName?: string): Promise<void> {
+  const drive = getDriveClient();
+  const cur = await drive.files.get({ fileId, fields: "parents" });
+  const from = (cur.data.parents ?? []).filter((p) => p !== toParentId).join(",");
+  await drive.files.update({ fileId, addParents: toParentId, ...(from ? { removeParents: from } : {}), ...(newName ? { requestBody: { name: newName } } : {}), fields: "id" });
+}
+
+export async function downloadDriveFile(fileId: string): Promise<Buffer> {
+  const drive = getDriveClient();
+  const res = await drive.files.get({ fileId, alt: "media" }, { responseType: "arraybuffer" });
+  return Buffer.from(res.data as ArrayBuffer);
+}
+
+export async function deleteDriveFile(fileId: string): Promise<void> {
+  const drive = getDriveClient();
+  try {
+    await drive.files.delete({ fileId });
+  } catch (e) {
+    const code = (e as { code?: number; status?: number }).code ?? (e as { status?: number }).status;
+    if (code !== 404) throw e;
+  }
+}
+
+export const driveConfigured = (): boolean =>
+  !!(process.env.GOOGLE_DRIVE_CLIENT_ID && process.env.GOOGLE_DRIVE_CLIENT_SECRET && process.env.GOOGLE_DRIVE_REFRESH_TOKEN && process.env.GOOGLE_DRIVE_FOLDER_ID);

@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { computePricedCost } from "@/lib/orderValue";
 import { useAuth } from "@/components/AuthContext";
+import { PortalSiteInfo, type PortalSiteFields } from "@/components/PortalSiteInfo";
 
 interface OtherSite {
   id: string;
@@ -416,6 +417,8 @@ export default function OrderDetailPage() {
             </div>
           )}
         </section>
+
+        {order.site && <PortalSiteInfo site={order.site as unknown as PortalSiteFields} canEdit={canManage} />}
 
         <section className="card p-5 space-y-2">
           <h2 className="text-sm font-semibold">Installation site</h2>

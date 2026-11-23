@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { z } from "zod";
+import { getFile } from "../lib/portalStorage";
 import {
   createStageEventSchema,
   confirmExhaustHookupSchema,
@@ -17,6 +19,7 @@ import {
   STAGE_KEY,
 } from "@recd/shared";
 import { prisma } from "../lib/prisma";
+import { notifyPortalCustomers } from "../services/portalNotify";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString, asOptionalString } from "../lib/params";
@@ -52,6 +55,51 @@ sitesRouter.get("/", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (
     ? sites.map((site) => ({ ...site, order: site.order ? { ...site.order, value: null } : site.order }))
     : sites;
   res.json(payload);
+});
+
+/** Customer Portal files (PO, site photos, formality documents, priority documents) for staff. Literal route, before /:id. */
+sitesRouter.get("/portal-attachments/:attId/content", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
+  const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attId) }, select: { storagePath: true, mimeType: true, siteId: true, orderId: true, fileName: true } });
+  if (!a) return res.status(404).json({ error: "Not found" });
+  if (req.auth!.vendorId) {
+    const site = a.siteId ? await prisma.site.findUnique({ where: { id: a.siteId }, select: { vendorId: true } }) : null;
+    if (!site || site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  }
+  res.setHeader("Content-Type", a.mimeType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Disposition", 'inline; filename="' + (a.fileName ?? "file") + '"');
+  res.send(await getFile(a.storagePath));
+});
+
+sitesRouter.get("/:id/portal-attachments", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
+  const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, orderId: true, vendorId: true } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  // Files linked to this site/order, plus documents shared by reference from another row of the same submission.
+  const reqs = await prisma.siteDocumentRequirement.findMany({ where: { siteId: site.id, documentUrl: { startsWith: "portal-attachment:" } }, select: { documentUrl: true } });
+  const sharedIds = reqs.map((r) => (r.documentUrl ?? "").slice("portal-attachment:".length));
+  const items = await prisma.portalAttachment.findMany({
+    where: { OR: [{ siteId: site.id }, { orderId: site.orderId, siteId: null }, ...(sharedIds.length ? [{ id: { in: sharedIds } }] : [])] },
+    select: { id: true, kind: true, documentTypeKey: true, fileName: true, mimeType: true, sizeBytes: true, createdAt: true },
+    orderBy: { createdAt: "asc" },
+  });
+  res.json({ items });
+});
+
+/** Staff edit of installation priority (any role that can change site status or manage orders). */
+sitesRouter.patch("/:id/priority", requirePermission(PERMISSION_KEY.CHANGE_SITE_STATUS, PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
+  const body = req.body as { installPriority?: unknown; priorityReason?: unknown };
+  const allowed = ["critical", "high", "normal", "low"];
+  if (typeof body.installPriority !== "string" || !allowed.includes(body.installPriority)) return res.status(400).json({ error: "Invalid priority" });
+  const reason = typeof body.priorityReason === "string" ? body.priorityReason.trim().slice(0, 400) : null;
+  const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, vendorId: true } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (req.auth!.vendorId && site.vendorId !== req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  const updated = await prisma.site.update({ where: { id: site.id }, data: { installPriority: body.installPriority, priorityReason: reason || null }, select: { id: true, installPriority: true, priorityReason: true } });
+  res.json(updated);
 });
 
 sitesRouter.get("/:id", requirePermission(PERMISSION_KEY.VIEW_SITE_STATUS), async (req: AuthenticatedRequest, res) => {
@@ -180,6 +228,16 @@ sitesRouter.post(
           recdUnits,
         },
       });
+    }
+
+    // Customer Portal: tell the customer's portal users when a site is commissioned (best effort).
+    if (event.stageDefinition.key === STAGE_KEY.COMMISSIONED) {
+      void notifyPortalCustomers(site.order.customerId, {
+        templateKey: "portal_site_commissioned",
+        subject: "Site commissioned: " + (site.companyName ?? site.order.orderNumber),
+        lines: ["Good news: your site " + (site.companyName ?? site.order.orderNumber) + " (order " + site.order.orderNumber + ") has been commissioned."],
+        path: "/sites/" + site.id,
+      }).catch(() => undefined);
     }
 
     res.status(201).json(event);
@@ -520,6 +578,21 @@ sitesRouter.post(
     res.status(201).json(updated);
   },
 );
+
+/** Customer Portal: which of the customer's locations this site belongs to (null = unassigned: only customer admins see it). */
+sitesRouter.put("/:id/location", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId || req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  const parsed = z.object({ customerLocationId: z.string().max(40).nullable() }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid request" });
+  const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, order: { select: { customerId: true } } } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (parsed.data.customerLocationId) {
+    const l = await prisma.customerLocation.findFirst({ where: { id: parsed.data.customerLocationId, customerId: site.order.customerId, active: true }, select: { id: true } });
+    if (!l) return res.status(400).json({ error: "Choose one of this customer's active locations" });
+  }
+  const u = await prisma.site.update({ where: { id: site.id }, data: { customerLocationId: parsed.data.customerLocationId }, select: { id: true, customerLocationId: true } });
+  res.json(u);
+});
 
 // Per-site cost rollup for the Vendor Invoices feature: approved vendor-invoice allocations
 // + the site's expense book + its purchase orders, so cost-vs-our-invoiced-revenue is visible

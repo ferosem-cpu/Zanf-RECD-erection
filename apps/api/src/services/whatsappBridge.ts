@@ -119,8 +119,18 @@ export type OpenTurn = (identity: { phoneE164?: string | null; lid?: string | nu
   { ok: true; decision: Extract<SenderDecision, { ok: true }>; turn: WhatsappTurn } | { ok: false; reason: string }
 >;
 
+/** Customer-portal sign-in codes ride the same outbox. Marker row: waGroup "otp", inboundId "otp:<hash>", mappingId "otp:<userId>". */
+export const OTP_GROUP = "otp";
+export const OTP_TTL_MS = 5 * 60_000;
+export const isOtpRow = (r: Pick<OutboxRow, "waGroup" | "inboundId" | "mappingId">) =>
+  r.waGroup === OTP_GROUP && r.inboundId.startsWith("otp:") && r.mappingId.startsWith("otp:") && r.mappingId.length > 4;
+/** The customer user behind a sign-in code row, read from the database (never from the request). */
+export type OtpUserLoader = (userId: string) => Promise<{ isActive: boolean; roleKey: string; customerId: string | null; phoneE164: string | null } | null>;
+
 export interface BridgeDeps {
   store: WaBridgeStore;
+  /** Required for portal sign-in code rows; without it those rows are discarded (fail closed). */
+  otpUser?: OtpUserLoader;
   senders: SenderStore;
   openTurn: OpenTurn;
   runTurn: (params: RunAgentTurnParams) => Promise<RunAgentTurnResult>;
@@ -306,8 +316,21 @@ export function createBridgeService(deps: BridgeDeps) {
     return deps.openTurn(identity);
   }
 
+  /** Sign-in code: the user must still be an active customer with the same mobile number the code was queued for. */
+  async function reauthorizeOtp(row: OutboxRow): Promise<boolean> {
+    try {
+      if (!deps.otpUser) return false;
+      const u = await deps.otpUser(row.mappingId.slice(4));
+      return !!u && u.isActive && u.roleKey === "customer" && !!u.customerId && !!u.phoneE164 && u.phoneE164 === row.recipientPhone && !row.recipientLid;
+    } catch {
+      return false;
+    }
+  }
+
   /** Re-authorisation used by poll and claim: mapping enabled and unpaused, user active, same group and same recipient. */
   async function reauthorize(row: OutboxRow): Promise<boolean> {
+    if (isOtpRow(row)) return reauthorizeOtp(row);
+    if (row.waGroup === OTP_GROUP || row.inboundId.startsWith("otp:") || row.mappingId.startsWith("otp:")) return false; // half-marked rows never take the normal path
     try {
       const m = await deps.senders.findById(row.mappingId);
       if (!m || !m.enabled || m.aiPaused) return false;

@@ -5,6 +5,7 @@ import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
 import { COMPLAINT_STATUS } from "@recd/shared";
 import { DataTable } from "@/components/DataTable";
+import { ComplaintThread } from "@/components/ComplaintThread";
 
 interface ComplaintRow {
   id: string;
@@ -201,6 +202,8 @@ export default function ComplaintsPage() {
             </div>
 
             <p className="mb-4 rounded-lg bg-gray-50 p-3 text-sm text-gray-700 border border-gray-100">{editing.description}</p>
+
+            <ComplaintThread complaintId={editing.id} canReply={canManage || editing.assignedTo != null} />
 
             <form onSubmit={save} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

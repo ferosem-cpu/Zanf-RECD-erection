@@ -34,6 +34,7 @@ import { whatsappBridgeRouter } from "./services/whatsappBridgeProd";
 import { agentConversationsRouter } from "./routes/agentConversations";
 import { agentCronRouter } from "./routes/agentCron";
 import { backupRouter } from "./routes/backup";
+import { portalRouter } from "./routes/portal";
 
 const app = express();
 
@@ -55,6 +56,8 @@ app.use((_req, res, next) => {
 app.use(cors({ maxAge: 600 }));
 // WhatsApp bridge: must see the raw body (HMAC), so it is mounted before express.json.
 app.use("/wa", whatsappBridgeRouter);
+// Customer Portal (signed server-to-server only): raw body for the HMAC and for file uploads, so before express.json.
+app.use("/portal", portalRouter);
 // Raise the body limit so base64 data-URL payloads (site photos, company logo) fit;
 // the default 100kb rejects anything but a thumbnail.
 app.use(express.json({ limit: "10mb" }));

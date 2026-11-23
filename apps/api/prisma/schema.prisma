@@ -71,6 +71,9 @@ model User {
   role                Role     @relation(fields: [roleId], references: [id])
   customerId          String?
   customer            Customer? @relation("CustomerContacts", fields: [customerId], references: [id])
+  /// Customer Portal: null = customer admin (sees every site of the customer); set = sees only that location's sites.
+  customerLocationId  String?
+  customerLocation    CustomerLocation? @relation("LocationUsers", fields: [customerLocationId], references: [id], onDelete: SetNull)
   /// Erection engineers belong to an external Vendor company (work is subcontracted). Null = internal staff.
   vendorId            String?
   vendor              Vendor?   @relation("VendorMembers", fields: [vendorId], references: [id])
@@ -148,6 +151,7 @@ model Customer {
   createdAt     DateTime @default(now())
 
   contacts  User[]   @relation("CustomerContacts")
+  locations CustomerLocation[]
   orders    Order[]
   complaints Complaint[]
   quotations Quotation[]
@@ -280,6 +284,13 @@ model Order {
   customerNotes            String?
   createdAt                DateTime  @default(now())
 
+  /// Set when created by a Customer Portal submission (one submission = N Order+Site pairs).
+  portalSubmissionId       String?
+  portalSubmission         PortalSubmission? @relation(fields: [portalSubmissionId], references: [id])
+  portalAttachments        PortalAttachment[]
+
+  @@index([portalSubmissionId])
+
   site Site?
   invoices Invoice[]
   purchaseOrders PurchaseOrder[]
@@ -313,6 +324,9 @@ model Site {
   id      String @id @default(cuid())
   orderId String @unique
   order   Order  @relation(fields: [orderId], references: [id])
+  /// Customer Portal: which of the customer's locations this site belongs to (null = unassigned, visible to customer admins only).
+  customerLocationId String?
+  customerLocation   CustomerLocation? @relation("LocationSites", fields: [customerLocationId], references: [id], onDelete: SetNull)
 
   address           String?
   /// The end-client / site-owner - the company that actually operates this premises
@@ -352,8 +366,22 @@ model Site {
   structureDiagramUrl  String?
   structureDiagramStatus String? // null | "pending" | "ready" - stays "pending" until Phase 2 engine exists
 
+  /// Customer Portal fields (additive). All nullable; null for staff-created sites.
+  requestedStartDate      DateTime?
+  requestedCompletionDate DateTime?
+  addressParts            Json?
+  dgLocation              String?
+  accessNotes             String?
+  /// "portal" when created through portal.zanf.org, else null.
+  source                  String?
+  /// critical | high | normal | low; null = not set (staff-created).
+  installPriority         String?
+  priorityReason          String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  portalAttachments PortalAttachment[]
 
   stageEvents     SiteStageEvent[]
   photos          SitePhoto[]
@@ -601,6 +629,111 @@ model Complaint {
   resolutionNotes String?
   createdAt      DateTime  @default(now())
   closedAt       DateTime?
+
+  comments           ComplaintComment[]
+  portalAttachments  PortalAttachment[]
+}
+
+/// Customer Portal: a branch/plant of a customer (e.g. Bangalore, Mangalore). Portal users with a location see only that location's sites.
+model CustomerLocation {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  users User[] @relation("LocationUsers")
+  sites Site[] @relation("LocationSites")
+
+  @@unique([customerId, name])
+  @@index([customerId])
+}
+
+/// Customer Portal: groups the Order+Site rows created by one portal submission. submissionKey is the
+/// portal draft id and is UNIQUE, so a retried/double-tapped submit can never create a second set.
+model PortalSubmission {
+  id                String   @id @default(cuid())
+  reference         String   @unique
+  customerId        String
+  submittedByUserId String
+  submissionKey     String   @unique
+  customerPoNumber  String?
+  customerPoDate    DateTime?
+  notes             String?
+  createdAt         DateTime @default(now())
+
+  orders      Order[]
+  attachments PortalAttachment[]
+
+  @@index([customerId, createdAt])
+}
+
+/// Customer Portal: complaint thread. Staff replies are shown to the customer only when visibleToCustomer.
+model ComplaintComment {
+  id                String   @id @default(cuid())
+  complaintId       String
+  complaint         Complaint @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  authorUserId      String
+  authorIsCustomer  Boolean  @default(false)
+  body              String
+  visibleToCustomer Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  attachments PortalAttachment[]
+
+  @@index([complaintId, createdAt])
+}
+
+/// Customer Portal: uploaded file (PO, site photo, document, complaint photo). Bytes live in the private Supabase Storage bucket
+/// portal-uploads at `storagePath` (never exposed except through an owner-checked API response).
+model PortalAttachment {
+  id               String   @id @default(cuid())
+  customerId       String
+  submissionId     String?
+  submission       PortalSubmission? @relation(fields: [submissionId], references: [id])
+  orderId          String?
+  order            Order?   @relation(fields: [orderId], references: [id])
+  siteId           String?
+  site             Site?    @relation(fields: [siteId], references: [id])
+  complaintId      String?
+  complaint        Complaint? @relation(fields: [complaintId], references: [id])
+  commentId        String?
+  comment          ComplaintComment? @relation(fields: [commentId], references: [id])
+  /// po | site_photo | document | complaint_photo | priority_document
+  kind             String
+  documentTypeKey  String?
+  /// Draft staging id until linked on submit.
+  draftId          String?
+  fileName         String?
+  mimeType         String
+  sizeBytes        Int
+  sha256           String
+  /// Object path inside the private Supabase Storage bucket portal-uploads.
+  storagePath      String
+  /// Photos live in Google Drive: storagePath is "drive:<fileId>", driveUrl the Drive viewer link (owner-only, never shared).
+  driveUrl         String?
+  /// DG set number (1-based) within the order's site group; set when the photo is linked on submit.
+  dgIndex          Int?
+  /// When the photo reached its final DG folder (null while it still sits in "Portal drafts").
+  driveFiledAt     DateTime?
+  uploadedByUserId String
+  createdAt        DateTime @default(now())
+
+  @@index([customerId, draftId])
+  @@index([siteId])
+  @@index([complaintId])
+  @@index([orderId])
+}
+
+/// Customer Portal: replay protection for signed server-to-server calls.
+model PortalNonce {
+  keyId     String
+  nonce     String
+  expiresAt DateTime
+
+  @@id([keyId, nonce])
+  @@index([expiresAt])
 }
 
 // ---------------------------------------------------------------------------

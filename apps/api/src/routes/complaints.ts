@@ -1,10 +1,13 @@
 import { Router } from "express";
+import { getFile } from "../lib/portalStorage";
 import { createComplaintSchema, updateComplaintStatusSchema, PERMISSION_KEY, COMPLAINT_STATUS, ROLE_KEY } from "@recd/shared";
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { send as sendNotification } from "../services/notifications/notificationService";
 import { asString } from "../lib/params";
 import { complaintListWhere, COMPLAINT_LIST_PERMISSIONS } from "../lib/complaintScope";
+import { z } from "zod";
+import { notifyPortalCustomers } from "../services/portalNotify";
 
 export const complaintsRouter = Router();
 complaintsRouter.use(authenticate);
@@ -137,7 +140,7 @@ complaintsRouter.patch(
       status: parsed.data.status,
       rootCause: parsed.data.rootCause,
       resolutionNotes: parsed.data.resolutionNotes,
-      closedAt: parsed.data.status === COMPLAINT_STATUS.CLOSED ? new Date() : undefined,
+      closedAt: parsed.data.status === COMPLAINT_STATUS.CLOSED ? new Date() : parsed.data.status === COMPLAINT_STATUS.OPEN ? null : undefined,
     };
     if (canManage && parsed.data.assignedToId !== undefined) {
       data.assignedToId = parsed.data.assignedToId; // string to assign, null to unassign
@@ -158,6 +161,15 @@ complaintsRouter.patch(
         data: { ticketNumber: complaint.ticketNumber, status: complaint.status },
       });
     }
+    // Customer Portal: e-mail the company's portal users when staff change the status (best effort).
+    if (parsed.data.status && parsed.data.status !== existing.status) {
+      void notifyPortalCustomers(existing.customerId, {
+        templateKey: "portal_complaint_status",
+        subject: "Complaint " + complaint.ticketNumber + " is now " + complaint.status.replace(/_/g, " "),
+        lines: ["The status of your complaint " + complaint.ticketNumber + " is now: " + complaint.status.replace(/_/g, " ") + "."],
+        path: "/complaints/" + existing.id,
+      }).catch(() => undefined);
+    }
     // Notify a newly-assigned engineer that a ticket has landed on their plate.
     if (canManage && typeof data.assignedToId === "string" && data.assignedToId !== existing.assignedToId) {
       await notifySafely({
@@ -168,5 +180,55 @@ complaintsRouter.patch(
     }
 
     res.json(complaint);
+  },
+);
+
+/** Customer Portal thread, staff side. Replies are hidden from the customer unless "visibleToCustomer" is ticked. */
+complaintsRouter.get("/:id/comments", requirePermission(...COMPLAINT_LIST_PERMISSIONS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
+  const where = { id: asString(req.params.id), ...complaintListWhere(req.auth!) };
+  const complaint = await prisma.complaint.findFirst({ where, select: { id: true } });
+  if (!complaint) return res.status(404).json({ error: "Complaint not found" });
+  const [comments, photos] = await Promise.all([
+    prisma.complaintComment.findMany({ where: { complaintId: complaint.id }, orderBy: { createdAt: "asc" }, include: { attachments: { select: { id: true, mimeType: true } } } }),
+    prisma.portalAttachment.findMany({ where: { complaintId: complaint.id }, select: { id: true, mimeType: true, kind: true } }),
+  ]);
+  res.json({ comments, photos });
+});
+
+complaintsRouter.get("/attachments/:attachmentId", requirePermission(...COMPLAINT_LIST_PERMISSIONS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
+  const a = await prisma.portalAttachment.findUnique({ where: { id: asString(req.params.attachmentId) }, select: { storagePath: true, mimeType: true, complaintId: true } });
+  if (!a?.complaintId) return res.status(404).json({ error: "Not found" });
+  const ok = await prisma.complaint.findFirst({ where: { id: a.complaintId, ...complaintListWhere(req.auth!) }, select: { id: true } });
+  if (!ok) return res.status(404).json({ error: "Not found" });
+  res.setHeader("Content-Type", a.mimeType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.send(await getFile(a.storagePath));
+});
+
+complaintsRouter.post(
+  "/:id/comments",
+  requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS, PERMISSION_KEY.ACT_ASSIGNED_COMPLAINTS),
+  async (req: AuthenticatedRequest, res) => {
+    const parsed = z.object({ body: z.string().trim().min(1).max(4000), visibleToCustomer: z.boolean().default(false) }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+    const existing = await prisma.complaint.findUnique({ where: { id: asString(req.params.id) } });
+    if (!existing) return res.status(404).json({ error: "Complaint not found" });
+    if (!req.auth!.permissions.has(PERMISSION_KEY.MANAGE_COMPLAINTS) && existing.assignedToId !== req.auth!.userId) {
+      return res.status(403).json({ error: "This complaint is not assigned to you" });
+    }
+    const comment = await prisma.complaintComment.create({
+      data: { complaintId: existing.id, authorUserId: req.auth!.userId, authorIsCustomer: false, body: parsed.data.body, visibleToCustomer: parsed.data.visibleToCustomer },
+    });
+    if (parsed.data.visibleToCustomer) {
+      await notifyPortalCustomers(existing.customerId, {
+        templateKey: "portal_complaint_reply",
+        subject: "Update on your complaint " + existing.ticketNumber,
+        lines: ["Zan-F has replied to your complaint " + existing.ticketNumber + ".", parsed.data.body],
+        path: "/complaints/" + existing.id,
+      }).catch((err) => console.error("portal reply e-mail failed", err instanceof Error ? err.message : "unknown"));
+    }
+    res.status(201).json(comment);
   },
 );
