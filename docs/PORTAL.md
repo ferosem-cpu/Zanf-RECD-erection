@@ -22,3 +22,6 @@ Unknown id / cross-company record => 404. Responses pass a forbidden-key guard (
 ## Data model (additive migration 20261122120000_customer_portal)
 Order<->Site is 1:1, so a portal submission creates one Order+Site per DG set, grouped by `PortalSubmission` (unique `submissionKey` = portal draft id = idempotency).
 New: Site portal fields, PortalSubmission, ComplaintComment, PortalAttachment (files in the private Supabase Storage bucket portal-uploads, path in storagePath), PortalNonce, Order.portalSubmissionId, place_order grant.
+
+## Deploying the API without a local build (Windows EPERM workaround)
+From the repo root, linked to zan-app-api: `npx vercel deploy --prod --skip-domain --yes --local-config docs/remote-deploy.vercel.json --scope ferose-salahudeen-s-projects`, check the new URL with `npx vercel curl <url>/health`, then `npx vercel promote <url>`. Needs the `vercel-build` script in apps/api/package.json. Built and promoted on 23 Nov 2026 as dpl_FWpB4uipjCk2tQRvw6Qh6mHCGV2w (previous production dpl_MwxfoHWJpicNH4GKyYacCGiBD718 is the rollback target).

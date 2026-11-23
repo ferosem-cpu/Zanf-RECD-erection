@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "framework": null,
+  "builds": [
+    {
+      "src": "apps/api/api/index.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "apps/api/dist/**",
+          "packages/shared/dist/**",
+          "packages/shared/package.json",
+          "apps/api/prisma/**",
+          "node_modules/.prisma/**",
+          "node_modules/@prisma/**"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/apps/api/api/index.js"
+    }
+  ]
+}
