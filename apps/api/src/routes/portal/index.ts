@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import { COMPLAINT_STATUS, STAGE_KEY } from "@recd/shared";
 import { createPortalAuth, createPortalUserLimiter } from "../../services/portalAuth";
 import {
-  COMPLAINT_CATEGORY_MAP, URGENCY_MAP, canReopen, last10, looksLikeEmail, normaliseEmail, submissionSchema,
+  COMPLAINT_CATEGORY_MAP, URGENCY_MAP, canReopen, last10, looksLikeEmail, normaliseEmail, normalisePhone, submissionSchema,
 } from "../../services/portalDomain";
 import { createPortalSubmission, PortalValidationError } from "../../services/portalOrders";
 import { buildStaffOrderMail, mailStaffNewOrder, mailStaffPriorityChange } from "../../services/portalMail";
@@ -30,20 +30,21 @@ portalRouter.post("/auth/lookup", h(async (req, res) => {
   const parsed = z.object({ identifier: z.string().min(3).max(200) }).safeParse(jsonBody(req));
   if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
   const ident = parsed.data.identifier.trim();
-  const select = { id: true, email: true, isActive: true, customerId: true, role: { select: { key: true } } } as const;
+  const select = { id: true, email: true, phone: true, isActive: true, customerId: true, role: { select: { key: true } } } as const;
   let candidates;
   if (looksLikeEmail(ident)) {
     candidates = await prisma.user.findMany({ where: { email: { equals: normaliseEmail(ident), mode: "insensitive" } }, select });
   } else {
     const tail = last10(ident);
     if (tail.length !== 10) return void res.json({ found: false });
-    const maybe = await prisma.user.findMany({ where: { customerId: { not: null }, phone: { contains: tail.slice(-4) } }, select: { ...select, phone: true } });
+    const maybe = await prisma.user.findMany({ where: { customerId: { not: null }, phone: { contains: tail.slice(-4) } }, select });
     candidates = maybe.filter((u) => last10(u.phone ?? "") === tail);
   }
   const eligible = candidates.filter((u) => u.isActive && u.role.key === "customer" && u.customerId && u.email && looksLikeEmail(u.email));
   // Shared mobile numbers (or duplicate rows) never get a code: staff must fix the data.
   if (eligible.length !== 1 || candidates.filter((u) => u.isActive && u.role.key === "customer").length !== 1) return void res.json({ found: false });
-  res.json({ found: true, userId: eligible[0].id, email: eligible[0].email });
+  // phone: the user's mobile in +91XXXXXXXXXX form (used only for the optional WhatsApp copy of the sign-in code).
+  res.json({ found: true, userId: eligible[0].id, email: eligible[0].email, phone: normalisePhone(eligible[0].phone ?? "") ?? undefined });
 }));
 
 // ---------- maintenance (signed, anonymous): purge draft uploads never linked to an order ----------
