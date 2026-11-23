@@ -30,3 +30,6 @@ Remote build from the repo root, linked to zan-app-api (`npx vercel link --yes -
 3. check `npx vercel curl <url>/health` (and /portal/me = 401), and that GET /v13/deployments/<id> lists both crons and regions bom1;
 4. `npx vercel promote <url>`; delete the temporary files.
 Live since 23 Nov 2026: dpl_BpiYjMFuaYz5unv1XCYCAvZ8x9FZ (built from feat/customer-portal). Rollback target: dpl_MwxfoHWJpicNH4GKyYacCGiBD718 (no portal routes). Do not deploy from master until feat/customer-portal is merged, or the portal routes disappear.
+
+## Several DG sets per site (24 Nov 2026)
+A submission site carries `dgs: [{ ratingKva, ratingUnsure?, dgModel?, dgLocation? }, ...]` (1 to 50 per site, 300 per submission). Each DG becomes its own Order+Site (named "<site> - DG n" when there is more than one), all grouped under the PortalSubmission. The old shape (`ratingKva`, `dgSets`, `dgModel`, `dgLocation` on the site) is still accepted and is expanded into N identical DG sets, so old drafts and clients keep working. No database change.

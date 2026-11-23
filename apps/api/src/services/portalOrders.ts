@@ -101,9 +101,10 @@ export async function createPortalSubmission(
         });
         const usedNumbers = new Set<string>();
         for (const s of input.sites) {
-          const match = matchProduct(products, s.ratingKva)!;
-          const unsure = s.ratingUnsure || !match.exact;
-          for (let n = 1; n <= s.dgSets; n++) {
+          for (let n = 1; n <= s.dgs.length; n++) {
+            const dg = s.dgs[n - 1];
+            const match = matchProduct(products, dg.ratingKva)!;
+            const unsure = dg.ratingUnsure || !match.exact;
             let orderNumber = "";
             for (let tries = 0; tries < 25; tries++) {
               const cand = orderNumberFor(year, rnd());
@@ -115,11 +116,11 @@ export async function createPortalSubmission(
             if (!orderNumber) throw new Error("could not allocate an order number");
             usedNumbers.add(orderNumber);
 
-            const name = siteDisplayName(s.name, n, s.dgSets);
+            const name = siteDisplayName(s.name, n, s.dgs.length);
             const address = composeAddress({ line: s.line, area: s.area, city: s.city, district: s.district, state: s.state, pincode: s.pincode });
             const formalities = docTypes.filter((d) => s.formalities[d.key]).map((d) => d.label);
             const noteBits = ["Submitted via customer portal (" + reference + ")."];
-            if (unsure) noteBits.push("Rating stated by customer: " + s.ratingKva + " kVA" + (s.ratingUnsure ? " (not sure)" : "") + "; nearest RECD " + match.product.model + " used - staff to confirm.");
+            if (unsure) noteBits.push("Rating stated by customer: " + dg.ratingKva + " kVA" + (dg.ratingUnsure ? " (not sure)" : "") + "; nearest RECD " + match.product.model + " used - staff to confirm.");
             if (input.notes) noteBits.push(input.notes);
             const accessNotes = [s.accessNotes, s.formalityOther ? "Other formalities: " + s.formalityOther : ""].filter(Boolean).join("\n") || undefined;
 
@@ -131,7 +132,7 @@ export async function createPortalSubmission(
                 site: {
                   create: {
                     currentStageId: firstStage.id, companyName: name, address, gpsLat: s.lat, gpsLng: s.lng,
-                    dgCapacityKva: s.ratingKva, dgModel: s.dgModel, dgLocation: s.dgLocation, accessNotes,
+                    dgCapacityKva: dg.ratingKva, dgModel: dg.dgModel, dgLocation: dg.dgLocation, accessNotes,
                     addressParts: { line: s.line, area: s.area ?? null, city: s.city, district: s.district ?? null, state: s.state, pincode: s.pincode },
                     requestedStartDate: s.startBy ? new Date(s.startBy) : undefined, requestedCompletionDate: s.completeBy ? new Date(s.completeBy) : undefined,
                     installPriority: s.priority, priorityReason: s.priorityReason, source: "portal",
@@ -149,10 +150,10 @@ export async function createPortalSubmission(
               include: { site: true },
             });
             created.push({ id: order.id, orderNumber, siteId: order.site!.id, siteName: name });
-            const k = String(s.ratingKva);
+            const k = String(dg.ratingKva);
             byKva[k] = (byKva[k] ?? 0) + 1;
             confirmation.push({
-              name, address, city: s.city, pincode: s.pincode, ratingKva: s.ratingKva, contact: s.contacts[0].name,
+              name, address, city: s.city, pincode: s.pincode, ratingKva: dg.ratingKva, contact: s.contacts[0].name,
               priority: s.priority, priorityReason: s.priorityReason ?? null, startBy: s.startBy ?? null, completeBy: s.completeBy ?? null, formalities,
             });
 

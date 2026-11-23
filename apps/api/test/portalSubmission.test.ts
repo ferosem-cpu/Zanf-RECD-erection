@@ -69,3 +69,25 @@ test("a submission key used by another customer is refused", async () => {
   await createPortalSubmission(db, who, input);
   await assert.rejects(createPortalSubmission(db, { userId: "u2", customerId: "c2" }, input), /already used/);
 });
+
+test("a site with DGs of different ratings, models and locations becomes one Order+Site per DG under one submission", async () => {
+  const { db, orders, subs } = fakeDb();
+  const input = submissionSchema.parse({ submissionKey: "key-multidg1", sites: [siteInputSchema.parse({ name: "Mill", line: "1 St", city: "Chennai", state: "Tamil Nadu", pincode: "600001", contacts: [{ name: "Raj", phone: "9876543210" }],
+    dgs: [{ ratingKva: 250, dgModel: "Cummins C250", dgLocation: "Outdoor" }, { ratingKva: 125, dgModel: "Kirloskar K125", dgLocation: "Rooftop" }, { ratingKva: 130, ratingUnsure: true }] })] });
+  const r = await createPortalSubmission(db, who, input);
+  assert.equal(subs.length, 1); assert.equal(orders.length, 3);
+  assert.deepEqual(r.orders.map((o) => o.siteName), ["Mill - DG 1", "Mill - DG 2", "Mill - DG 3"]);
+  assert.deepEqual(orders.map((o) => o.productId), ["p250", "p125", "p125"]);
+  assert.deepEqual(orders.map((o) => o.site.createData.dgCapacityKva), [250, 125, 130]);
+  assert.deepEqual(orders.map((o) => o.site.createData.dgModel), ["Cummins C250", "Kirloskar K125", undefined]);
+  assert.deepEqual(orders.map((o) => o.site.createData.dgLocation), ["Outdoor", "Rooftop", undefined]);
+  assert.deepEqual(r.countByKva, { "250": 1, "125": 1, "130": 1 });
+  assert.deepEqual(r.confirmation.map((c) => c.ratingKva), [250, 125, 130]);
+  assert.match(orders[2].customerNotes, /130 kVA \(not sure\)/);
+  assert.ok(orders.every((o) => o.portalSubmissionId === "sub1"));
+});
+test("a single-DG site keeps its plain name", async () => {
+  const { db } = fakeDb();
+  const r = await createPortalSubmission(db, who, submissionSchema.parse({ submissionKey: "key-singledg", sites: [site()] }));
+  assert.deepEqual(r.orders.map((o) => o.siteName), ["Plant"]);
+});

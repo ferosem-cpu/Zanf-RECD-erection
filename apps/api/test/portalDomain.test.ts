@@ -46,7 +46,7 @@ test("submission caps rows at 200 and needs a key", () => {
   assert.equal(submissionSchema.safeParse({ submissionKey: "abcdefgh12", sites: Array(200).fill(s) }).success, true);
   assert.equal(submissionSchema.safeParse({ submissionKey: "abcdefgh12", sites: Array(201).fill(s) }).success, false);
   assert.equal(submissionSchema.safeParse({ submissionKey: "x", sites: [s] }).success, false);
-  assert.equal(expandedSiteCount([{ dgSets: 3 }, { dgSets: 1 }]), 4);
+  assert.equal(expandedSiteCount([{ dgs: [1, 2, 3] }, { dgs: [1] }]), 4);
   assert.equal(siteDisplayName("Plant", 2, 3), "Plant - DG 2");
   assert.equal(siteDisplayName("Plant", 1, 1), "Plant");
 });
@@ -87,4 +87,23 @@ test("customer web block: off until PORTAL_ENABLED; then customers blocked, staf
   assert.equal(isCustomerWebBlocked(cust, { PORTAL_ENABLED: "true" } as any), true);
   assert.equal(isCustomerWebBlocked({ role: { key: "customer" } }, { PORTAL_ENABLED: "true" } as any), true);
   assert.equal(isCustomerWebBlocked(staff, { PORTAL_ENABLED: "true" } as any), false);
+});
+
+test("site with several DG sets: each DG has its own rating, model and location; legacy shape still works", () => {
+  const base = { name: "P", line: "1 St", city: "Chennai", state: "Tamil Nadu", pincode: "600001", contacts: [{ name: "Raj", phone: "9876543210" }] };
+  const multi = siteInputSchema.parse({ ...base, dgs: [{ ratingKva: 250, dgModel: "Cummins C250", dgLocation: "Outdoor" }, { ratingKva: 125, dgLocation: "Rooftop" }] });
+  assert.deepEqual(multi.dgs.map((d) => d.ratingKva), [250, 125]);
+  assert.equal(multi.dgs[0].dgModel, "Cummins C250"); assert.equal(multi.dgs[1].dgModel, undefined);
+  const legacy = siteInputSchema.parse({ ...base, ratingKva: 125, dgSets: 3, dgModel: "X", dgLocation: "Indoor" });
+  assert.equal(legacy.dgs.length, 3); assert.ok(legacy.dgs.every((d) => d.ratingKva === 125 && d.dgModel === "X" && d.dgLocation === "Indoor"));
+  assert.equal(siteInputSchema.safeParse({ ...base, dgs: [] }).success, false);
+  assert.equal(siteInputSchema.safeParse({ ...base }).success, false);
+  assert.equal(siteInputSchema.safeParse({ ...base, dgs: [{ ratingKva: 0 }] }).success, false);
+  assert.equal(siteInputSchema.safeParse({ ...base, dgs: [{ ratingKva: 250, dgLocation: "Moon" }] }).success, false);
+  assert.equal(siteInputSchema.safeParse({ ...base, dgs: Array.from({ length: 51 }, () => ({ ratingKva: 250 })) }).success, false);
+});
+test("one submission is capped at 300 DG sets in total", () => {
+  const s = { name: "P", line: "1 St", city: "Chennai", state: "Tamil Nadu", pincode: "600001", contacts: [{ name: "Raj", phone: "9876543210" }], dgs: Array.from({ length: 50 }, () => ({ ratingKva: 250 })) };
+  assert.equal(submissionSchema.safeParse({ submissionKey: "key-abcdefgh", sites: Array.from({ length: 6 }, () => s) }).success, true);
+  assert.equal(submissionSchema.safeParse({ submissionKey: "key-abcdefgh", sites: Array.from({ length: 7 }, () => s) }).success, false);
 });

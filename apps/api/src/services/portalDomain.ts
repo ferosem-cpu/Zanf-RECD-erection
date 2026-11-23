@@ -50,7 +50,29 @@ export const contactSchema = z.object({
   designation: optText(120),
 });
 
-export const siteInputSchema = z
+/** One DG set. Each DG of a site has its own rating, make/model and location. */
+export const dgInputSchema = z.object({
+  ratingKva: z.number().positive().max(100000),
+  ratingUnsure: z.boolean().optional(),
+  dgModel: optText(160),
+  dgLocation: z.enum(DG_LOCATIONS).optional(),
+});
+export type DgInput = z.infer<typeof dgInputSchema>;
+export const MAX_DGS_PER_SITE = 50;
+export const MAX_DGS_PER_SUBMISSION = 300;
+
+/** Backward compatibility: an old-style site (ratingKva + dgSets + dgModel + dgLocation) becomes N identical DG sets. */
+export function legacySiteToDgs(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const s = raw as Record<string, unknown>;
+  if (Array.isArray(s.dgs) || s.ratingKva === undefined) return raw;
+  const n = Math.max(1, Math.min(MAX_DGS_PER_SITE, Math.trunc(Number(s.dgSets ?? 1)) || 1));
+  const { ratingKva, ratingUnsure, dgModel, dgLocation, dgSets: _dgSets, ...rest } = s;
+  void _dgSets;
+  return { ...rest, dgs: Array.from({ length: n }, () => ({ ratingKva, ratingUnsure, dgModel, dgLocation })) };
+}
+
+const siteObjectSchema = z
   .object({
     name: z.string().trim().min(1, "Enter the site name").max(160),
     line: z.string().trim().min(1, "Enter the address").max(240),
@@ -62,11 +84,7 @@ export const siteInputSchema = z
     lat: z.number().min(-90).max(90).optional(),
     lng: z.number().min(-180).max(180).optional(),
     contacts: z.array(contactSchema).min(1, "Add at least one contact").max(5),
-    ratingKva: z.number().positive().max(100000),
-    ratingUnsure: z.boolean().optional(),
-    dgSets: z.number().int().min(1).max(50).default(1),
-    dgModel: optText(160),
-    dgLocation: z.enum(DG_LOCATIONS).optional(),
+    dgs: z.array(dgInputSchema, { required_error: "Add at least one DG set" }).min(1, "Add at least one DG set").max(MAX_DGS_PER_SITE),
     formalities: z.record(z.string().max(60), z.boolean()).default({}),
     formalityOther: optText(300),
     accessNotes: optText(1000),
@@ -85,7 +103,8 @@ export const siteInputSchema = z
     if (s.priority === "critical" && !s.completeBy) need(["completeBy"], "Critical needs a completion date");
     if (s.startBy && s.completeBy && s.completeBy < s.startBy) need(["completeBy"], "Completion date must be on or after the start date");
   });
-export type SiteInput = z.infer<typeof siteInputSchema>;
+export const siteInputSchema = z.preprocess(legacySiteToDgs, siteObjectSchema);
+export type SiteInput = z.infer<typeof siteObjectSchema>;
 
 export const MAX_SITE_ROWS = 200;
 export const submissionSchema = z.object({
@@ -95,15 +114,17 @@ export const submissionSchema = z.object({
   notes: optText(2000),
   poAttachmentId: z.string().max(40).optional(),
   sites: z.array(siteInputSchema).min(1).max(MAX_SITE_ROWS),
+}).superRefine((s, ctx) => {
+  if (expandedSiteCount(s.sites) > MAX_DGS_PER_SUBMISSION) ctx.addIssue({ code: "custom", path: ["sites"], message: "Too many DG sets in one order (max " + MAX_DGS_PER_SUBMISSION + "). Please split it into two orders." });
 });
 export type SubmissionInput = z.infer<typeof submissionSchema>;
 
-/** One Order+Site is created per DG set. Returns the display name of set n of N. */
+/** One Order+Site is created per DG set of a site. Returns the display name of set n of N. */
 export function siteDisplayName(name: string, n: number, of: number): string {
   return of > 1 ? name + " - DG " + n : name;
 }
-export function expandedSiteCount(sites: { dgSets: number }[]): number {
-  return sites.reduce((a, s) => a + s.dgSets, 0);
+export function expandedSiteCount(sites: { dgs: unknown[] }[]): number {
+  return sites.reduce((a, s) => a + s.dgs.length, 0);
 }
 
 export const orderNumberFor = (year: number, rnd: number): string => "ORD-" + year + "-" + (1000 + Math.floor(rnd * 9000));
