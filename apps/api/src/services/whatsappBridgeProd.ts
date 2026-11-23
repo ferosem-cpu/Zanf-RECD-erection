@@ -14,6 +14,20 @@ import { prismaNonceStore } from "./whatsappBridgeNonceStore";
 import { createBridgeService, WHATSAPP_PROMPT_ADDENDUM } from "./whatsappBridge";
 import { createWhatsappBridgeRouter } from "../routes/whatsappBridge";
 import { runInBackground } from "../lib/backgroundTask";
+import { normalisePhone } from "./portalDomain";
+import { createWaOtpQueue, type WaOtpStore } from "./portalWaOtp";
+import type { OtpUserLoader } from "./whatsappBridge";
+
+/** Sign-in code recipient, from the database row only. */
+export const loadOtpUser: OtpUserLoader = async (userId) => {
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { isActive: true, customerId: true, phone: true, role: { select: { key: true } } } });
+  return u ? { isActive: u.isActive, roleKey: u.role.key, customerId: u.customerId, phoneE164: normalisePhone(u.phone ?? "") } : null;
+};
+export const prismaWaOtpStore: WaOtpStore = {
+  countOtp: (since, phone) => prisma.whatsappOutbox.count({ where: { waGroup: "otp", createdAt: { gt: since }, ...(phone ? { recipientPhone: phone } : {}) } }),
+  insert: async (row) => { await prisma.whatsappOutbox.createMany({ data: [row], skipDuplicates: true }); },
+};
+export const queueWaOtp = createWaOtpQueue({ store: prismaWaOtpStore, loadUser: loadOtpUser });
 
 /** WhatsApp turn prompt: the in-app prompt (already dated) + WhatsApp addendum + an explicit
  * IST date line at the end, so "today" questions on WhatsApp never fall back to a guessed date. */
@@ -27,6 +41,7 @@ export async function buildWhatsappSystemPrompt(now: Date = new Date(), isCustom
 export const whatsappBridgeService = createBridgeService({
   store: prismaBridgeStore,
   senders: prismaSenderStore,
+  otpUser: loadOtpUser,
   openTurn: openWhatsappTurn,
   runTurn: runAgentTurn,
   buildSystemPrompt: ({ group }) => buildWhatsappSystemPrompt(new Date(), group === "customer"),

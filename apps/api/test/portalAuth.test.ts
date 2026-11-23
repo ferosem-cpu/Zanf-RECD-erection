@@ -81,5 +81,7 @@ test("unsigned request -> 401; PORTAL_ENABLED=false -> 503", async () => {
 });
 test("anonymous lookup path needs a valid signature but no uid", async () => {
   assert.equal((await call("POST", "/portal/auth/lookup", "{}")).status, 200);
+  assert.equal((await call("POST", "/portal/auth/wa-otp", "{}")).status, 200);
+  assert.equal((await fetch(base + "/portal/auth/wa-otp", { method: "POST", body: "{}" })).status, 401);
   assert.equal((await fetch(base + "/portal/auth/lookup", { method: "POST", body: "{}" })).status, 401);
 });

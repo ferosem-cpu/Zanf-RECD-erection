@@ -7,6 +7,7 @@ import { createPortalAuth, createPortalUserLimiter } from "../../services/portal
 import {
   COMPLAINT_CATEGORY_MAP, URGENCY_MAP, canReopen, last10, looksLikeEmail, normaliseEmail, normalisePhone, submissionSchema,
 } from "../../services/portalDomain";
+import { waOtpBodySchema } from "../../services/portalWaOtp";
 import { createPortalSubmission, PortalValidationError } from "../../services/portalOrders";
 import { buildStaffOrderMail, mailStaffNewOrder, mailStaffPriorityChange } from "../../services/portalMail";
 import { detectFileType, MAX_UPLOAD_BYTES, PDF_KINDS, UPLOAD_KINDS, type UploadKind } from "../../lib/portalFiles";
@@ -43,8 +44,16 @@ portalRouter.post("/auth/lookup", h(async (req, res) => {
   const eligible = candidates.filter((u) => u.isActive && u.role.key === "customer" && u.customerId && u.email && looksLikeEmail(u.email));
   // Shared mobile numbers (or duplicate rows) never get a code: staff must fix the data.
   if (eligible.length !== 1 || candidates.filter((u) => u.isActive && u.role.key === "customer").length !== 1) return void res.json({ found: false });
-  // phone: the user's mobile in +91XXXXXXXXXX form (used only for the optional WhatsApp copy of the sign-in code).
-  res.json({ found: true, userId: eligible[0].id, email: eligible[0].email, phone: normalisePhone(eligible[0].phone ?? "") ?? undefined });
+  res.json({ found: true, userId: eligible[0].id, email: eligible[0].email });
+}));
+
+// ---------- sign-in code over WhatsApp (signed, anonymous): queued for the existing bridge; the number comes from the user's row ----------
+portalRouter.post("/auth/wa-otp", h(async (req, res) => {
+  const parsed = waOtpBodySchema.safeParse(jsonBody(req));
+  if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
+  const { queueWaOtp } = await import("../../services/whatsappBridgeProd");
+  const r = await queueWaOtp(parsed.data);
+  res.json({ queued: r.queued });
 }));
 
 // ---------- maintenance (signed, anonymous): purge draft uploads never linked to an order ----------
