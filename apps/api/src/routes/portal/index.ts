@@ -1,6 +1,7 @@
 /** Customer Portal API (/portal/*). Signed server-to-server only (see services/portalAuth.ts); mounted before express.json. */
 import { Router } from "express";
 import { putFile, getFile, deleteFiles, StorageUnavailableError } from "../../lib/portalStorage";
+import { DriveUnavailableError, fileUnfiledPhotos, prodDriveDeps, uploadDraftPhoto, uploadSitePhoto } from "../../lib/portalDrive";
 import crypto from "node:crypto";
 import { COMPLAINT_STATUS, STAGE_KEY } from "@recd/shared";
 import { createPortalAuth, createPortalUserLimiter } from "../../services/portalAuth";
@@ -62,7 +63,9 @@ portalRouter.post("/maintenance/purge", h(async (_req, res) => {
   const old = await prisma.portalAttachment.findMany({ where, select: { id: true, storagePath: true }, take: 500 });
   await deleteFiles(old.map((o) => o.storagePath));
   const r = await prisma.portalAttachment.deleteMany({ where: { id: { in: old.map((o) => o.id) } } });
-  res.json({ purged: r.count });
+  let filed = 0;
+  try { filed = (await fileUnfiledPhotos(prodDriveDeps(), { limit: 40, budgetMs: 120_000 })).filed; } catch { /* Drive not ready */ }
+  res.json({ purged: r.count, filed });
 }));
 
 // ---------- profile / reference data ----------
@@ -146,6 +149,8 @@ portalRouter.post("/orders", h(async (req, res) => {
     throw e;
   }
   if (!result.replay) {
+    // Move this order's draft photos from "Portal drafts" into each DG's Drive folder. Best effort: leftovers are retried by the daily purge.
+    try { await fileUnfiledPhotos(prodDriveDeps(), { submissionId: result.submission.id, budgetMs: 25_000 }); } catch { /* Drive not ready: retried later */ }
     // Best-effort notifications: a failure never undoes the order.
     try {
       const customer = await prisma.customer.findUnique({ where: { id: who.customerId }, select: { name: true } });
@@ -344,16 +349,38 @@ async function storeUpload(req: import("express").Request, res: import("express"
     if (n >= 60) return void res.status(429).json({ error: "Too many files for this draft" });
   }
   const id = crypto.randomUUID();
-  const storagePath = customerId + "/" + id + "." + t.ext;
-  try { await putFile(storagePath, body, t.mime); }
-  catch (e) {
-    if (e instanceof StorageUnavailableError) return void res.status(503).json({ error: "File upload is temporarily unavailable. Please try again later or contact Zan-F." });
-    throw e;
+  const unavailable = () => void res.status(503).json({ error: "File upload is temporarily unavailable. Please try again later or contact Zan-F." });
+  // Site photos go to the company Google Drive; every other file type keeps the private Supabase bucket.
+  let storagePath: string;
+  let driveUrl: string | undefined, dgIndex: number | undefined, driveFiledAt: Date | undefined;
+  if (q.data.kind === "site_photo") {
+    try {
+      const deps = prodDriveDeps();
+      if (siteId) {
+        const site = await prisma.site.findUnique({ where: { id: siteId }, select: { companyName: true } });
+        const f = await uploadSitePhoto(deps, { siteId, siteName: site?.companyName ?? null, bytes: body, mimeType: t.mime });
+        storagePath = "drive:" + f.id; driveUrl = f.webViewLink; dgIndex = f.dgIndex; driveFiledAt = new Date();
+      } else {
+        const f = await uploadDraftPhoto(deps, { attachmentId: id, bytes: body, mimeType: t.mime });
+        storagePath = "drive:" + f.id; driveUrl = f.webViewLink;
+      }
+    } catch (e) {
+      if (e instanceof DriveUnavailableError) return unavailable();
+      console.error("[portal] drive photo upload failed", e instanceof Error ? e.name : "error"); // never the file, name or number
+      return unavailable();
+    }
+  } else {
+    storagePath = customerId + "/" + id + "." + t.ext;
+    try { await putFile(storagePath, body, t.mime); }
+    catch (e) {
+      if (e instanceof StorageUnavailableError) return unavailable();
+      throw e;
+    }
   }
   let a;
   try {
     a = await prisma.portalAttachment.create({
-      data: { id, customerId, kind: q.data.kind, documentTypeKey: q.data.typeKey, draftId: siteId || complaintId ? null : q.data.draftId, siteId, complaintId, orderId, fileName: q.data.fileName?.replace(/[^\w.\- ]/g, "_"), mimeType: t.mime, sizeBytes: body.length, sha256: crypto.createHash("sha256").update(body).digest("hex"), storagePath, uploadedByUserId: req.portal!.userId },
+      data: { id, customerId, kind: q.data.kind, documentTypeKey: q.data.typeKey, draftId: siteId || complaintId ? null : q.data.draftId, siteId, complaintId, orderId, fileName: q.data.fileName?.replace(/[^\w.\- ]/g, "_"), mimeType: t.mime, sizeBytes: body.length, sha256: crypto.createHash("sha256").update(body).digest("hex"), storagePath, driveUrl, dgIndex, driveFiledAt, uploadedByUserId: req.portal!.userId },
       select: { id: true, mimeType: true, sizeBytes: true, fileName: true },
     });
   } catch (e) { await deleteFiles([storagePath]); throw e; }

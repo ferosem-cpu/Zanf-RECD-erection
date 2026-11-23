@@ -160,11 +160,11 @@ export async function createPortalSubmission(
 
             // Link uploaded files to the first DG set of a row (documents are shared by reference for the rest).
             if (n === 1) {
-              const link = (ids: string[]) => ids.length ? tx.portalAttachment.updateMany({ where: { id: { in: ids }, customerId: who.customerId, orderId: null }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null } }) : null;
+              const link = (ids: string[]) => ids.length ? tx.portalAttachment.updateMany({ where: { id: { in: ids }, customerId: who.customerId, orderId: null }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null, dgIndex: n } }) : null;
               await link([...s.photoIds, ...Object.values(s.documentIds), ...(s.priorityDocumentId ? [s.priorityDocumentId] : [])]);
             }
             // Each DG's own photos belong to that DG's Order+Site.
-            if (dg.photoIds.length) await tx.portalAttachment.updateMany({ where: { id: { in: dg.photoIds }, customerId: who.customerId, orderId: null }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null } });
+            if (dg.photoIds.length) await tx.portalAttachment.updateMany({ where: { id: { in: dg.photoIds }, customerId: who.customerId, orderId: null }, data: { orderId: order.id, siteId: order.site!.id, submissionId: sub.id, draftId: null, dgIndex: n } });
           }
         }
         if (input.poAttachmentId && created[0]) {

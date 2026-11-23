@@ -100,6 +100,7 @@ test("each DG's photos are linked to that DG's own Order+Site", async () => {
   await createPortalSubmission(db, who, input);
   const byOrder = links.filter((l: any) => l.data.orderId).map((l: any) => [l.data.orderId, l.where.id.in]);
   assert.deepEqual(byOrder, [[orders[0].id, ["a1", "a2"]], [orders[1].id, ["b1"]]]);
+  assert.deepEqual(links.filter((l: any) => l.data.orderId).map((l: any) => l.data.dgIndex), [1, 2]); // DG position is recorded so Drive files land in DG 1 / DG 2
 });
 test("a photo that is not the customer's (or already used) is refused", async () => {
   const { db } = fakeDb();

@@ -688,6 +688,12 @@ model PortalAttachment {
   sha256           String
   /// Object path inside the private Supabase Storage bucket portal-uploads.
   storagePath      String
+  /// Photos live in Google Drive: storagePath is "drive:<fileId>", driveUrl the Drive viewer link (owner-only, never shared).
+  driveUrl         String?
+  /// DG set number (1-based) within the order's site group; set when the photo is linked on submit.
+  dgIndex          Int?
+  /// When the photo reached its final DG folder (null while it still sits in "Portal drafts").
+  driveFiledAt     DateTime?
   uploadedByUserId String
   createdAt        DateTime @default(now())
 
