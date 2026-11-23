@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { api } from "@/lib/apiClient";
 import { useAuth } from "@/components/AuthContext";
+import { CustomerPortalAccess } from "@/components/CustomerPortalAccess";
 
 interface CustomerSite {
   id: string;
@@ -116,6 +117,8 @@ export default function CustomerDetailPage() {
           </p>
         )}
       </section>
+
+      <CustomerPortalAccess customerId={customer.id} canManage={canManage} />
 
       <section>
         <div className="flex items-center justify-between mb-2">
