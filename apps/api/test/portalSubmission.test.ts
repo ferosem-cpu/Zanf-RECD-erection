@@ -108,3 +108,13 @@ test("a photo that is not the customer's (or already used) is refused", async ()
   const input = submissionSchema.parse({ submissionKey: "key-badphoto", sites: [siteInputSchema.parse({ name: "Mill", line: "1 St", city: "Chennai", state: "Tamil Nadu", pincode: "600001", contacts: [{ name: "Raj", phone: "9876543210" }], dgs: [{ ratingKva: 250, photoIds: ["x"] }] })] });
   await assert.rejects(createPortalSubmission(db, who, input), /could not be found/);
 });
+
+test("every site of a location user's submission is stamped with that location (and its name goes in the note); admins leave it unassigned", async () => {
+  const { db, orders } = fakeDb();
+  await createPortalSubmission(db, { userId: "u1", customerId: "c1", locationId: "L_blr", locationName: "Bangalore" } as any, submissionSchema.parse({ submissionKey: "key-locblr01", sites: [site(), site({ name: "Two" })] }));
+  assert.deepEqual(orders.map((o) => o.site.createData.customerLocationId), ["L_blr", "L_blr"]);
+  assert.ok(orders.every((o) => /Location: Bangalore\./.test(o.customerNotes)));
+  const f = fakeDb();
+  await createPortalSubmission(f.db, who, submissionSchema.parse({ submissionKey: "key-locadmin", sites: [site()] }));
+  assert.equal(f.orders[0].site.createData.customerLocationId, undefined);
+});

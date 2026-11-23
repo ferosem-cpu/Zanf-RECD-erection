@@ -71,6 +71,9 @@ model User {
   role                Role     @relation(fields: [roleId], references: [id])
   customerId          String?
   customer            Customer? @relation("CustomerContacts", fields: [customerId], references: [id])
+  /// Customer Portal: null = customer admin (sees every site of the customer); set = sees only that location's sites.
+  customerLocationId  String?
+  customerLocation    CustomerLocation? @relation("LocationUsers", fields: [customerLocationId], references: [id], onDelete: SetNull)
   /// Erection engineers belong to an external Vendor company (work is subcontracted). Null = internal staff.
   vendorId            String?
   vendor              Vendor?   @relation("VendorMembers", fields: [vendorId], references: [id])
@@ -148,6 +151,7 @@ model Customer {
   createdAt     DateTime @default(now())
 
   contacts  User[]   @relation("CustomerContacts")
+  locations CustomerLocation[]
   orders    Order[]
   complaints Complaint[]
   quotations Quotation[]
@@ -320,6 +324,9 @@ model Site {
   id      String @id @default(cuid())
   orderId String @unique
   order   Order  @relation(fields: [orderId], references: [id])
+  /// Customer Portal: which of the customer's locations this site belongs to (null = unassigned, visible to customer admins only).
+  customerLocationId String?
+  customerLocation   CustomerLocation? @relation("LocationSites", fields: [customerLocationId], references: [id], onDelete: SetNull)
 
   address           String?
   /// The end-client / site-owner - the company that actually operates this premises
@@ -625,6 +632,22 @@ model Complaint {
 
   comments           ComplaintComment[]
   portalAttachments  PortalAttachment[]
+}
+
+/// Customer Portal: a branch/plant of a customer (e.g. Bangalore, Mangalore). Portal users with a location see only that location's sites.
+model CustomerLocation {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  users User[] @relation("LocationUsers")
+  sites Site[] @relation("LocationSites")
+
+  @@unique([customerId, name])
+  @@index([customerId])
 }
 
 /// Customer Portal: groups the Order+Site rows created by one portal submission. submissionKey is the

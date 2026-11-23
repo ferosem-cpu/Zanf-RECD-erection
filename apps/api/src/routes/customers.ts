@@ -4,6 +4,8 @@ import { createCustomerSchema, updateCustomerSchema, PERMISSION_KEY, ROLE_KEY } 
 import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
+import { z } from "zod";
+import { looksLikeEmail, normalisePhone } from "../services/portalDomain";
 
 export const customersRouter = Router();
 customersRouter.use(authenticate);
@@ -183,3 +185,99 @@ customersRouter.get(
     res.json(advances);
   },
 );
+
+// ---------- Customer Portal: locations (branches) and portal contacts. Same permission as the rest of customer management. ----------
+const locationName = z.string().trim().min(1, "Enter a location name").max(80);
+
+/** A location must belong to this customer (and, when assigning, be active). Returns null when it does not. */
+async function ownLocation(customerId: string, locationId: string, mustBeActive: boolean) {
+  const l = await prisma.customerLocation.findFirst({ where: { id: locationId, customerId, ...(mustBeActive ? { active: true } : {}) } });
+  return l;
+}
+const dupName = async (customerId: string, name: string, exceptId?: string) =>
+  !!(await prisma.customerLocation.findFirst({ where: { customerId, name: { equals: name, mode: "insensitive" }, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } }));
+
+customersRouter.get("/:id/locations", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
+  const customerId = asString(req.params.id);
+  if (!(await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } }))) return res.status(404).json({ error: "Customer not found" });
+  const rows = await prisma.customerLocation.findMany({ where: { customerId }, orderBy: { name: "asc" }, include: { _count: { select: { users: true, sites: true } } } });
+  res.json(rows.map((l) => ({ id: l.id, name: l.name, active: l.active, userCount: l._count.users, siteCount: l._count.sites })));
+});
+
+customersRouter.post("/:id/locations", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
+  const customerId = asString(req.params.id);
+  const p = z.object({ name: locationName }).strict().safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: "Enter a location name" });
+  if (!(await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } }))) return res.status(404).json({ error: "Customer not found" });
+  if (await dupName(customerId, p.data.name)) return res.status(409).json({ error: "This customer already has a location with that name" });
+  const l = await prisma.customerLocation.create({ data: { customerId, name: p.data.name } });
+  res.status(201).json({ id: l.id, name: l.name, active: l.active, userCount: 0, siteCount: 0 });
+});
+
+customersRouter.put("/:id/locations/:locId", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
+  const customerId = asString(req.params.id);
+  const p = z.object({ name: locationName.optional(), active: z.boolean().optional() }).strict().safeParse(req.body);
+  if (!p.success || (p.data.name === undefined && p.data.active === undefined)) return res.status(400).json({ error: "Nothing to change" });
+  const l = await ownLocation(customerId, asString(req.params.locId), false);
+  if (!l) return res.status(404).json({ error: "Location not found" });
+  if (p.data.name !== undefined && (await dupName(customerId, p.data.name, l.id))) return res.status(409).json({ error: "This customer already has a location with that name" });
+  const u = await prisma.customerLocation.update({ where: { id: l.id }, data: { ...(p.data.name !== undefined ? { name: p.data.name } : {}), ...(p.data.active !== undefined ? { active: p.data.active } : {}) } });
+  res.json({ id: u.id, name: u.name, active: u.active });
+});
+
+const contactSelect = { id: true, name: true, email: true, phone: true, isActive: true, customerLocationId: true } as const;
+
+customersRouter.get("/:id/contacts", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
+  const customerId = asString(req.params.id);
+  if (!(await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } }))) return res.status(404).json({ error: "Customer not found" });
+  res.json(await prisma.user.findMany({ where: { customerId, role: { key: ROLE_KEY.CUSTOMER } }, select: contactSelect, orderBy: { createdAt: "asc" } }));
+});
+
+const contactBody = z.object({
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().max(200).refine(looksLikeEmail, "Enter a valid e-mail"),
+  phone: z.string().trim().max(40).refine((v) => !v || normalisePhone(v) !== null, "Enter a valid 10-digit mobile number").optional(),
+  customerLocationId: z.string().max(40).nullable().optional(),
+}).strict();
+
+customersRouter.post("/:id/contacts", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
+  const customerId = asString(req.params.id);
+  const p = contactBody.safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: p.error.issues[0]?.message ?? "Invalid request" });
+  if (!(await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } }))) return res.status(404).json({ error: "Customer not found" });
+  if (p.data.customerLocationId && !(await ownLocation(customerId, p.data.customerLocationId, true))) return res.status(400).json({ error: "Choose one of this customer's active locations" });
+  const email = p.data.email.toLowerCase();
+  const phone = p.data.phone ? normalisePhone(p.data.phone) : null;
+  if (await prisma.user.findFirst({ where: { email: { equals: email, mode: "insensitive" } }, select: { id: true } })) return res.status(409).json({ error: "A user with that e-mail already exists" });
+  if (phone && (await prisma.user.findUnique({ where: { phone }, select: { id: true } }))) return res.status(409).json({ error: "A user with that phone number already exists" });
+  const role = await prisma.role.findUniqueOrThrow({ where: { key: ROLE_KEY.CUSTOMER } });
+  const u = await prisma.user.create({
+    data: { name: p.data.name, email, phone, roleId: role.id, customerId, customerLocationId: p.data.customerLocationId ?? null, isActive: true, mustChangePassword: false },
+    select: contactSelect,
+  });
+  res.status(201).json(u);
+});
+
+customersRouter.put("/:id/contacts/:userId", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {
+  const customerId = asString(req.params.id);
+  const p = contactBody.partial().extend({ isActive: z.boolean().optional() }).strict().safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: p.error.issues[0]?.message ?? "Invalid request" });
+  const user = await prisma.user.findFirst({ where: { id: asString(req.params.userId), customerId, role: { key: ROLE_KEY.CUSTOMER } }, select: { id: true } });
+  if (!user) return res.status(404).json({ error: "Contact not found" });
+  if (p.data.customerLocationId && !(await ownLocation(customerId, p.data.customerLocationId, true))) return res.status(400).json({ error: "Choose one of this customer's active locations" });
+  const data: Prisma.UserUncheckedUpdateInput = {};
+  if (p.data.name !== undefined) data.name = p.data.name;
+  if (p.data.email !== undefined) {
+    const email = p.data.email.toLowerCase();
+    if (await prisma.user.findFirst({ where: { email: { equals: email, mode: "insensitive" }, id: { not: user.id } }, select: { id: true } })) return res.status(409).json({ error: "A user with that e-mail already exists" });
+    data.email = email;
+  }
+  if (p.data.phone !== undefined) {
+    const phone = p.data.phone ? normalisePhone(p.data.phone) : null;
+    if (phone && (await prisma.user.findFirst({ where: { phone, id: { not: user.id } }, select: { id: true } }))) return res.status(409).json({ error: "A user with that phone number already exists" });
+    data.phone = phone;
+  }
+  if (p.data.customerLocationId !== undefined) data.customerLocationId = p.data.customerLocationId; // null = customer admin (all locations)
+  if (p.data.isActive !== undefined) data.isActive = p.data.isActive;
+  res.json(await prisma.user.update({ where: { id: user.id }, data, select: contactSelect }));
+});

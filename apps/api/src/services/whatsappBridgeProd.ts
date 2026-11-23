@@ -20,8 +20,8 @@ import type { OtpUserLoader } from "./whatsappBridge";
 
 /** Sign-in code recipient, from the database row only. */
 export const loadOtpUser: OtpUserLoader = async (userId) => {
-  const u = await prisma.user.findUnique({ where: { id: userId }, select: { isActive: true, customerId: true, phone: true, role: { select: { key: true } } } });
-  return u ? { isActive: u.isActive, roleKey: u.role.key, customerId: u.customerId, phoneE164: normalisePhone(u.phone ?? "") } : null;
+  const u = await prisma.user.findUnique({ where: { id: userId }, select: { isActive: true, customerId: true, customerLocationId: true, customerLocation: { select: { active: true } }, phone: true, role: { select: { key: true } } } });
+  return u ? { isActive: u.isActive && (!u.customerLocationId || !!u.customerLocation?.active), roleKey: u.role.key, customerId: u.customerId, phoneE164: normalisePhone(u.phone ?? "") } : null;
 };
 export const prismaWaOtpStore: WaOtpStore = {
   countOtp: (since, phone) => prisma.whatsappOutbox.count({ where: { waGroup: "otp", createdAt: { gt: since }, ...(phone ? { recipientPhone: phone } : {}) } }),

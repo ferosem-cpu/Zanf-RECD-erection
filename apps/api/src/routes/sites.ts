@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { z } from "zod";
 import { getFile } from "../lib/portalStorage";
 import {
   createStageEventSchema,
@@ -577,6 +578,21 @@ sitesRouter.post(
     res.status(201).json(updated);
   },
 );
+
+/** Customer Portal: which of the customer's locations this site belongs to (null = unassigned: only customer admins see it). */
+sitesRouter.put("/:id/location", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId || req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  const parsed = z.object({ customerLocationId: z.string().max(40).nullable() }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "Invalid request" });
+  const site = await prisma.site.findUnique({ where: { id: asString(req.params.id) }, select: { id: true, order: { select: { customerId: true } } } });
+  if (!site) return res.status(404).json({ error: "Site not found" });
+  if (parsed.data.customerLocationId) {
+    const l = await prisma.customerLocation.findFirst({ where: { id: parsed.data.customerLocationId, customerId: site.order.customerId, active: true }, select: { id: true } });
+    if (!l) return res.status(400).json({ error: "Choose one of this customer's active locations" });
+  }
+  const u = await prisma.site.update({ where: { id: site.id }, data: { customerLocationId: parsed.data.customerLocationId }, select: { id: true, customerLocationId: true } });
+  res.json(u);
+});
 
 // Per-site cost rollup for the Vendor Invoices feature: approved vendor-invoice allocations
 // + the site's expense book + its purchase orders, so cost-vs-our-invoiced-revenue is visible

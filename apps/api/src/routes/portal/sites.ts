@@ -5,6 +5,7 @@ import { PRIORITY_EDIT_MAX_SEQ, normalisePhone } from "../../services/portalDoma
 
 export const siteInclude = {
   currentStage: true,
+  customerLocation: { select: { id: true, name: true } },
   order: { select: { id: true, orderNumber: true, portalSubmissionId: true, customerId: true } },
   contacts: { orderBy: { createdAt: "asc" } },
   documentRequirements: { include: { requirementType: true } },
@@ -41,6 +42,7 @@ export function siteView(s: SiteFull) {
     stage: { key: s.currentStage.key, label: s.currentStage.label, phase: cap(String(s.currentStage.phase)), seq: s.currentStage.sequenceOrder },
     updateStatus: last ? last.statusOption.label : null,
     lastUpdatedAt: iso(last?.createdAt ?? s.updatedAt),
+    location: s.customerLocation?.name ?? null,
     source: s.source === "portal" ? "Portal" : "Zan-F",
     version: s.updatedAt.toISOString(),
     contacts: s.contacts.map((c) => ({ id: c.id, name: c.name, phone: c.phone, email: c.email, designation: c.role })),

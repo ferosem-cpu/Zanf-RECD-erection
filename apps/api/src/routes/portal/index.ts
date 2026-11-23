@@ -8,6 +8,7 @@ import { createPortalAuth, createPortalUserLimiter } from "../../services/portal
 import {
   COMPLAINT_CATEGORY_MAP, URGENCY_MAP, canReopen, last10, looksLikeEmail, normaliseEmail, normalisePhone, submissionSchema,
 } from "../../services/portalDomain";
+import { attachmentWhere, complaintWhere, filterFrom, orderWhere, pendingWhere, resolveSubmissionLocation, scopeOf, siteWhere, type LocationFilter, type PortalScope } from "../../services/portalScope";
 import { waOtpBodySchema } from "../../services/portalWaOtp";
 import { createPortalSubmission, PortalValidationError } from "../../services/portalOrders";
 import { buildStaffOrderMail, mailStaffNewOrder, mailStaffPriorityChange } from "../../services/portalMail";
@@ -23,7 +24,8 @@ portalRouter.use(rawParser);
 portalRouter.use(createPortalAuth());
 portalRouter.use(createPortalUserLimiter());
 
-const ownSite = (siteId: string, customerId: string) => prisma.site.findFirst({ where: { id: siteId, order: { customerId } }, include: siteInclude });
+const ownSite = (siteId: string, scope: PortalScope) => prisma.site.findFirst({ where: { id: siteId, ...siteWhere(scope) }, include: siteInclude });
+const myScope = (req: import("express").Request) => scopeOf(req.portal!);
 const notFound = (res: import("express").Response) => res.status(404).json({ error: "Not found" });
 const bad = (res: import("express").Response, e: z.ZodError) => res.status(400).json({ error: "Invalid request", fields: e.issues.map((i) => ({ path: i.path.join("."), message: i.message })) });
 
@@ -32,7 +34,7 @@ portalRouter.post("/auth/lookup", h(async (req, res) => {
   const parsed = z.object({ identifier: z.string().min(3).max(200) }).safeParse(jsonBody(req));
   if (!parsed.success) return void res.status(400).json({ error: "Invalid request" });
   const ident = parsed.data.identifier.trim();
-  const select = { id: true, email: true, phone: true, isActive: true, customerId: true, role: { select: { key: true } } } as const;
+  const select = { id: true, email: true, phone: true, isActive: true, customerId: true, customerLocationId: true, customerLocation: { select: { active: true } }, role: { select: { key: true } } } as const;
   let candidates;
   if (looksLikeEmail(ident)) {
     candidates = await prisma.user.findMany({ where: { email: { equals: normaliseEmail(ident), mode: "insensitive" } }, select });
@@ -42,7 +44,7 @@ portalRouter.post("/auth/lookup", h(async (req, res) => {
     const maybe = await prisma.user.findMany({ where: { customerId: { not: null }, phone: { contains: tail.slice(-4) } }, select });
     candidates = maybe.filter((u) => last10(u.phone ?? "") === tail);
   }
-  const eligible = candidates.filter((u) => u.isActive && u.role.key === "customer" && u.customerId && u.email && looksLikeEmail(u.email));
+  const eligible = candidates.filter((u) => u.isActive && u.role.key === "customer" && u.customerId && u.email && looksLikeEmail(u.email) && (!u.customerLocationId || u.customerLocation?.active)); // a deactivated location locks its users out
   // Shared mobile numbers (or duplicate rows) never get a code: staff must fix the data.
   if (eligible.length !== 1 || candidates.filter((u) => u.isActive && u.role.key === "customer").length !== 1) return void res.json({ found: false });
   res.json({ found: true, userId: eligible[0].id, email: eligible[0].email });
@@ -71,7 +73,13 @@ portalRouter.post("/maintenance/purge", h(async (_req, res) => {
 // ---------- profile / reference data ----------
 portalRouter.get("/me", h(async (req, res) => {
   const c = await prisma.customer.findUnique({ where: { id: req.portal!.customerId }, select: { name: true } });
-  ok(res, { name: req.portal!.name, email: req.portal!.email, phone: req.portal!.phone, company: c?.name ?? "" });
+  ok(res, { name: req.portal!.name, email: req.portal!.email, phone: req.portal!.phone, company: c?.name ?? "", location: req.portal!.customerLocationId ? { id: req.portal!.customerLocationId, name: req.portal!.customerLocationName } : null, isAdmin: !req.portal!.customerLocationId });
+}));
+/** Locations the user may see: admins all of the customer's; a location user only their own. */
+portalRouter.get("/locations", h(async (req, res) => {
+  const sc = myScope(req);
+  const rows = await prisma.customerLocation.findMany({ where: { customerId: sc.customerId, ...(sc.locationId ? { id: sc.locationId } : {}) }, orderBy: { name: "asc" }, select: { id: true, name: true, active: true } });
+  ok(res, { locations: rows });
 }));
 portalRouter.get("/catalogue", h(async (_req, res) => {
   const rows = await prisma.product.findMany({ where: { capacityKva: { not: null } }, select: { model: true, capacityKva: true }, orderBy: { capacityKva: "asc" } });
@@ -89,10 +97,10 @@ portalRouter.get("/company-contact", h(async (_req, res) => {
 // ---------- orders (a portal "order" = a submission; staff-created orders are single-site orders) ----------
 type Group = { id: string; reference: string; orderNumbers: string[]; po: string | null; date: Date; source: string; sites: ReturnType<typeof siteView>[] };
 
-async function loadGroups(customerId: string, onlyId?: string): Promise<Group[]> {
-  let where: Record<string, unknown> = { customerId };
-  if (onlyId?.startsWith("s_")) where = { customerId, portalSubmissionId: onlyId.slice(2) };
-  else if (onlyId?.startsWith("o_")) where = { customerId, id: onlyId.slice(2) };
+async function loadGroups(scope: PortalScope, filter?: LocationFilter, onlyId?: string): Promise<Group[]> {
+  let where: Record<string, unknown> = orderWhere(scope, filter);
+  if (onlyId?.startsWith("s_")) where = { ...where, portalSubmissionId: onlyId.slice(2) };
+  else if (onlyId?.startsWith("o_")) where = { ...where, id: onlyId.slice(2) };
   else if (onlyId) return [];
   const orders = await prisma.order.findMany({
     where, orderBy: { createdAt: "desc" },
@@ -120,7 +128,7 @@ const groupSummary = (g: Group) => {
 portalRouter.get("/orders", h(async (req, res) => {
   const q = z.object({ search: z.string().max(100).optional(), status: z.enum(["open", "closed"]).optional(), page: z.coerce.number().int().min(1).default(1) }).safeParse(req.query);
   if (!q.success) return void bad(res, q.error);
-  let groups = await loadGroups(req.portal!.customerId);
+  let groups = await loadGroups(myScope(req), filterFrom(myScope(req), req.query.location));
   const s = q.data.search?.toLowerCase();
   if (s) groups = groups.filter((g) => g.reference.toLowerCase().includes(s) || g.orderNumbers.some((n) => n.toLowerCase().includes(s)) || (g.po ?? "").toLowerCase().includes(s) || g.sites.some((x) => x.name.toLowerCase().includes(s)));
   const sums = groups.map(groupSummary);
@@ -130,7 +138,7 @@ portalRouter.get("/orders", h(async (req, res) => {
 }));
 
 portalRouter.get("/orders/:id", h(async (req, res) => {
-  const [g] = await loadGroups(req.portal!.customerId, param(req.params.id));
+  const [g] = await loadGroups(myScope(req), undefined, param(req.params.id));
   if (!g) return void notFound(res);
   const countByKva: Record<string, number> = {};
   for (const s of g.sites) countByKva[String(s.ratingKva ?? "?")] = (countByKva[String(s.ratingKva ?? "?")] ?? 0) + 1;
@@ -140,7 +148,10 @@ portalRouter.get("/orders/:id", h(async (req, res) => {
 portalRouter.post("/orders", h(async (req, res) => {
   const parsed = submissionSchema.safeParse(jsonBody(req));
   if (!parsed.success) return void bad(res, parsed.error);
-  const who = { userId: req.portal!.userId, customerId: req.portal!.customerId };
+  const sc = myScope(req);
+  const loc = await resolveSubmissionLocation(prisma, sc, req.portal!.customerLocationName, parsed.data.customerLocationId);
+  if (!loc.ok) return void res.status(422).json({ error: "Choose one of your locations.", field: "customerLocationId" });
+  const who = { userId: req.portal!.userId, customerId: req.portal!.customerId, locationId: loc.locationId, locationName: loc.locationName };
   let result;
   try {
     result = await createPortalSubmission(prisma, who, parsed.data);
@@ -168,14 +179,14 @@ portalRouter.post("/orders", h(async (req, res) => {
 
 // ---------- sites ----------
 portalRouter.get("/sites/:id", h(async (req, res) => {
-  const s = await ownSite(param(req.params.id), req.portal!.customerId);
+  const s = await ownSite(param(req.params.id), myScope(req));
   if (!s) return void notFound(res);
   const photos = await prisma.portalAttachment.findMany({ where: { siteId: s.id, kind: "site_photo" }, select: { id: true, createdAt: true }, orderBy: { createdAt: "asc" } });
   ok(res, { site: siteView(s), photos: photos.map((p) => ({ id: p.id, uploadedAt: iso(p.createdAt) })) });
 }));
 
 portalRouter.get("/sites/:id/timeline", h(async (req, res) => {
-  const s = await ownSite(param(req.params.id), req.portal!.customerId);
+  const s = await ownSite(param(req.params.id), myScope(req));
   if (!s) return void notFound(res);
   const ev = await prisma.siteStageEvent.findMany({ where: { siteId: s.id }, orderBy: { createdAt: "desc" }, take: 100, include: { stageDefinition: true, statusOption: true } });
   ok(res, { events: ev.map((e) => ({ id: e.id, stage: e.stageDefinition.label, phase: cap(String(e.stageDefinition.phase)), status: e.statusOption.label, note: e.comment, at: iso(e.createdAt) })) });
@@ -184,7 +195,7 @@ portalRouter.get("/sites/:id/timeline", h(async (req, res) => {
 portalRouter.get("/updates", h(async (req, res) => {
   const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
   const ev = await prisma.siteStageEvent.findMany({
-    where: { site: { order: { customerId: req.portal!.customerId } } }, orderBy: { createdAt: "desc" }, take: limit,
+    where: { site: siteWhere(myScope(req), filterFrom(myScope(req), req.query.location)) }, orderBy: { createdAt: "desc" }, take: limit,
     include: { stageDefinition: true, statusOption: true, site: { select: { id: true, companyName: true, order: { select: { orderNumber: true } } } } },
   });
   ok(res, { updates: ev.map((e) => ({ id: e.id, siteId: e.site.id, siteName: e.site.companyName ?? e.site.order.orderNumber, orderNumber: e.site.order.orderNumber, stage: e.stageDefinition.label, status: e.statusOption.label, at: iso(e.createdAt) })) });
@@ -193,7 +204,7 @@ portalRouter.get("/updates", h(async (req, res) => {
 portalRouter.patch("/sites/:id/contacts", h(async (req, res) => {
   const p = contactsPatchSchema.safeParse(jsonBody(req));
   if (!p.success) return void bad(res, p.error);
-  const s = await ownSite(param(req.params.id), req.portal!.customerId);
+  const s = await ownSite(param(req.params.id), myScope(req));
   if (!s) return void notFound(res);
   if (s.updatedAt.toISOString() !== p.data.version) return void res.status(409).json({ error: "This site was changed. Reload and try again." });
   const { normalisePhone } = await import("../../services/portalDomain");
@@ -202,23 +213,23 @@ portalRouter.patch("/sites/:id/contacts", h(async (req, res) => {
     prisma.siteContact.createMany({ data: p.data.contacts.map((c) => ({ siteId: s.id, name: c.name, phone: normalisePhone(c.phone), email: c.email || null, role: c.designation || null })) }),
     prisma.site.update({ where: { id: s.id }, data: { updatedAt: new Date() } }),
   ]);
-  ok(res, { site: siteView((await ownSite(s.id, req.portal!.customerId))!) });
+  ok(res, { site: siteView((await ownSite(s.id, myScope(req)))!) });
 }));
 
 portalRouter.patch("/sites/:id/access-notes", h(async (req, res) => {
   const p = accessPatchSchema.safeParse(jsonBody(req));
   if (!p.success) return void bad(res, p.error);
-  const s = await ownSite(param(req.params.id), req.portal!.customerId);
+  const s = await ownSite(param(req.params.id), myScope(req));
   if (!s) return void notFound(res);
   if (s.updatedAt.toISOString() !== p.data.version) return void res.status(409).json({ error: "This site was changed. Reload and try again." });
   await prisma.site.update({ where: { id: s.id }, data: { accessNotes: p.data.accessNotes || null } });
-  ok(res, { site: siteView((await ownSite(s.id, req.portal!.customerId))!) });
+  ok(res, { site: siteView((await ownSite(s.id, myScope(req)))!) });
 }));
 
 portalRouter.patch("/sites/:id/priority", h(async (req, res) => {
   const p = priorityPatchSchema.safeParse(jsonBody(req));
   if (!p.success) return void bad(res, p.error);
-  const s = await ownSite(param(req.params.id), req.portal!.customerId);
+  const s = await ownSite(param(req.params.id), myScope(req));
   if (!s) return void notFound(res);
   if (s.updatedAt.toISOString() !== p.data.version) return void res.status(409).json({ error: "This site was changed. Reload and try again." });
   if (s.currentStage.sequenceOrder > 7) return void res.status(409).json({ error: "Installation has started. Contact Zan-F to change the priority." });
@@ -228,18 +239,18 @@ portalRouter.patch("/sites/:id/priority", h(async (req, res) => {
     const c = await prisma.customer.findUnique({ where: { id: req.portal!.customerId }, select: { name: true } });
     await mailStaffPriorityChange({ customer: c?.name ?? "Customer", site: s.companyName ?? s.order.orderNumber, priority: p.data.priority, reason: p.data.reason });
   }
-  ok(res, { site: siteView((await ownSite(s.id, req.portal!.customerId))!) });
+  ok(res, { site: siteView((await ownSite(s.id, myScope(req)))!) });
 }));
 
 // ---------- pending actions ----------
 portalRouter.get("/pending-actions", h(async (req, res) => {
-  const rows = await prisma.pendingAction.findMany({ where: { ownerType: "CUSTOMER", status: "open", site: { order: { customerId: req.portal!.customerId } } }, orderBy: { createdAt: "desc" }, take: 50, include: { site: { select: { id: true, companyName: true } } } });
+  const rows = await prisma.pendingAction.findMany({ where: { ownerType: "CUSTOMER", status: "open", ...pendingWhere(myScope(req), filterFrom(myScope(req), req.query.location)) }, orderBy: { createdAt: "desc" }, take: 50, include: { site: { select: { id: true, companyName: true } } } });
   ok(res, { actions: rows.map((a) => ({ id: a.id, siteId: a.site.id, siteName: a.site.companyName, description: a.description, dueDate: isoDate(a.dueDate), createdAt: iso(a.createdAt) })) });
 }));
 portalRouter.post("/pending-actions/:id/respond", h(async (req, res) => {
   const p = z.object({ response: z.string().trim().min(1).max(1000) }).safeParse(jsonBody(req));
   if (!p.success) return void bad(res, p.error);
-  const a = await prisma.pendingAction.findFirst({ where: { id: param(req.params.id), ownerType: "CUSTOMER", status: "open", site: { order: { customerId: req.portal!.customerId } } } });
+  const a = await prisma.pendingAction.findFirst({ where: { id: param(req.params.id), ownerType: "CUSTOMER", status: "open", ...pendingWhere(myScope(req)) } });
   if (!a) return void notFound(res);
   await prisma.pendingAction.update({ where: { id: a.id }, data: { status: "resolved", resolvedAt: new Date(), resolution: "Customer response (portal): " + p.data.response } });
   ok(res, { ok: true });
@@ -253,12 +264,12 @@ const complaintItem = (c: { id: string; ticketNumber: string; category: string; 
 const cInclude = { site: { select: { id: true, companyName: true } } } as const;
 
 portalRouter.get("/complaints", h(async (req, res) => {
-  const rows = await prisma.complaint.findMany({ where: { customerId: req.portal!.customerId }, orderBy: { createdAt: "desc" }, take: 100, include: cInclude });
+  const rows = await prisma.complaint.findMany({ where: complaintWhere(myScope(req), filterFrom(myScope(req), req.query.location)), orderBy: { createdAt: "desc" }, take: 100, include: cInclude });
   ok(res, { complaints: rows.map(complaintItem), openCount: rows.filter((r) => r.status !== COMPLAINT_STATUS.CLOSED && r.status !== COMPLAINT_STATUS.RESOLVED).length });
 }));
 
 portalRouter.get("/complaints/:id", h(async (req, res) => {
-  const c = await prisma.complaint.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId }, include: cInclude });
+  const c = await prisma.complaint.findFirst({ where: { id: param(req.params.id), ...complaintWhere(myScope(req)) }, include: cInclude });
   if (!c) return void notFound(res);
   const [comments, photos] = await Promise.all([
     prisma.complaintComment.findMany({ where: { complaintId: c.id, OR: [{ authorIsCustomer: true }, { visibleToCustomer: true }] }, orderBy: { createdAt: "asc" }, include: { attachments: { select: { id: true } } } }),
@@ -273,10 +284,10 @@ portalRouter.post("/complaints", h(async (req, res) => {
     description: z.string().trim().min(5).max(4000), photoIds: z.array(z.string().max(40)).max(5).default([]),
   }).safeParse(jsonBody(req));
   if (!p.success) return void bad(res, p.error);
-  const site = await ownSite(p.data.siteId, req.portal!.customerId);
+  const site = await ownSite(p.data.siteId, myScope(req));
   if (!site) return void notFound(res);
   if (p.data.photoIds.length) {
-    const n = await prisma.portalAttachment.count({ where: { id: { in: p.data.photoIds }, customerId: req.portal!.customerId, complaintId: null, kind: "complaint_photo" } });
+    const n = await prisma.portalAttachment.count({ where: { id: { in: p.data.photoIds }, customerId: req.portal!.customerId, uploadedByUserId: req.portal!.userId, complaintId: null, kind: "complaint_photo" } });
     if (n !== p.data.photoIds.length) return void res.status(422).json({ error: "A photo could not be found. Please upload it again." });
   }
   let complaint;
@@ -288,25 +299,25 @@ portalRouter.post("/complaints", h(async (req, res) => {
     }
   }
   if (!complaint) throw new Error("could not create complaint");
-  if (p.data.photoIds.length) await prisma.portalAttachment.updateMany({ where: { id: { in: p.data.photoIds }, customerId: req.portal!.customerId }, data: { complaintId: complaint.id, draftId: null } });
+  if (p.data.photoIds.length) await prisma.portalAttachment.updateMany({ where: { id: { in: p.data.photoIds }, customerId: req.portal!.customerId, uploadedByUserId: req.portal!.userId }, data: { complaintId: complaint.id, draftId: null } });
   ok(res, { complaint: { id: complaint.id, ticketNumber: complaint.ticketNumber } }, 201);
 }));
 
 portalRouter.post("/complaints/:id/comments", h(async (req, res) => {
   const p = z.object({ body: z.string().trim().min(1).max(4000), photoIds: z.array(z.string().max(40)).max(5).default([]) }).safeParse(jsonBody(req));
   if (!p.success) return void bad(res, p.error);
-  const c = await prisma.complaint.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId } });
+  const c = await prisma.complaint.findFirst({ where: { id: param(req.params.id), ...complaintWhere(myScope(req)) } });
   if (!c) return void notFound(res);
   if (c.status === COMPLAINT_STATUS.CLOSED) return void res.status(409).json({ error: "This complaint is closed. Reopen it to add a comment." });
   const m = await prisma.complaintComment.create({ data: { complaintId: c.id, authorUserId: req.portal!.userId, authorIsCustomer: true, body: p.data.body, visibleToCustomer: true } });
-  if (p.data.photoIds.length) await prisma.portalAttachment.updateMany({ where: { id: { in: p.data.photoIds }, customerId: req.portal!.customerId, kind: "complaint_photo", complaintId: null }, data: { complaintId: c.id, commentId: m.id, draftId: null } });
+  if (p.data.photoIds.length) await prisma.portalAttachment.updateMany({ where: { id: { in: p.data.photoIds }, customerId: req.portal!.customerId, uploadedByUserId: req.portal!.userId, kind: "complaint_photo", complaintId: null }, data: { complaintId: c.id, commentId: m.id, draftId: null } });
   ok(res, { comment: { id: m.id } }, 201);
 }));
 
 portalRouter.post("/complaints/:id/reopen", h(async (req, res) => {
   const p = z.object({ reason: z.string().trim().min(3).max(1000) }).safeParse(jsonBody(req));
   if (!p.success) return void bad(res, p.error);
-  const c = await prisma.complaint.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId } });
+  const c = await prisma.complaint.findFirst({ where: { id: param(req.params.id), ...complaintWhere(myScope(req)) } });
   if (!c) return void notFound(res);
   if (!canReopen(c.status, c.closedAt)) return void res.status(409).json({ error: "This complaint can no longer be reopened. Please raise a new one." });
   await prisma.$transaction([
@@ -334,12 +345,12 @@ async function storeUpload(req: import("express").Request, res: import("express"
   const customerId = req.portal!.customerId;
   let siteId: string | undefined, complaintId: string | undefined, orderId: string | undefined;
   if (q.data.siteId) {
-    const s = await prisma.site.findFirst({ where: { id: q.data.siteId, order: { customerId } }, select: { id: true, orderId: true } });
+    const s = await prisma.site.findFirst({ where: { id: q.data.siteId, ...siteWhere(myScope(req)) }, select: { id: true, orderId: true } });
     if (!s) return void notFound(res);
     siteId = s.id; orderId = s.orderId;
   }
   if (q.data.complaintId) {
-    const c = await prisma.complaint.findFirst({ where: { id: q.data.complaintId, customerId }, select: { id: true } });
+    const c = await prisma.complaint.findFirst({ where: { id: q.data.complaintId, ...complaintWhere(myScope(req)) }, select: { id: true } });
     if (!c) return void notFound(res);
     complaintId = c.id;
   }
@@ -394,7 +405,7 @@ portalRouter.post("/uploads", h(async (req, res) => {
 
 /** A customer may remove a file they uploaded to a draft before it is linked to an order. */
 portalRouter.delete("/uploads/:id", h(async (req, res) => {
-  const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId, draftId: { not: null }, orderId: null, siteId: null, complaintId: null }, select: { id: true, storagePath: true } });
+  const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId, uploadedByUserId: req.portal!.userId, draftId: { not: null }, orderId: null, siteId: null, complaintId: null }, select: { id: true, storagePath: true } });
   if (!a) return void notFound(res);
   await deleteFiles([a.storagePath]);
   await prisma.portalAttachment.delete({ where: { id: a.id } });
@@ -402,7 +413,7 @@ portalRouter.delete("/uploads/:id", h(async (req, res) => {
 }));
 
 portalRouter.get("/uploads/:id/content", h(async (req, res) => {
-  const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), customerId: req.portal!.customerId }, select: { storagePath: true, mimeType: true, fileName: true } });
+  const a = await prisma.portalAttachment.findFirst({ where: { id: param(req.params.id), ...attachmentWhere(myScope(req)) }, select: { storagePath: true, mimeType: true, fileName: true } });
   if (!a) return void notFound(res);
   res.setHeader("Content-Type", a.mimeType);
   res.setHeader("Content-Disposition", 'inline; filename="' + (a.fileName ?? "file") + '"');
@@ -411,7 +422,7 @@ portalRouter.get("/uploads/:id/content", h(async (req, res) => {
 }));
 
 portalRouter.post("/sites/:id/documents/:typeKey", h(async (req, res) => {
-  const site = await ownSite(param(req.params.id), req.portal!.customerId);
+  const site = await ownSite(param(req.params.id), myScope(req));
   if (!site) return void notFound(res);
   const type = await prisma.documentRequirementType.findUnique({ where: { key: param(req.params.typeKey) } });
   if (!type) return void notFound(res);
@@ -429,11 +440,11 @@ portalRouter.post("/sites/:id/documents/:typeKey", h(async (req, res) => {
 }));
 
 portalRouter.get("/sites/:id/documents/:typeKey/content", h(async (req, res) => {
-  const site = await ownSite(param(req.params.id), req.portal!.customerId);
+  const site = await ownSite(param(req.params.id), myScope(req));
   if (!site) return void notFound(res);
   const r = site.documentRequirements.find((x) => x.requirementType.key === param(req.params.typeKey));
   const id = r?.documentUrl?.startsWith("portal-attachment:") ? r.documentUrl.slice(18) : null;
-  const a = id ? await prisma.portalAttachment.findFirst({ where: { id, customerId: req.portal!.customerId }, select: { storagePath: true, mimeType: true, fileName: true } }) : null;
+  const a = id ? await prisma.portalAttachment.findFirst({ where: { id, ...attachmentWhere(myScope(req)) }, select: { storagePath: true, mimeType: true, fileName: true } }) : null;
   if (!a) return void notFound(res);
   res.setHeader("Content-Type", a.mimeType);
   res.setHeader("Content-Disposition", 'inline; filename="' + (a.fileName ?? "file") + '"');

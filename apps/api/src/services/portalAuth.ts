@@ -23,6 +23,9 @@ export interface PortalIdentity {
   name: string;
   email: string | null;
   phone: string | null;
+  /** null = customer admin (all locations). */
+  customerLocationId: string | null;
+  customerLocationName: string | null;
 }
 
 export function portalEnabled(): boolean {
@@ -84,9 +87,11 @@ export interface PortalAuthDeps {
 
 /** Loads the acting customer user. customerId always comes from the DB row. */
 export async function loadPortalIdentity(prisma: PrismaClient, userId: string): Promise<PortalIdentity | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { key: true } } } });
+  const user = await prisma.user.findUnique({ where: { id: userId }, include: { role: { select: { key: true } }, customerLocation: { select: { id: true, name: true, active: true, customerId: true } } } });
   if (!user || !user.isActive || user.role.key !== "customer" || !user.customerId) return null;
-  return { userId: user.id, customerId: user.customerId, name: user.name, email: user.email, phone: user.phone };
+  const l = user.customerLocation;
+  if (user.customerLocationId && (!l || !l.active || l.customerId !== user.customerId)) return null; // a deactivated (or foreign) location locks its users out
+  return { userId: user.id, customerId: user.customerId, name: user.name, email: user.email, phone: user.phone, customerLocationId: l?.id ?? null, customerLocationName: l?.name ?? null };
 }
 
 declare module "express-serve-static-core" {

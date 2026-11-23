@@ -54,7 +54,7 @@ async function loadExisting(prisma: PrismaClient, key: string, customerId: strin
 
 export async function createPortalSubmission(
   prisma: PrismaClient,
-  who: { userId: string; customerId: string },
+  who: { userId: string; customerId: string; /** Location stamped on every created site (null = customer admin, unassigned). */ locationId?: string | null; locationName?: string | null },
   input: SubmissionInput,
   opts: { now?: Date } = {},
 ): Promise<SubmissionResult> {
@@ -81,7 +81,7 @@ export async function createPortalSubmission(
     if (s.priorityDocumentId) refIds.add(s.priorityDocumentId);
   }
   if (refIds.size) {
-    const found = await prisma.portalAttachment.findMany({ where: { id: { in: [...refIds] }, customerId: who.customerId, orderId: null }, select: { id: true } });
+    const found = await prisma.portalAttachment.findMany({ where: { id: { in: [...refIds] }, customerId: who.customerId, uploadedByUserId: who.userId, orderId: null }, select: { id: true } });
     if (found.length !== refIds.size) throw new PortalValidationError("An uploaded file could not be found. Please upload it again.");
   }
 
@@ -122,6 +122,7 @@ export async function createPortalSubmission(
             const formalities = docTypes.filter((d) => s.formalities[d.key]).map((d) => d.label);
             const noteBits = ["Submitted via customer portal (" + reference + ")."];
             if (unsure) noteBits.push("Rating stated by customer: " + dg.ratingKva + " kVA" + (dg.ratingUnsure ? " (not sure)" : "") + "; nearest RECD " + match.product.model + " used - staff to confirm.");
+            if (who.locationName) noteBits.push("Location: " + who.locationName + ".");
             if (input.notes) noteBits.push(input.notes);
             const accessNotes = [s.accessNotes, s.formalityOther ? "Other formalities: " + s.formalityOther : ""].filter(Boolean).join("\n") || undefined;
 
@@ -136,7 +137,7 @@ export async function createPortalSubmission(
                     dgCapacityKva: dg.ratingKva, dgModel: dg.dgModel, dgLocation: dg.dgLocation, accessNotes,
                     addressParts: { line: s.line, area: s.area ?? null, city: s.city, district: s.district ?? null, state: s.state, pincode: s.pincode },
                     requestedStartDate: s.startBy ? new Date(s.startBy) : undefined, requestedCompletionDate: s.completeBy ? new Date(s.completeBy) : undefined,
-                    installPriority: s.priority, priorityReason: s.priorityReason, source: "portal",
+                    installPriority: s.priority, priorityReason: s.priorityReason, source: "portal", ...(who.locationId ? { customerLocationId: who.locationId } : {}),
                     contacts: { create: s.contacts.map((c) => ({ name: c.name, phone: normalisePhone(c.phone), email: c.email || null, role: c.designation ?? null })) },
                     documentRequirements: {
                       create: docTypes.map((d) => ({

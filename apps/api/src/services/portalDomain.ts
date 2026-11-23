@@ -115,6 +115,8 @@ export const submissionSchema = z.object({
   customerPoDate: dateStr.optional(),
   notes: optText(2000),
   poAttachmentId: z.string().max(40).optional(),
+  /** Customer admins may choose one of the customer's active locations; for location users the API ignores this and uses their own. */
+  customerLocationId: z.string().max(40).optional(),
   sites: z.array(siteInputSchema).min(1).max(MAX_SITE_ROWS),
 }).superRefine((s, ctx) => {
   if (expandedSiteCount(s.sites) > MAX_DGS_PER_SUBMISSION) ctx.addIssue({ code: "custom", path: ["sites"], message: "Too many DG sets in one order (max " + MAX_DGS_PER_SUBMISSION + "). Please split it into two orders." });
