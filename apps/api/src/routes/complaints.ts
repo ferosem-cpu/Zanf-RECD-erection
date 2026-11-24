@@ -7,6 +7,7 @@ import { send as sendNotification } from "../services/notifications/notification
 import { asString } from "../lib/params";
 import { complaintListWhere, COMPLAINT_LIST_PERMISSIONS } from "../lib/complaintScope";
 import { z } from "zod";
+import { deleteOpenComplaint } from "../services/complaintDelete";
 import { notifyPortalCustomers } from "../services/portalNotify";
 
 export const complaintsRouter = Router();
@@ -184,6 +185,14 @@ complaintsRouter.patch(
 );
 
 /** Customer Portal thread, staff side. Replies are hidden from the customer unless "visibleToCustomer" is ticked. */
+/** Delete a still-open complaint with no comments/files (e.g. a test ticket). Manage-complaints only; engineers cannot. */
+complaintsRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_COMPLAINTS), async (req: AuthenticatedRequest, res) => {
+  const id = asString(req.params.id);
+  const result = await prisma.$transaction((tx) => deleteOpenComplaint(tx, id));
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+  res.status(204).end();
+});
+
 complaintsRouter.get("/:id/comments", requirePermission(...COMPLAINT_LIST_PERMISSIONS), async (req: AuthenticatedRequest, res) => {
   if (req.auth!.customerId) return res.status(403).json({ error: "Forbidden" });
   const where = { id: asString(req.params.id), ...complaintListWhere(req.auth!) };

@@ -58,6 +58,23 @@ export default function ComplaintsPage() {
   const [form, setForm] = useState({ status: "", rootCause: "", resolutionNotes: "", assignedToId: "" });
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function removeComplaint(c: ComplaintRow) {
+    if (!window.confirm(`Delete complaint ${c.ticketNumber}?\n\nOnly open complaints with no comments or files can be deleted. This cannot be undone.`)) return;
+    setDeletingId(c.id);
+    setDeleteError(null);
+    try {
+      await api(`/complaints/${c.id}`, { method: "DELETE" });
+      load();
+    } catch (err) {
+      setDeleteError(`Could not delete ${c.ticketNumber}: ${err instanceof Error ? err.message : "Failed to delete complaint"}`);
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   function load() {
     api<ComplaintRow[]>("/complaints").then(setComplaints).catch(() => {});
@@ -127,6 +144,7 @@ export default function ComplaintsPage() {
         </section>
       )}
       {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
+      {deleteError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700 print:hidden">{deleteError}</div>}
 
       <DataTable
         storageKey="complaints"
@@ -148,12 +166,23 @@ export default function ComplaintsPage() {
             alwaysVisible: true,
             filterable: false,
             render: (c) => (
-              <button
-                onClick={() => openEditor(c)}
-                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
-              >
-                {canManage ? "Manage" : "Update"}
-              </button>
+              <span className="inline-flex gap-2">
+                <button
+                  onClick={() => openEditor(c)}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50"
+                >
+                  {canManage ? "Manage" : "Update"}
+                </button>
+                {canManage && c.status === COMPLAINT_STATUS.OPEN && (
+                  <button
+                    onClick={() => void removeComplaint(c)}
+                    disabled={deletingId === c.id}
+                    className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {deletingId === c.id ? "Deleting…" : "Delete"}
+                  </button>
+                )}
+              </span>
             ),
           },
         ]}
@@ -183,6 +212,15 @@ export default function ComplaintsPage() {
                   >
                     {canManage ? "Manage" : "Update"}
                   </button>
+                  {canManage && c.status === COMPLAINT_STATUS.OPEN && (
+                    <button
+                      onClick={() => void removeComplaint(c)}
+                      disabled={deletingId === c.id}
+                      className="mt-2 w-full rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {deletingId === c.id ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
                 </div>
               ))
             )}
