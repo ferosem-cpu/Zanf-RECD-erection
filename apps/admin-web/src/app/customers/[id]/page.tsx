@@ -52,7 +52,7 @@ export default function CustomerDetailPage() {
 
   async function remove() {
     if (!customer) return;
-    if (!window.confirm(`Delete customer "${customer.name}"? This cannot be undone.`)) return;
+    if (!window.confirm(`Delete customer "${customer.name}"?\n\nIts portal logins and locations are removed too. This cannot be undone. Customers with orders, quotations, invoices, payments or complaints cannot be deleted.`)) return;
     setDeleting(true);
     setError(null);
     try {
@@ -104,7 +104,7 @@ export default function CustomerDetailPage() {
         )}
       </div>
 
-      {error && <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
+      {error && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</div>}
 
       <section className="card p-5 space-y-2">
         <h2 className="text-sm font-semibold">Customer details</h2>

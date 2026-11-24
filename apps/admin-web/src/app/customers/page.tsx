@@ -141,14 +141,15 @@ function CustomersPageInner() {
   }
 
   async function remove(c: Customer) {
-    if (!confirm(`Delete customer "${c.name}"? This cannot be undone.`)) return;
+    if (!confirm(`Delete customer "${c.name}"?\n\nIts portal logins and locations are removed too. This cannot be undone. Customers with orders, quotations, invoices, payments or complaints cannot be deleted.`)) return;
     setDeletingId(c.id);
     setDeleteError(null);
     try {
       await api(`/customers/${c.id}`, { method: "DELETE" });
       load();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete customer");
+      setDeleteError(`Could not delete "${c.name}": ${err instanceof Error ? err.message : "Failed to delete customer"}`);
+      if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
     } finally {
       setDeletingId(null);
     }
@@ -176,7 +177,7 @@ function CustomersPageInner() {
       </div>
 
       {error && <p className="text-sm text-red-600 print:hidden">{error}</p>}
-      {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
+      {deleteError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700 print:hidden">{deleteError}</div>}
 
       <DataTable
         storageKey="customers"

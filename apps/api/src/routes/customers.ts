@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma";
 import { authenticate, requirePermission, type AuthenticatedRequest } from "../middleware/auth";
 import { asString } from "../lib/params";
 import { z } from "zod";
+import { countCustomerBlockers, customerBlockerMessage, nonZeroBlockers, deleteCustomerWithPortalData, CUSTOMER_FK_MESSAGE } from "../services/customerDelete";
 import { looksLikeEmail, normalisePhone } from "../services/portalDomain";
 
 export const customersRouter = Router();
@@ -138,28 +139,20 @@ customersRouter.put("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), asy
 
 customersRouter.delete("/:id", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
   const id = asString(req.params.id);
-  const existing = await prisma.customer.findUnique({
-    where: { id },
-    include: { contacts: { select: { id: true } } },
-  });
+  const existing = await prisma.customer.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return res.status(404).json({ error: "Customer not found" });
 
-  const [orders, quotations, invoices, complaints] = await Promise.all([
-    prisma.order.count({ where: { customerId: id } }),
-    prisma.quotation.count({ where: { customerId: id } }),
-    prisma.invoice.count({ where: { customerId: id } }),
-    prisma.complaint.count({ where: { customerId: id } }),
-  ]);
-  if (orders > 0 || quotations > 0 || invoices > 0 || complaints > 0) {
-    return res.status(400).json({
-      error: "Cannot delete a customer with existing orders, quotations, invoices, or complaints",
-    });
-  }
+  const counts = await countCustomerBlockers(prisma, id);
+  const message = customerBlockerMessage(counts);
+  if (message) return res.status(409).json({ error: message, blockers: nonZeroBlockers(counts) });
 
-  await prisma.$transaction([
-    prisma.user.deleteMany({ where: { id: { in: existing.contacts.map((c) => c.id) } } }),
-    prisma.customer.delete({ where: { id } }),
-  ]);
+  try {
+    await prisma.$transaction((tx) => deleteCustomerWithPortalData(tx, id), { timeout: 30_000 });
+  } catch (e) {
+    // A portal contact is referenced by a restricting FK we did not pre-count: block, do not 500.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2003") return res.status(409).json({ error: CUSTOMER_FK_MESSAGE });
+    throw e;
+  }
   res.status(204).end();
 });
 
