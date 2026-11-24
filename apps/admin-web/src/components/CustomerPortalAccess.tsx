@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
-import { accessLabel, locationOptions, type LocationRow } from "@/lib/customerLocations";
+import { accessLabel, locationOptions, normaliseMobile, addUserHint, type LocationRow } from "@/lib/customerLocations";
 
 interface Contact { id: string; name: string; email: string | null; phone: string | null; isActive: boolean; customerLocationId: string | null }
 
@@ -13,8 +13,10 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newLoc, setNewLoc] = useState("");
+  const [mob, setMob] = useState<Record<string, string>>({});
   const [nu, setNu] = useState({ name: "", email: "", phone: "", customerLocationId: "" });
 
+  const userHint = addUserHint(nu);
   const load = useCallback(async () => {
     try {
       const [l, c] = await Promise.all([api<LocationRow[]>("/customers/" + customerId + "/locations"), api<Contact[]>("/customers/" + customerId + "/contacts")]);
@@ -59,6 +61,7 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); if (!newLoc.trim()) return; void run(async () => { await api("/customers/" + customerId + "/locations", { method: "POST", body: JSON.stringify({ name: newLoc.trim() }) }); setNewLoc(""); }); }}>
             <input className="input flex-1" placeholder="New location name, e.g. Bangalore" value={newLoc} maxLength={80} onChange={(e) => setNewLoc(e.target.value)} aria-label="New location name" />
             <button className="btn-primary" disabled={busy || !newLoc.trim()}>Add location</button>
+            {!newLoc.trim() && <span className="self-center text-xs text-gray-500">Type a location name to enable this button.</span>}
           </form>)}
       </div>
 
@@ -70,7 +73,7 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
             <li key={c.id} className="space-y-1 px-3 py-2 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <span className={"font-medium " + (c.isActive ? "" : "text-gray-400 line-through")}>{c.name}</span>
-                <span className="text-xs text-gray-500">{c.email ?? "no e-mail"}{c.phone ? " · " + c.phone : ""}</span>
+                <span className="text-xs text-gray-500">{c.email ?? "no e-mail"} · {c.phone ? c.phone : "no mobile"}</span>
                 {!c.isActive && <span className="badge">Inactive</span>}
                 <span className="ml-auto text-xs text-gray-500">{accessLabel(locations, c.customerLocationId)}</span>
               </div>
@@ -82,24 +85,39 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
                     <option value="">None - customer admin (all locations)</option>
                     {locationOptions(locations, c.customerLocationId).map((l) => <option key={l.id} value={l.id}>{l.name}{l.active ? "" : " (deactivated)"}</option>)}
                   </select>
+                  <label className="text-xs text-gray-500" htmlFor={"mob-" + c.id}>Mobile (WhatsApp)</label>
+                  <input id={"mob-" + c.id} className="input !py-1 text-xs w-36" placeholder="10-digit mobile" value={mob[c.id] ?? c.phone ?? ""} disabled={busy}
+                    onChange={(e) => setMob({ ...mob, [c.id]: e.target.value })} />
+                  <button type="button" className="text-xs font-medium text-[var(--theme-accent)] disabled:opacity-50" disabled={busy || (mob[c.id] ?? c.phone ?? "") === (c.phone ?? "")}
+                    onClick={() => { const n = normaliseMobile(mob[c.id] ?? ""); if (n === null) { setErr("Enter a valid 10-digit Indian mobile number (starts with 6-9), or leave it blank to remove it."); return; }
+                      void run(async () => { await put("/customers/" + customerId + "/contacts/" + c.id, { phone: n }); setMob((m) => { const x = { ...m }; delete x[c.id]; return x; }); }); }}>Save mobile</button>
                   <button type="button" className="text-xs font-medium text-gray-600 disabled:opacity-50" disabled={busy}
                     onClick={() => void run(() => put("/customers/" + customerId + "/contacts/" + c.id, { isActive: !c.isActive }))}>{c.isActive ? "Deactivate user" : "Reactivate user"}</button>
                 </div>)}
             </li>))}
         </ul>
         {canManage && (
-          <form className="grid gap-2 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); void run(async () => {
-            await api("/customers/" + customerId + "/contacts", { method: "POST", body: JSON.stringify({ name: nu.name.trim(), email: nu.email.trim(), ...(nu.phone.trim() ? { phone: nu.phone.trim() } : {}), customerLocationId: nu.customerLocationId || null }) });
+          <form className="grid gap-2 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); const m = normaliseMobile(nu.phone); if (m === null) { setErr("Enter a valid 10-digit Indian mobile number (starts with 6-9), or leave it blank."); return; } void run(async () => {
+            await api("/customers/" + customerId + "/contacts", { method: "POST", body: JSON.stringify({ name: nu.name.trim(), email: nu.email.trim(), ...(m ? { phone: m } : {}), customerLocationId: nu.customerLocationId || null }) });
             setNu({ name: "", email: "", phone: "", customerLocationId: "" });
           }); }}>
-            <input className="input" placeholder="Name" value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} aria-label="New portal user name" required />
-            <input className="input" type="email" placeholder="E-mail (used to sign in)" value={nu.email} onChange={(e) => setNu({ ...nu, email: e.target.value })} aria-label="New portal user e-mail" required />
-            <input className="input" placeholder="Mobile (for WhatsApp codes)" value={nu.phone} onChange={(e) => setNu({ ...nu, phone: e.target.value })} aria-label="New portal user mobile" />
-            <select className="input" value={nu.customerLocationId} onChange={(e) => setNu({ ...nu, customerLocationId: e.target.value })} aria-label="New portal user location">
-              <option value="">No location - customer admin</option>
-              {locationOptions(locations).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-            <button className="btn-primary sm:col-span-2" disabled={busy || !nu.name.trim() || !nu.email.trim()}>Add portal user</button>
+            <label className="block text-xs text-gray-600">Name
+              <input className="input mt-1" placeholder="Full name" value={nu.name} onChange={(e) => setNu({ ...nu, name: e.target.value })} required />
+            </label>
+            <label className="block text-xs text-gray-600">E-mail (used to sign in)
+              <input className="input mt-1" type="email" placeholder="name@company.com" value={nu.email} onChange={(e) => setNu({ ...nu, email: e.target.value })} required />
+            </label>
+            <label className="block text-xs text-gray-600">Mobile (WhatsApp) - optional
+              <input className="input mt-1" inputMode="tel" placeholder="10-digit mobile, e.g. 98xxxxxxxx" value={nu.phone} onChange={(e) => setNu({ ...nu, phone: e.target.value })} />
+            </label>
+            <label className="block text-xs text-gray-600">Location
+              <select className="input mt-1" value={nu.customerLocationId} onChange={(e) => setNu({ ...nu, customerLocationId: e.target.value })}>
+                <option value="">No location - customer admin</option>
+                {locationOptions(locations).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </label>
+            <button className="btn-primary sm:col-span-2" disabled={busy || !!userHint}>Add portal user</button>
+            {userHint && <p className="text-xs text-gray-500 sm:col-span-2">{userHint}</p>}
           </form>)}
       </div>
     </section>

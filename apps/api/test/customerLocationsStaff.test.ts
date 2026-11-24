@@ -113,3 +113,15 @@ test("site location: set, clear, and only to an active location of the site's ow
   assert.equal((await req("mgr", "PUT", "/sites/s1/location", { customerLocationId: "L_blr", extra: 1 })).status, 400);
   assert.equal((await req("mgr", "PUT", "/sites/s1/location", {})).status, 400);
 });
+
+test("contacts: mobile can be set (normalised), changed, cleared; duplicate -> 409; invalid -> 400", async () => {
+  const mk = await req("mgr", "POST", "/customers/C1/contacts", { name: "Mob", email: "mob@deccan.test" });
+  assert.equal(mk.status, 201); assert.equal(mk.body.phone, null);
+  const id = mk.body.id;
+  assert.equal((await req("mgr", "PUT", "/customers/C1/contacts/" + id, { phone: "+91 91234-56789" })).body.phone, "+919123456789");
+  const other = await req("mgr", "POST", "/customers/C1/contacts", { name: "Oth", email: "oth@deccan.test", phone: "9988776655" });
+  assert.equal(other.status, 201);
+  assert.equal((await req("mgr", "PUT", "/customers/C1/contacts/" + id, { phone: "99887 76655" })).status, 409);
+  assert.equal((await req("mgr", "PUT", "/customers/C1/contacts/" + id, { phone: "123" })).status, 400);
+  assert.equal((await req("mgr", "PUT", "/customers/C1/contacts/" + id, { phone: "" })).body.phone, null);
+});
