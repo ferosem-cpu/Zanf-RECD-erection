@@ -120,9 +120,13 @@ async function loadGroups(scope: PortalScope, filter?: LocationFilter, onlyId?: 
   }
   return [...map.values()];
 }
+const cityOf = (s: Group["sites"][number]): string | null => { const c = (s.addressParts as { city?: unknown } | null)?.city; return typeof c === "string" && c.trim() ? c.trim() : null; };
+/** Names and places of the order's sites for the order cards. Group.sites only ever holds sites the caller's scope allows (orders are loaded through orderWhere), so another location's sites can never appear here. */
+export const SITE_PREVIEW_MAX = 3;
+const sitePreview = (g: Group) => g.sites.slice(0, SITE_PREVIEW_MAX).map((s) => ({ id: s.id, name: s.name, address: s.address ?? null, city: cityOf(s), location: s.location ?? null }));
 const groupSummary = (g: Group) => {
   const done = g.sites.filter((s) => s.stage.seq >= 11).length;
-  return { id: g.id, reference: g.reference, orderNumbers: g.orderNumbers, customerPoNumber: g.po, orderDate: iso(g.date), source: g.source, siteCount: g.sites.length, commissionedCount: done, open: done < g.sites.length };
+  return { sitePreview: sitePreview(g), id: g.id, reference: g.reference, orderNumbers: g.orderNumbers, customerPoNumber: g.po, orderDate: iso(g.date), source: g.source, siteCount: g.sites.length, commissionedCount: done, open: done < g.sites.length };
 };
 
 portalRouter.get("/orders", h(async (req, res) => {
@@ -130,7 +134,7 @@ portalRouter.get("/orders", h(async (req, res) => {
   if (!q.success) return void bad(res, q.error);
   let groups = await loadGroups(myScope(req), filterFrom(myScope(req), req.query.location));
   const s = q.data.search?.toLowerCase();
-  if (s) groups = groups.filter((g) => g.reference.toLowerCase().includes(s) || g.orderNumbers.some((n) => n.toLowerCase().includes(s)) || (g.po ?? "").toLowerCase().includes(s) || g.sites.some((x) => x.name.toLowerCase().includes(s)));
+  if (s) groups = groups.filter((g) => g.reference.toLowerCase().includes(s) || g.orderNumbers.some((n) => n.toLowerCase().includes(s)) || (g.po ?? "").toLowerCase().includes(s) || g.sites.some((x) => [x.name, x.address, cityOf(x), x.location].some((v) => (v ?? "").toLowerCase().includes(s))));
   const sums = groups.map(groupSummary);
   const list = q.data.status ? sums.filter((g) => (q.data.status === "open") === g.open) : sums;
   const size = 20;

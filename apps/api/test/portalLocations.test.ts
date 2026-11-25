@@ -217,3 +217,28 @@ test("sign-in lookup: a user whose location is deactivated gets no code; legacy 
     assert.equal(await look("uLegacy@example.test"), true);
   } finally { (prisma as any).user.findMany = real; }
 });
+
+test("order cards: multi-site submission - a location user gets only their own location's sites (names, addresses), admin gets all; search matches address/city/location", async () => {
+  const before = { sites: DB.sites.length, orders: DB.orders.length };
+  try {
+    mkSite("m1", "C1", "L_blr", { companyName: "BPCL", address: "Plot 4, MIDC, Chincholi, Gulbarga - 585307", addressParts: { city: "Gulbarga" } });
+    mkSite("m2", "C1", "L_mng", { companyName: "VRL Secret", address: "Mangalore Port Road", addressParts: { city: "Mangalore" } });
+    mkSite("m3", "C1", "L_blr", { companyName: "Third", address: "Hubli" }); mkSite("m4", "C1", "L_blr", { companyName: "Fourth" }); mkSite("m5", "C1", "L_blr", { companyName: "Fifth" });
+    for (const id of ["m1", "m2", "m3", "m4", "m5"]) { const o = DB.orders.find((x) => x.id === "o_" + id)!; o.portalSubmissionId = "sub_m"; o.portalSubmission = { id: "sub_m", reference: "PS-M" }; }
+    const blr = (await get("uBlr", "/orders?search=PS-M")).body.orders[0];
+    assert.equal(blr.siteCount, 4); assert.equal(blr.sitePreview.length, 3);
+    assert.deepEqual(blr.sitePreview[0], { id: "m1", name: "BPCL", address: "Plot 4, MIDC, Chincholi, Gulbarga - 585307", city: "Gulbarga", location: "Bangalore" });
+    assert.ok(!JSON.stringify(blr).includes("VRL Secret") && !JSON.stringify(blr).includes("Mangalore"), "other location's site must not leak");
+    const mng = (await get("uMng", "/orders?search=PS-M")).body.orders[0];
+    assert.equal(mng.siteCount, 1); assert.deepEqual(mng.sitePreview.map((s: any) => s.name), ["VRL Secret"]);
+    assert.ok(!JSON.stringify(mng).includes("BPCL"));
+    const adm = (await get("uAdmin", "/orders?search=PS-M")).body.orders[0];
+    assert.equal(adm.siteCount, 5); assert.equal(adm.sitePreview.length, 3);
+    const names = async (u: string, q: string) => (await get(u, "/orders?search=" + q)).body.orders.map((o: any) => o.reference);
+    assert.deepEqual(await names("uBlr", "gul"), ["PS-M"]); assert.deepEqual(await names("uBlr", "chincholi"), ["PS-M"]);
+    assert.deepEqual(await names("uBlr", "mangalore"), [], "a Bangalore user cannot find another location's address");
+    assert.ok((await names("uMng", "mangalore")).includes("PS-M"));
+    assert.ok((await names("uAdmin", "bangalore")).includes("PS-M"), "location name is searchable");
+    assert.equal((await get("uBlr", "/orders/o_s_sub_m")).body.sites?.some((s: any) => s.name === "VRL Secret") ?? false, false);
+  } finally { DB.sites.length = before.sites; DB.orders.length = before.orders; }
+});
