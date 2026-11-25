@@ -36,3 +36,18 @@ export function addUserHint(f: { name: string; email: string; phone: string }): 
   if (normaliseMobile(f.phone) === null) return "Mobile must be a 10-digit Indian number (starts with 6-9), or leave it blank.";
   return "";
 }
+
+export interface CustomerSiteRow { id: string; name: string; orderNumber: string | null; stage: string | null; customerLocationId: string | null }
+
+/** Sites to list in the bulk-assign box: unassigned ones, plus assigned ones when the user ticks "show all". Oldest list order is kept. */
+export function assignableSites(sites: CustomerSiteRow[], showAll: boolean, search = ""): CustomerSiteRow[] {
+  const s = search.trim().toLowerCase();
+  return sites.filter((x) => (showAll || !x.customerLocationId) && (!s || x.name.toLowerCase().includes(s) || (x.orderNumber ?? "").toLowerCase().includes(s)));
+}
+
+/** Why "Assign" is disabled ("" = ready). */
+export function assignHint(locationId: string, selected: number): string {
+  if (!locationId) return "Choose a location to enable Assign.";
+  if (selected === 0) return "Tick at least one site to enable Assign.";
+  return "";
+}

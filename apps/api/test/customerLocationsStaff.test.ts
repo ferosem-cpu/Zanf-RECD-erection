@@ -125,3 +125,28 @@ test("contacts: mobile can be set (normalised), changed, cleared; duplicate -> 4
   assert.equal((await req("mgr", "PUT", "/customers/C1/contacts/" + id, { phone: "123" })).status, 400);
   assert.equal((await req("mgr", "PUT", "/customers/C1/contacts/" + id, { phone: "" })).body.phone, null);
 });
+
+test("bulk assign: lists a customer's sites and moves only its own sites to an active own location", async () => {
+  mkSite("b1", "C1", null); mkSite("b2", "C1", null); mkSite("f1", "C2", null);
+  const list = await req("mgr", "GET", "/customers/C1/sites");
+  assert.equal(list.status, 200);
+  const ids = list.body.map((s: any) => s.id);
+  assert.ok(ids.includes("b1") && ids.includes("b2") && !ids.includes("f1"));
+  assert.equal(list.body.find((s: any) => s.id === "b1").stage, "Order received");
+  assert.equal((await req("mgr", "GET", "/customers/NOPE/sites")).status, 404);
+  const ok = await req("mgr", "PUT", "/customers/C1/locations/L_blr/sites", { siteIds: ["b1", "f1", "ghost"] });
+  assert.equal(ok.status, 200); assert.equal(ok.body.assigned, 1);
+  assert.equal(DB.sites.find((s) => s.id === "b1")!.customerLocationId, "L_blr");
+  assert.equal(DB.sites.find((s) => s.id === "f1")!.customerLocationId, null, "foreign site untouched");
+  assert.equal(DB.sites.find((s) => s.id === "b2")!.customerLocationId, null);
+  for (const loc of ["L_old", "L_x", "nope"]) assert.equal((await req("mgr", "PUT", "/customers/C1/locations/" + loc + "/sites", { siteIds: ["b2"] })).status, 400, loc);
+  assert.equal(DB.sites.find((s) => s.id === "b2")!.customerLocationId, null);
+  for (const bad of [{}, { siteIds: [] }, { siteIds: ["b2"], x: 1 }, { siteIds: Array(201).fill("a") }]) assert.equal((await req("mgr", "PUT", "/customers/C1/locations/L_blr/sites", bad)).status, 400);
+});
+
+test("bulk assign: permission and customer-user guards", async () => {
+  assert.equal((await req(null, "GET", "/customers/C1/sites")).status, 401);
+  assert.equal((await req("viewer", "GET", "/customers/C1/sites")).status, 403);
+  assert.equal((await req("viewer", "PUT", "/customers/C1/locations/L_blr/sites", { siteIds: ["s1"] })).status, 403);
+  assert.equal(DB.sites.find((s) => s.id === "s1")!.customerLocationId, null);
+});

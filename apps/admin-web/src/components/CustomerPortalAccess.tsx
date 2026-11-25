@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
-import { accessLabel, locationOptions, normaliseMobile, addUserHint, type LocationRow } from "@/lib/customerLocations";
+import { accessLabel, locationOptions, normaliseMobile, addUserHint, assignableSites, assignHint, type LocationRow, type CustomerSiteRow } from "@/lib/customerLocations";
 
 interface Contact { id: string; name: string; email: string | null; phone: string | null; isActive: boolean; customerLocationId: string | null }
 
@@ -14,13 +14,21 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
   const [busy, setBusy] = useState(false);
   const [newLoc, setNewLoc] = useState("");
   const [mob, setMob] = useState<Record<string, string>>({});
+  const [sites, setSites] = useState<CustomerSiteRow[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [target, setTarget] = useState("");
+  const [showAll, setShowAll] = useState(false);
+  const [siteSearch, setSiteSearch] = useState("");
+  const [note, setNote] = useState<string | null>(null);
   const [nu, setNu] = useState({ name: "", email: "", phone: "", customerLocationId: "" });
 
   const userHint = addUserHint(nu);
+  const visibleSites = assignableSites(sites, showAll, siteSearch);
+  const assignMsg = assignHint(target, picked.length);
   const load = useCallback(async () => {
     try {
-      const [l, c] = await Promise.all([api<LocationRow[]>("/customers/" + customerId + "/locations"), api<Contact[]>("/customers/" + customerId + "/contacts")]);
-      setLocations(l); setContacts(c);
+      const [l, c, s] = await Promise.all([api<LocationRow[]>("/customers/" + customerId + "/locations"), api<Contact[]>("/customers/" + customerId + "/contacts"), api<CustomerSiteRow[]>("/customers/" + customerId + "/sites")]);
+      setLocations(l); setContacts(c); setSites(s);
     } catch (e) { setErr(e instanceof Error ? e.message : "Could not load portal access"); }
   }, [customerId]);
   useEffect(() => { void load(); }, [load]);
@@ -63,6 +71,38 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
             <button className="btn-primary" disabled={busy || !newLoc.trim()}>Add location</button>
             {!newLoc.trim() && <span className="self-center text-xs text-gray-500">Type a location name to enable this button.</span>}
           </form>)}
+      </div>
+
+      <div className="space-y-2" data-testid="assign-sites">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assign sites to a location</h3>
+        <p className="text-xs text-gray-500">Existing sites with no location are visible to customer admins only. Tick the sites that belong to a location, pick it and press Assign.</p>
+        {note && <p className="text-xs text-green-700" role="status">{note}</p>}
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="input !py-1 text-xs w-48" placeholder="Search site or order" value={siteSearch} onChange={(e) => setSiteSearch(e.target.value)} aria-label="Search sites" />
+          <label className="flex items-center gap-1 text-xs text-gray-600"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />Show sites that already have a location</label>
+        </div>
+        {visibleSites.length === 0 ? <p className="text-sm text-gray-400">{showAll ? "No sites." : "Every site already has a location."}</p> : (
+          <ul className="max-h-64 divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200">
+            {visibleSites.map((s) => (
+              <li key={s.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
+                {canManage && <input type="checkbox" checked={picked.includes(s.id)} aria-label={"Select " + s.name} onChange={(e) => setPicked(e.target.checked ? [...picked, s.id] : picked.filter((x) => x !== s.id))} />}
+                <span className="font-medium">{s.name}</span>
+                <span className="text-xs text-gray-500">{s.orderNumber ?? ""}{s.stage ? " · " + s.stage : ""}</span>
+                <span className="ml-auto text-xs text-gray-500">{s.customerLocationId ? (locations.find((l) => l.id === s.customerLocationId)?.name ?? "Location") : "No location"}</span>
+              </li>))}
+          </ul>)}
+        {canManage && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" className="text-xs font-medium text-[var(--theme-accent)]" onClick={() => setPicked([...new Set([...picked, ...visibleSites.map((s) => s.id)])])}>Select all shown</button>
+            <label className="text-xs text-gray-500" htmlFor="assign-target">Location</label>
+            <select id="assign-target" className="input !py-1 text-xs" value={target} onChange={(e) => setTarget(e.target.value)}>
+              <option value="">Choose location</option>
+              {locationOptions(locations).filter((l) => l.active).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+            <button type="button" className="btn-primary" disabled={busy || !!assignMsg}
+              onClick={() => void run(async () => { const r = await put("/customers/" + customerId + "/locations/" + target + "/sites", { siteIds: picked }) as { assigned: number; location: string }; setNote(r.assigned + " site" + (r.assigned === 1 ? "" : "s") + " assigned to " + r.location + "."); setPicked([]); })}>Assign {picked.length || ""} selected</button>
+            {assignMsg && <span className="text-xs text-gray-500">{assignMsg}</span>}
+          </div>)}
       </div>
 
       <div className="space-y-2">

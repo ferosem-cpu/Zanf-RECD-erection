@@ -218,6 +218,31 @@ customersRouter.put("/:id/locations/:locId", requirePermission(PERMISSION_KEY.MA
   res.json({ id: u.id, name: u.name, active: u.active });
 });
 
+/** Bulk assignment of existing sites to a location (staff). GET lists every site of the customer with its current location; PUT moves the chosen sites. */
+customersRouter.get("/:id/sites", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId || req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  const customerId = asString(req.params.id);
+  if (!(await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } }))) return res.status(404).json({ error: "Customer not found" });
+  const rows = await prisma.site.findMany({
+    where: { order: { customerId } }, orderBy: { createdAt: "desc" }, take: 1000,
+    select: { id: true, companyName: true, customerLocationId: true, order: { select: { orderNumber: true } }, currentStage: { select: { label: true } } },
+  });
+  res.json(rows.map((s) => ({ id: s.id, name: s.companyName, orderNumber: s.order?.orderNumber ?? null, stage: s.currentStage?.label ?? null, customerLocationId: s.customerLocationId })));
+});
+
+customersRouter.put("/:id/locations/:locId/sites", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
+  if (req.auth!.customerId || req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
+  const customerId = asString(req.params.id);
+  const p = z.object({ siteIds: z.array(z.string().min(1).max(40)).min(1).max(200) }).strict().safeParse(req.body);
+  if (!p.success) return res.status(400).json({ error: "Choose between 1 and 200 sites" });
+  const l = await ownLocation(customerId, asString(req.params.locId), true);
+  if (!l) return res.status(400).json({ error: "Choose one of this customer's active locations" });
+  const ids = [...new Set(p.data.siteIds)];
+  // Only this customer's own sites can move; a foreign or unknown id is simply not counted.
+  const r = await prisma.site.updateMany({ where: { id: { in: ids }, order: { customerId } }, data: { customerLocationId: l.id } });
+  res.json({ assigned: r.count, requested: ids.length, location: l.name });
+});
+
 const contactSelect = { id: true, name: true, email: true, phone: true, isActive: true, customerLocationId: true } as const;
 
 customersRouter.get("/:id/contacts", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req, res) => {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addUserHint, normaliseMobile, accessLabel, locationName, locationOptions, type LocationRow } from "../src/lib/customerLocations";
+import { addUserHint, normaliseMobile, accessLabel, locationName, locationOptions, assignableSites, assignHint, type LocationRow } from "../src/lib/customerLocations";
 
 const locs: LocationRow[] = [
   { id: "b", name: "Bangalore", active: true }, { id: "m", name: "Mangalore", active: true }, { id: "y", name: "Mysore", active: false },
@@ -35,4 +35,12 @@ test("add-portal-user hint: empty = ready, otherwise says what is missing", () =
   assert.match(addUserHint({ name: " ", email: "a@b.in", phone: "" }), /name/);
   assert.match(addUserHint({ name: "A", email: "nope", phone: "" }), /e-mail/);
   assert.match(addUserHint({ name: "A", email: "a@b.in", phone: "123" }), /Mobile/);
+});
+
+test("assign-sites box: unassigned by default, all on request, search by site or order", () => {
+  const s = [{ id: "1", name: "VRL", orderNumber: "ORD-6021", stage: null, customerLocationId: null }, { id: "2", name: "BPCL", orderNumber: "ORD-6007", stage: null, customerLocationId: "b" }];
+  assert.deepEqual(assignableSites(s, false).map((x) => x.id), ["1"]);
+  assert.deepEqual(assignableSites(s, true).map((x) => x.id), ["1", "2"]);
+  assert.deepEqual(assignableSites(s, true, "6007").map((x) => x.id), ["2"]);
+  assert.match(assignHint("", 2), /location/); assert.match(assignHint("b", 0), /site/); assert.equal(assignHint("b", 1), "");
 });
