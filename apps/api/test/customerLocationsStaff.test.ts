@@ -133,6 +133,7 @@ test("bulk assign: lists a customer's sites and moves only its own sites to an a
   const ids = list.body.map((s: any) => s.id);
   assert.ok(ids.includes("b1") && ids.includes("b2") && !ids.includes("f1"));
   assert.equal(list.body.find((s: any) => s.id === "b1").stage, "Order received");
+  assert.ok("address" in list.body[0] && "city" in list.body[0] && "product" in list.body[0], "address, city and product are returned");
   assert.equal((await req("mgr", "GET", "/customers/NOPE/sites")).status, 404);
   const ok = await req("mgr", "PUT", "/customers/C1/locations/L_blr/sites", { siteIds: ["b1", "f1", "ghost"] });
   assert.equal(ok.status, 200); assert.equal(ok.body.assigned, 1);

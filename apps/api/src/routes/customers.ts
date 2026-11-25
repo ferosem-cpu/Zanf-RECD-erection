@@ -218,6 +218,8 @@ customersRouter.put("/:id/locations/:locId", requirePermission(PERMISSION_KEY.MA
   res.json({ id: u.id, name: u.name, active: u.active });
 });
 
+const cityOf = (parts: unknown): string | null => { const c = (parts as { city?: unknown } | null)?.city; return typeof c === "string" && c.trim() ? c.trim() : null; };
+
 /** Bulk assignment of existing sites to a location (staff). GET lists every site of the customer with its current location; PUT moves the chosen sites. */
 customersRouter.get("/:id/sites", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {
   if (req.auth!.customerId || req.auth!.vendorId) return res.status(403).json({ error: "Forbidden" });
@@ -225,9 +227,9 @@ customersRouter.get("/:id/sites", requirePermission(PERMISSION_KEY.MANAGE_ORDERS
   if (!(await prisma.customer.findUnique({ where: { id: customerId }, select: { id: true } }))) return res.status(404).json({ error: "Customer not found" });
   const rows = await prisma.site.findMany({
     where: { order: { customerId } }, orderBy: { createdAt: "desc" }, take: 1000,
-    select: { id: true, companyName: true, customerLocationId: true, order: { select: { orderNumber: true } }, currentStage: { select: { label: true } } },
+    select: { id: true, companyName: true, address: true, addressParts: true, customerLocationId: true, order: { select: { orderNumber: true, product: { select: { name: true, model: true } } } }, currentStage: { select: { label: true } } },
   });
-  res.json(rows.map((s) => ({ id: s.id, name: s.companyName, orderNumber: s.order?.orderNumber ?? null, stage: s.currentStage?.label ?? null, customerLocationId: s.customerLocationId })));
+  res.json(rows.map((s) => ({ id: s.id, name: s.companyName, orderNumber: s.order?.orderNumber ?? null, address: s.address ?? null, city: cityOf(s.addressParts), product: s.order?.product ? (s.order.product.model || s.order.product.name || null) : null, stage: s.currentStage?.label ?? null, customerLocationId: s.customerLocationId })));
 });
 
 customersRouter.put("/:id/locations/:locId/sites", requirePermission(PERMISSION_KEY.MANAGE_ORDERS), async (req: AuthenticatedRequest, res) => {

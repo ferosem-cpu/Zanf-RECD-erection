@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/apiClient";
-import { accessLabel, locationOptions, normaliseMobile, addUserHint, assignableSites, assignHint, type LocationRow, type CustomerSiteRow } from "@/lib/customerLocations";
+import { accessLabel, locationOptions, normaliseMobile, addUserHint, assignableSites, assignHint, shortAddress, fullAddress, type LocationRow, type CustomerSiteRow } from "@/lib/customerLocations";
 
 interface Contact { id: string; name: string; email: string | null; phone: string | null; isActive: boolean; customerLocationId: string | null }
 
@@ -78,7 +78,7 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
         <p className="text-xs text-gray-500">Existing sites with no location are visible to customer admins only. Tick the sites that belong to a location, pick it and press Assign.</p>
         {note && <p className="text-xs text-green-700" role="status">{note}</p>}
         <div className="flex flex-wrap items-center gap-2">
-          <input className="input !py-1 text-xs w-48" placeholder="Search site or order" value={siteSearch} onChange={(e) => setSiteSearch(e.target.value)} aria-label="Search sites" />
+          <input className="input !py-1 text-xs w-48" placeholder="Search site, address or order" value={siteSearch} onChange={(e) => setSiteSearch(e.target.value)} aria-label="Search sites by name, address, order or product" />
           <label className="flex items-center gap-1 text-xs text-gray-600"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />Show sites that already have a location</label>
         </div>
         {visibleSites.length === 0 ? <p className="text-sm text-gray-400">{showAll ? "No sites." : "Every site already has a location."}</p> : (
@@ -87,7 +87,8 @@ export function CustomerPortalAccess({ customerId, canManage }: { customerId: st
               <li key={s.id} className="flex items-center gap-2 px-3 py-1.5 text-sm">
                 {canManage && <input type="checkbox" checked={picked.includes(s.id)} aria-label={"Select " + s.name} onChange={(e) => setPicked(e.target.checked ? [...picked, s.id] : picked.filter((x) => x !== s.id))} />}
                 <span className="font-medium">{s.name}</span>
-                <span className="text-xs text-gray-500">{s.orderNumber ?? ""}{s.stage ? " · " + s.stage : ""}</span>
+                <span className="text-xs text-gray-500">{s.orderNumber ?? ""}{s.product ? " · " + s.product : ""}{s.stage ? " · " + s.stage : ""}</span>
+                {shortAddress(s) && <span className="text-xs text-gray-700" title={fullAddress(s)}>{shortAddress(s)}</span>}
                 <span className="ml-auto text-xs text-gray-500">{s.customerLocationId ? (locations.find((l) => l.id === s.customerLocationId)?.name ?? "Location") : "No location"}</span>
               </li>))}
           </ul>)}

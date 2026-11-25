@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addUserHint, normaliseMobile, accessLabel, locationName, locationOptions, assignableSites, assignHint, type LocationRow } from "../src/lib/customerLocations";
+import { addUserHint, normaliseMobile, accessLabel, locationName, locationOptions, assignableSites, assignHint, shortAddress, fullAddress, type LocationRow } from "../src/lib/customerLocations";
 
 const locs: LocationRow[] = [
   { id: "b", name: "Bangalore", active: true }, { id: "m", name: "Mangalore", active: true }, { id: "y", name: "Mysore", active: false },
@@ -43,4 +43,18 @@ test("assign-sites box: unassigned by default, all on request, search by site or
   assert.deepEqual(assignableSites(s, true).map((x) => x.id), ["1", "2"]);
   assert.deepEqual(assignableSites(s, true, "6007").map((x) => x.id), ["2"]);
   assert.match(assignHint("", 2), /location/); assert.match(assignHint("b", 0), /site/); assert.equal(assignHint("b", 1), "");
+});
+
+test("assign-sites: address shown short (city first), full in tooltip; search matches address, city and product", () => {
+  const full = "Plot 4, MIDC Road, Chincholi, Gulbarga - 585307, Karnataka";
+  const a = { id: "1", name: "BPCL", orderNumber: "ORD-6007", stage: null, customerLocationId: null, address: full, city: null, product: "RECD-500" };
+  const b = { id: "2", name: "BPCL", orderNumber: "ORD-9", stage: null, customerLocationId: null, address: "Hubli", city: "Hubballi" };
+  assert.equal(shortAddress({ address: "Gulbarga", city: null }), "Gulbarga");
+  assert.equal(shortAddress({ address: full + " extra extra extra", city: null }).length <= 48, true);
+  assert.equal(shortAddress({ address: full, city: "Gulbarga" }), "Gulbarga");
+  assert.equal(fullAddress(a), full); assert.equal(shortAddress({ address: null, city: null }), "");
+  assert.deepEqual(assignableSites([a, b], false, "gul").map((x) => x.id), ["1"]);
+  assert.deepEqual(assignableSites([a, b], false, "hubballi").map((x) => x.id), ["2"]);
+  assert.deepEqual(assignableSites([a, b], false, "recd-500").map((x) => x.id), ["1"]);
+  assert.deepEqual(assignableSites([a, b], false, "bpcl").map((x) => x.id), ["1", "2"]);
 });
